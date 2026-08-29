@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat Testing</title>
+    
+    <link rel="icon" type="image/x-icon" href="../../images/favicon.ico">
+    <script>
+        /* Your existing JavaScript remains the same */
+        function parseReq(inputString) {
+            var lines = inputString.split("\n");
+            lines.forEach(function(line) {
+                var parts = line.split("|");
+                if (parts.length > 2) {
+                    var newline = "<p class='llm'>" + 
+                      document.getElementById("herikaName").value + ": " + parts[2] + "</p>";
+                    document.getElementById("chatWindow").innerHTML += newline;
+                    logChat(parts[2]);
+                }
+            });
+            document.body.style="cursor:normal";
+            document.getElementById('inputText').value='';
+        }
+
+        function reqSend() {
+            document.body.style="cursor:wait";
+            document.getElementById("chatWindow").innerHTML += 
+                "<p class='player'>" + 
+                document.getElementById('playerName').value + ': ' + 
+                document.getElementById('inputText').value + "</p>";
+            
+            var currentDate = new Date();
+            var timestampInSeconds = parseInt(document.getElementById('last_gamets').value)+1;
+            var profile = document.getElementById('profile').value;
+            var xhr = new XMLHttpRequest();
+
+            var urlDataRaw = 'inputtext|' + 
+                document.getElementById('gamets').value + '|' + 
+                timestampInSeconds + '|' + 
+                document.getElementById('playerName').value + ': ' + 
+                document.getElementById('inputText').value;
+            var urlData = btoa(urlDataRaw);
+            document.getElementById('gamets').value = parseInt(document.getElementById('gamets').value)+10;
+            document.getElementById('last_gamets').value = parseInt(timestampInSeconds)+10;
+
+            if (profile)
+                xhr.open('GET', '/HerikaServer/stream.php?DATA=' + urlData + "&profile=" + profile, true);
+            else
+                xhr.open('GET', '/HerikaServer/stream.php?DATA=' + urlData, true);
+
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    parseReq(xhr.responseText);
+                } else {
+                    console.error('Request failed with status code: ' + xhr.status);
+                }
+            };
+            xhr.onerror = function() {
+                console.error('Network error occurred');
+            };
+            xhr.send();
+        }
+
+        function logChat(chatline) {
+            // Implementation left as-is or adjust as needed
+            return;
+        }
+    </script>
+</head>
+</html>

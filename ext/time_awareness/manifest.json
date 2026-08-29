@@ -1,0 +1,5 @@
+{
+    "name":"Time Awareness",
+    "description":"Inserts into the prompt mentions about when interactions between NPCs took place.",
+    "version":"2.0.0"
+}

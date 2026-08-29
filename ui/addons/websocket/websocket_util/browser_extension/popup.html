@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: sans-serif; width: 250px; } /* Slightly wider to accommodate new elements */
+    .status { margin-top: 10px; }
+    #urlInput { width: 100%; box-sizing: border-box; } /* Ensure padding doesn't break layout */
+    button { width: 100%; margin-top: 5px; }
+    #targetTabStatus { margin-top: 5px; font-size: small; }
+    #targetTabDropdown { width: 100%; margin-top: 5px; }
+    #connectionStatus { margin-top: 10px; font-weight: bold; } /* Added status display */
+  </style>
+</head>
+<body>
+  <label for="urlInput">WebSocket URL:</label>
+  <input type="text" id="urlInput" placeholder="ws://localhost:43443/chat">
+  <button id="saveBtn">Save URL</button>
+  <button id="targetTabBtn">Target ChatGPT Tab</button>
+  <select id="targetTabDropdown"></select>
+  <div id="targetTabStatus">No tab targeted</div>
+  <div id="connectionStatus">Status: Disconnected</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

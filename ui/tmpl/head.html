@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+
+<html lang="en" data-bs-theme="dark">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <?php
+        // Get the relative web path from document root to our application if not already defined
+        if (!isset($webRoot)) {
+            $scriptPath = $_SERVER['SCRIPT_NAME'];
+            $webRoot = dirname(dirname(dirname($scriptPath))); // Go up three levels from the script location
+            if ($webRoot == '/') $webRoot = '';
+            $webRoot = rtrim($webRoot, '/');
+        }
+        ?>
+        <link rel="icon" type="image/x-icon" href="<?php echo $webRoot; ?>/ui/images/favicon.ico">
+        <!-- bootstrap -->
+        <link href="<?php echo $webRoot; ?>/ui/lib/ui/bootstrap/bootstrap.min.css" rel="stylesheet" />
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" />
+        <script src="<?php echo $webRoot; ?>/ui/lib/ui/bootstrap/bootstrap.bundle.min.js"></script>
+
+        <title>CHIM</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link rel="stylesheet" href="https://unpkg.com/@highlightjs/cdn-assets@11.7.0/styles/default.min.css" />
+        <!-- always have a css file to override things -->
+        <link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/style_new.css" />
+        <link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/chim-theme.css?v=<?php echo filemtime(dirname(__DIR__) . DIRECTORY_SEPARATOR . 'css' . DIRECTORY_SEPARATOR . 'chim-theme.css'); ?>" />
+
+        <script src="https://unpkg.com/@highlightjs/cdn-assets@11.7.0/highlight.min.js"></script>
+        <script src="https://unpkg.com/@highlightjs/cdn-assets@11.7.0/languages/javascript.min.js"></script>
+
+        <script>
+            var webRoot = '<?php echo $webRoot; ?>';
+            
+            function togglePre(element) {
+                if (element.parentElement.lastChild.className == "") element.parentElement.lastChild.className = "foldable";
+                else element.parentElement.lastChild.className = "";
+            }
+
+            function toggleDP() {
+                document.querySelector(".debugpane").classList.toggle("d-none");
+            }
+            
+            function checkRetVal(json) {
+                if (json.status==0) {
+                    alert("URL connection is valid and established.");
+                    console.log("Connection info: (This test only tests connection, so you can get 40x/50x Headers. It's normal.)",json.info)
+                } else  if (json.status==1) {
+                    alert("URL is valid, but can not connect. Debug info:"+json.info)
+                } else  if (json.status==2) {
+                    alert("URL is wrong and malformed: "+json.info)
+                }
+                document.body.style.cursor=""
+                document.body.style.opacity=1
+                console.log(json);
+                return true;
+            }
+            
+            function checkUrlFromServer(formFieldName) {
+                document.body.style.cursor="wait";
+                document.body.style.opacity=0.5;
+                ele=document.querySelector("input[name='"+formFieldName+"']");
+                console.log(ele.value);
+                fetch(webRoot + '/ui/tools/check_url.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({"url": ele.value})
+                })
+                .then(response => response.json())
+                .then(json => checkRetVal(json))
+            }
+            
+            function getAnchor() {
+                var urlString = window.location.href;
+                var url = new URL(urlString);
+                var anchor = url.hash;
+                return anchor
+            }
+            
+            function getAnchorNH() {
+                var urlString = window.location.href;
+                var url = new URL(urlString);
+                var anchor = url.hash;
+                return anchor.substring(1);
+            }
+            
+            function scrollToHash() {
+                // Get the hash from the URL
+                var hash = getAnchorNH()
+
+                // Check if there's a hash
+                if (hash) {
+                    // Find the element with the corresponding id
+                    var element = document.getElementById(hash);
+
+                    // Check if the element exists
+                    if (element) {
+                        // Scroll to the element
+                        element.scrollIntoView();
+                    }
+                }
+            }
+            
+            function callHelperModel(choicesId,valueElement) {
+               document.body.style.cursor="wait";
+               let elementValue = document.getElementById(valueElement);
+               elementValue.className="";
+               fetch(webRoot + '/ui/cmd/action_openrouterjson_get_models.php', {
+                    method: 'POST',
+                    headers: {
+                    'Content-Type': 'application/json'
+                    },
+                    body: null
+                })
+                .then(response => {
+                    if (!response.ok) {
+                    throw new Error('Network response was not ok ' + response.statusText);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    const dataList = document.getElementById(choicesId);
+                    dataList.innerHTML = '';
+                    data.forEach(optionValue => {
+                        const option = document.createElement('option');
+                        option.value = optionValue.value;
+                        option.label = optionValue.label;
+                        dataList.appendChild(option);
+                    });
+                    
+                    document.body.style.cursor="";
+                    let elementValue = document.getElementById(valueElement);
+                    elementValue.value="";
+                    elementValue.focus();
+                    const event = new Event('input', {
+                        'bubbles': true,
+                        'cancelable': true
+                    });
+                    elementValue.dispatchEvent(event);
+                    elementValue.className="model-updated";
+                    const uniqueUrl = webRoot + '/ui/css/clickme.gif?t=' + new Date().getTime();
+                    elementValue.style.backgroundImage = 'url(' + uniqueUrl + ')';
+                })   
+                .catch(error => {
+                    console.error('There has been a problem with your fetch operation:', error);
+                    document.body.style.cursor="";
+                });
+            }
+            
+            function callHelper(helper) {
+                document.body.style.cursor="wait";
+                form=document.querySelector(".confwizard")
+                var inputs = form.querySelectorAll('input');
+                const formData = {};
+                
+                inputs.forEach(input => {
+                    formData[input.name] = input.value;
+                });
+                
+                inputs = form.querySelectorAll('textarea');
+                inputs.forEach(input => {
+                    formData[input.name] = input.value;
+                });
+
+                fetch(webRoot + '/ui/cmd/' + helper, {
+                    method: 'POST',
+                    headers: {
+                    'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                })
+                .then(response => {
+                    if (!response.ok) {
+                    throw new Error('Network response was not ok ' + response.statusText);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Success:', data);
+                    for (let key in data) {
+                        if (data.hasOwnProperty(key)) {
+                            t=document.querySelector("input[name='"+key+"']")
+                            if (t) {
+                                t.value=data[key]
+                                syncInputs(key+"_range", key+"_number", "range");
+                                t.animate(
+                                    [
+                                        { color: "white" },
+                                        { color: "red" }
+                                    ],
+                                    {
+                                        duration: 1000,
+                                        iterations: 3
+                                    }
+                                );
+                            } else {
+                                t=document.querySelector("textarea[name='"+key+"']")
+                                if (t) {
+                                    t.value=data[key]
+                                    t.animate(
+                                        [
+                                            { color: "white" },
+                                            { color: "red" }
+                                        ],
+                                        {
+                                            duration: 1000,
+                                            iterations: 3
+                                        }
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    document.body.style.cursor="";
+                })
+                .catch(error => {
+                    console.error('There has been a problem with your fetch operation:', error);
+                    document.body.style.cursor="";
+                });
+            }
+            
+            document.addEventListener("DOMContentLoaded", function () {
+                // Helper function to get a cookie value by name
+                function getCookie(name) {
+                    const value = `; ${document.cookie}`;
+                    const parts = value.split(`; ${name}=`);
+                    if (parts.length === 2) return parts.pop().split(';').shift();
+                }
+
+                // Helper function to set a cookie
+                function setCookie(name, value, days) {
+                    const date = new Date();
+                    date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+                    const expires = `expires=${date.toUTCString()}`;
+                    document.cookie = `${name}=${value}; ${expires}; path=/`;
+                }
+
+                // Function to check if we need to call the version check URL
+                function checkVersion() {
+                    const lastCheck = getCookie('versionCheck');
+                    const oneDay = 24 * 60 * 60 * 1000;
+                    const now = new Date().getTime();
+
+                    // If there's no cookie or the last check was over a day ago
+                    if (!lastCheck || (now - lastCheck) > oneDay) {
+                        // Make a request to the URL
+                        fetch('tools/version_check.php')
+                            .then(response => response.text())
+                            .then(data => {
+                                console.log("Version check successful:", data);
+                                if (data.last>data.local) {
+                                    alert("Notice: New version available via Update.bat, consider update");
+                                }
+                                // Store the current timestamp as the last check time
+                                setCookie('versionCheck', now, 1); // Store for 1 day
+                            })
+                            .catch(error => {
+                                console.error("Version check failed:", error);
+                            });
+                    }
+                }
+
+                // Run the version check when the page loads
+                checkVersion();
+            });
+
+            function copyToAllprofiles(event,name,jsid) {
+
+                event.preventDefault();  // Prevent default browser behavior
+                event.stopImmediatePropagation(); 
+
+                console.log(name)
+                var ok=false;
+
+                ele=document.querySelectorAll("input[name='"+name+"']");
+                if (ele && ele.length>1) {
+                    ele = document.querySelector("input[name='" + name + "']:checked");
+                    console.log(ele.value);
+                    ok=true;
+                    formData={"name":name,"value":ele.value}
+                }
+
+                if (!ok) {
+                    ele=document.querySelector("input[name='"+name+"']");
+                    if (ele) {
+                        console.log(ele.value);
+                        ok=true;
+                        formData={"name":name,"value":ele.value}
+                    }
+                }
+
+                if (!ok) {
+                    ele=document.querySelector("textarea[name='"+name+"']");
+                    if (ele) {
+                        console.log(ele.value);
+                        ok=true;
+                        formData={"name":name,"value":ele.value}
+                    }
+                }
+
+                if (!ok) {
+                    ele=document.querySelectorAll("input[name='"+name+"[]']");
+                    if (ele) {
+                        var values = [];
+                        ele.forEach(element => {
+                            if (element.checked) {
+                                console.log(element.value);      
+                                values.push(element.value)
+                                ok=true;
+                            }
+                            
+                        });
+                        formData={"name":name,"value":values}
+                    }
+                } 
+                if (!ok ) {
+                    ele=document.querySelector("select[name='"+name+"']");
+                    if (ele) {
+                        console.log(ele.options[ele.selectedIndex].value);
+                        ok=true;
+                        formData={"name":name,"value":ele.options[ele.selectedIndex].value}
+                    }
+                } 
+
+
+                if (ok) {
+                    
+                    fetch("cmd/action_copy_value_to_all_profiles.php", {
+                        method: 'POST',
+                        headers: {
+                        'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(formData)
+                    })
+                    .then(response => {
+                        
+                        if (!response.ok) {
+                            console.log(response)
+                            throw new Error('Network response was not ok ' + response.statusText);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('Success:', data.length);
+                        alert("Updated all non-locked profiles");
+                        let timestamp = new Date().getTime();
+                        //window.location.href="?ts="+timestamp;
+
+                    })
+                    .catch(error => {
+                        console.error('There has been a problem with your fetch operation:', error);
+                        document.body.style.cursor="";
+                    });
+                    
+
+                } else {
+                    alert('Error ocurred');
+                }
+
+            }
+
+        </script>
+    </head>
+<body<?php echo !empty($BODY_CLASS) ? ' class="' . htmlspecialchars((string)$BODY_CLASS, ENT_QUOTES, 'UTF-8') . '"' : ''; ?>>

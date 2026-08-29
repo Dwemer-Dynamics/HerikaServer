@@ -1,0 +1,29 @@
+<?php
+
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+define("MAXIMUM_SENTENCE_SIZE", 125);
+define("MINIMUM_SENTENCE_SIZE", 15);
+
+$enginePath = dirname((__FILE__)) . DIRECTORY_SEPARATOR."..".DIRECTORY_SEPARATOR;
+require_once($enginePath . "conf".DIRECTORY_SEPARATOR."conf.php");
+require_once($enginePath . "lib" .DIRECTORY_SEPARATOR."model_dynmodel.php");
+require_once($enginePath . "lib" .DIRECTORY_SEPARATOR."{$GLOBALS["DBDRIVER"]}.class.php");
+require_once($enginePath . "lib" .DIRECTORY_SEPARATOR."chat_helper_functions.php");
+
+
+echo "cleanResponse".PHP_EOL;
+$cr=cleanResponse(trim($argv[1]));
+print_r($cr);
+
+echo PHP_EOL."Split".PHP_EOL;
+$st=split_sentences_stream($cr);
+print_r($st);
+
+
+$sentences=$st;
+print_r($sentences);
+  
+  
+?>

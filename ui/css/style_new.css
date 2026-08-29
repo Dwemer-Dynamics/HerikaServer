@@ -1,0 +1,230 @@
+@charset "utf-8";
+
+
+body > div.container-fluid > div.datatable > table > tbody > tr > td > pre {
+	font-size:11px;
+}
+
+body
+        {
+            font-family: 'Arial', Times, serif;
+        }
+
+/* Force all primary headings/titles to white across UI pages. */
+h1, h2, h3,
+.title, .Title,
+.page-title, .section-title, .card-title,
+#page-title, #title-text {
+    color: #ffffff !important;
+}
+
+        .Title {
+            font-weight: bold;
+            font-size: 30px;
+            line-height: 1.5;
+            text-transform: uppercase;
+        }
+
+        .button {
+            display: inline-block;
+            padding: 5px 5px;
+            border: 1px solid #0b0c0d;
+            background-color: #448ee3;
+            border-radius: 10px;
+            text-decoration: none;
+            color: #fff;
+            text-align: center;
+            transition: background-color 0.2s, box-shadow 0.2s;
+            font-weight: bold;
+        }
+
+        .button:hover {
+            color: #fff;
+            background-color: #1055a3;
+            box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+        }
+
+        nav {
+            font-weight: bold;
+            font-size: 20px;
+        }
+
+pre.foldable {
+display:none
+}
+
+p.conf-item {
+	display: inline-block;
+	min-width: 480px;
+	font-size: 16px;
+	font-weight: bold;
+	font-family: 'Arial', Times, serif;
+	max-width: 100%;
+}
+
+p.conf-item label{
+	display: block;
+	font-size: 16px;
+	font-weight: bold;
+	font-family: 'Arial', Times, serif;
+}
+
+p.conf-item textarea{
+	display:block;
+	min-width:640px;
+	min-height:240px;
+	width: auto;
+	font-size: medium;
+	font-family: monospace;
+}
+
+p.conf-item input {
+	display:block;
+	min-width:240px;
+}
+
+p.conf-item input.url {
+	display:inline-block;
+	min-width:400px;
+}
+
+p.conf-item input.apikey {
+	min-width:400px;
+	display: inline-block;
+}
+
+p.conf-item button.url {
+	display:inline-block;
+	min-width:50px;
+	clear:both;
+}
+
+p.conf-item input[type=checkbox] {
+	display:inline-block;
+	min-width:50px;
+}
+
+p.conf-item input[type=radio] {
+	display:inline-block;
+	min-width:50px;
+}
+
+p.conf-item input[type=radio]  + label {
+	display:inline-block;
+	font-family: unset;
+}
+
+p.conf-item span {
+	display: block;
+	max-width: 400px;
+	padding: 3px;
+	font-size: 14px;
+    font-weight: normal;
+	font-family: 'Arial', Times, serif;
+}
+
+form.confwizard > fieldset  {
+	border: 1px solid black;
+    border-radius: 5px;
+    margin: 5px;
+    padding: 5px;
+    background-color: rgb(32,32,32);
+}
+
+form.confwizard > fieldset > fieldset {
+    border: 1px outset black;
+    margin:5px;
+	padding:5px;
+	
+}
+
+
+form.confwizard > fieldset > legend {
+	color: #ffffff;
+	background: #757575;
+	font-weight: bold;
+}
+
+form.confwizard > fieldset > fieldset  legend {
+	color:#da20d6;
+}
+
+
+body > form > fieldset legend {
+		color: orange;
+		font-weight: bold;
+		text-shadow: 1px 1px 1px black;
+}
+body > form > fieldset > fieldset legend {
+		color: #ff00c1;
+		font-weight: bold;
+		text-shadow: 1px 1px 1px black;
+}
+li.subchild {
+	font-size: 10px;
+	margin-left: 50px;
+	text-wrap: wrap;
+}
+
+
+div.softdiv {
+	display:inline-block;
+	min-width:300px;
+	padding-left:20px;
+}
+
+#top > fieldset > fieldset {
+	max-width:60%
+
+}
+
+form.confwizard fieldset > legend + legend  {
+	color:rgb(242, 124, 17);
+	cursor:pointer;
+	font-size: 18px;
+	background: none;
+}
+
+form.confwizard fieldset > fieldset + legend  {
+	color:rgb(242, 124, 17);
+	cursor:pointer;
+	font-size: 18px;
+	background: none;
+}
+
+
+fieldset.unvisible-fieldset {
+	/* display:none; */
+	/* visibility: hidden; */
+	/* opacity: 1; */
+	height: 0px;
+	overflow-y: hidden;
+}
+
+fieldset.visible-fieldset {
+	/* display:block; */
+	transition: height 1s cubic-bezier(0.4, 0, 1, 1);
+	/* opacity: 1; */
+	height: 100%;
+}
+
+input.model-updated {
+	background-image:url("clickme.gif");
+	color: black;
+}
+
+form.confwizard fieldset > legend.arrow {
+	background-image: url('expand.gif');
+	background-repeat: no-repeat;
+	background-position: left;
+	padding-left: 25px;
+	background-position-y: top;
+}
+
+form.confwizard fieldset > legend.unarrow {
+	background-image: url('collapse.gif');
+	background-repeat: no-repeat;
+	background-position: left;
+	padding-left: 25px;
+	background-position-y: bottom;
+}

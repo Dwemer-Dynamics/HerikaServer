@@ -1,0 +1,39 @@
+<?php
+
+session_start();
+header('Content-Type: application/json');
+
+$enginePath = dirname((__FILE__)) . DIRECTORY_SEPARATOR."..".DIRECTORY_SEPARATOR."../";
+require_once($enginePath . "lib".DIRECTORY_SEPARATOR."runtime_bootstrap.php");
+chimRuntimeBootstrap($enginePath, [
+    'load_general_settings' => true,
+    'load_player_name' => true,
+    'load_narrator' => true,
+]);
+
+require_once($enginePath . "lib" .DIRECTORY_SEPARATOR."model_dynmodel.php");
+require_once($enginePath . "lib" .DIRECTORY_SEPARATOR."data_functions.php");
+
+$configFilepath=$enginePath."conf".DIRECTORY_SEPARATOR;
+
+// Profile selection
+$profiles = [];
+foreach (glob($configFilepath . 'conf_????????????????????????????????.php') as $mconf ) {
+    if (file_exists($mconf)) {
+        $filename=basename($mconf);
+        $pattern = '/conf_([a-f0-9]+)\.php/';
+        preg_match($pattern, $filename, $matches);
+        $hash = $matches[1];
+        require($mconf);
+        $GLOBALS["PROFILES"][$hash]=$GLOBALS["HERIKA_NAME"];
+    }
+}
+
+file_put_contents($enginePath . "conf".DIRECTORY_SEPARATOR."character_map.json",json_encode($GLOBALS["PROFILES"]));
+    
+echo json_encode([
+    'success' => true,
+    'message' => 'Character map has been successfully regenerated!'
+]);
+
+?>
