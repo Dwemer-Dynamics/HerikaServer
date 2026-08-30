@@ -60,7 +60,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             'prompts' => 20260615001,
             'skyrim_quest_definitions' => 20260628003,
             'core_tts_connector_omnivoice' => 20260708001,
-            'core_tts_pronunciation' => 20260829001,
+            'core_tts_pronunciation' => 20260829002,
         ];
 
         try {

@@ -586,8 +586,18 @@ final class AsteriskParsingTest extends TestCase
         );
     }
 
-    public function testTtsPronunciationsUseMatchingOghmaTagsAndCustomPriority(): void
+    public function testTtsPronunciationsUseNameRaceAndOghmaFiltersWithCustomPriority(): void
     {
+        $GLOBALS['HERIKA_NAME'] = 'Aela';
+        $scope = chimTtsPronunciationCurrentSpeakerScope([
+            'npc_name' => 'Aela',
+            'race' => 'NordRace',
+            'oghma_knowledge_tags' => 'companions, whiterun',
+        ]);
+        $this->assertSame(['companions', 'whiterun'], $scope['knowledge_tags']);
+        $this->assertSame('Aela', $scope['npc_name']);
+        $this->assertSame('NordRace', $scope['race']);
+
         $rows = [
             [
                 'source_text' => 'Jorrvaskr',
@@ -598,14 +608,28 @@ final class AsteriskParsingTest extends TestCase
             [
                 'source_text' => 'Jorrvaskr',
                 'spoken_text' => 'Companions Hall',
+                'npc_names' => 'Aela, Vilkas',
+                'races' => 'NordRace',
                 'oghma_tags' => 'companions, whiterun',
                 'is_builtin' => false,
                 'enabled' => true,
             ],
         ];
 
-        $this->assertSame('Visit Companions Hall.', chimApplyTtsPronunciationDictionary('Visit Jorrvaskr.', $rows, ['companions']));
-        $this->assertSame('Visit Yorvaskr.', chimApplyTtsPronunciationDictionary('Visit Jorrvaskr.', $rows, ['mage']));
-        $this->assertSame('Visit Companions Hall.', chimApplyTtsPronunciationDictionary('Visit Jorrvaskr.', $rows, ['knowall']));
+        $this->assertSame('Visit Companions Hall.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['companions'], 'Aela', 'NordRace'
+        ));
+        $this->assertSame('Visit Yorvaskr.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['companions'], 'Lydia', 'NordRace'
+        ));
+        $this->assertSame('Visit Yorvaskr.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['companions'], 'Aela', 'BretonRace'
+        ));
+        $this->assertSame('Visit Yorvaskr.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['mage'], 'Aela', 'NordRace'
+        ));
+        $this->assertSame('Visit Companions Hall.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['knowall'], 'Aela', 'NordRace'
+        ));
     }
 }

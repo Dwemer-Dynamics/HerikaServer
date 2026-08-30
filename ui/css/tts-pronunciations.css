@@ -55,13 +55,20 @@
     align-items: center;
     display: grid;
     gap: 10px;
-    grid-template-columns: minmax(130px, 1.1fr) minmax(140px, 1.3fr) minmax(130px, 1fr) 96px 172px;
+    grid-template-columns: minmax(120px, 1fr) minmax(130px, 1.15fr) minmax(190px, 1.5fr) 96px 172px;
     padding: 10px 12px;
 }
 
 .pron-add-row {
-    align-items: end;
+    align-items: start;
     padding: 0;
+}
+
+/* The access column makes the add row tall, so keep the toggle and the submit
+   button level with the first input line instead of dropping them to the base. */
+.pron-add-row .pron-toggle,
+.pron-add-row .pron-actions {
+    margin-top: 21px;
 }
 
 .pron-grid {
@@ -96,6 +103,7 @@
 }
 
 .pron-row.is-disabled .pron-static,
+.pron-row.is-disabled .pron-scope,
 .pron-row.is-disabled .pron-field {
     opacity: 0.62;
 }
@@ -104,6 +112,43 @@
     color: #f2f2f2;
     font-size: 14px;
     overflow-wrap: anywhere;
+}
+
+/* The access column stacks the NPC name, race, and Oghma tag filters. */
+.pron-access {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+}
+
+.pron-access-field {
+    min-width: 0;
+}
+
+.pron-scope {
+    color: #aeb8c4;
+    font-size: 12px;
+    line-height: 1.45;
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.pron-scope-label {
+    color: #cfd8e3;
+    font-weight: 700;
+}
+
+.pron-scope strong {
+    color: rgb(242, 124, 17);
+    font-weight: 700;
+}
+
+.pron-scope-hint {
+    color: #8b98a8;
+}
+
+.pron-scope .pron-badge {
+    margin-right: 6px;
 }
 
 .pron-badge {
@@ -198,6 +243,17 @@
     width: 1px;
 }
 
+/* Three inputs share the access column, so their labels must stay on screen. */
+.pron-grid .pron-access .pron-label {
+    clip: auto;
+    height: auto;
+    margin: 0 0 4px;
+    overflow: visible;
+    position: static;
+    white-space: normal;
+    width: auto;
+}
+
 @media (max-width: 900px) {
     .pron-head {
         display: none;
@@ -228,5 +284,10 @@
 
     .pron-toolbar-field {
         width: 100%;
+    }
+
+    .pron-add-row .pron-toggle,
+    .pron-add-row .pron-actions {
+        margin-top: 0;
     }
 }

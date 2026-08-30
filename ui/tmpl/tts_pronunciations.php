@@ -4,7 +4,7 @@ if (!isset($activeTab, $webRoot) || !function_exists('chimTtsPronunciationBoolea
     return;
 }
 
-// Prepare the global and Oghma-scoped rows for the TTS Studio view.
+// Prepare the global and access-scoped rows for the TTS Studio view.
 $pronRows = (isset($ttsPronunciationRows) && is_array($ttsPronunciationRows)) ? $ttsPronunciationRows : [];
 $pronTags = (isset($ttsPronunciationTags) && is_array($ttsPronunciationTags)) ? $ttsPronunciationTags : [];
 $pronFilter = isset($ttsPronunciationFilter) ? trim((string)$ttsPronunciationFilter) : '';
@@ -18,6 +18,24 @@ foreach ($pronRows as $pronRow) {
         $pronCustomRows[] = $pronRow;
     }
 }
+
+// Collect only the populated access dimensions so a row never claims a filter it does not use.
+$pronScopeGroups = static function (array $row): array {
+    $groups = [];
+    $names = chimTtsPronunciationNormalizeScopeValues($row['npc_names'] ?? '');
+    if (!empty($names)) {
+        $groups[] = ['label' => 'NPC names', 'values' => $names];
+    }
+    $races = chimTtsPronunciationNormalizeScopeValues($row['races'] ?? '');
+    if (!empty($races)) {
+        $groups[] = ['label' => 'Races', 'values' => $races];
+    }
+    $tags = chimTtsPronunciationNormalizeTags($row['oghma_tags'] ?? '');
+    if (!empty($tags)) {
+        $groups[] = ['label' => 'Oghma tags', 'values' => $tags];
+    }
+    return $groups;
+};
 ?>
 
 <div class="tab-content pron-section <?php echo $activeTab === 'pronunciations' ? 'active' : ''; ?>">
@@ -26,15 +44,16 @@ foreach ($pronRows as $pronRow) {
         <p>Rewrite how the TTS engine says a word without changing anything the player reads. These entries apply to every TTS connector.</p>
         <ul class="pron-intro-list">
             <li><strong>Audio only:</strong> subtitles and saved dialogue keep the original spelling &mdash; only the text sent to the voice engine is rewritten.</li>
-            <li><strong>Blank Oghma tags:</strong> the entry applies globally, to every speaking NPC.</li>
-            <li><strong>Tagged entries:</strong> the entry only applies when the speaking NPC has a matching Oghma knowledge tag, so a pronunciation can be scoped to one faction, region, or questline.</li>
-            <li><strong>Built-in entries</strong> are always global and cannot be deleted, but any of them can be disabled.</li>
+            <li><strong>Blank field:</strong> that filter is not applied. With NPC names, races, and Oghma tags all blank the entry is global and every NPC uses it.</li>
+            <li><strong>Commas inside one field</strong> are alternatives &mdash; <em>Nord, Dunmer</em> matches either race.</li>
+            <li><strong>Two or more fields filled:</strong> the speaking NPC must match all of them, so <em>Nord</em> plus <em>companions</em> only fires for a Nord carrying that Oghma tag.</li>
+            <li><strong>Built-in entries</strong> cannot be deleted, but any of them can be disabled.</li>
         </ul>
     </div>
 
     <div class="content-section full-width-section">
         <h1>Add Custom Pronunciation</h1>
-        <p>Original text is matched as a whole term. Leave Oghma tags blank to apply the entry to every NPC.</p>
+        <p>Original text is matched as a whole term. Leave every access field blank to apply the entry to all NPCs.</p>
 
         <form action="<?php echo $pronPostAction; ?>" method="post" class="pron-cols pron-add-row">
             <input type="hidden" name="action" value="save_tts_pronunciation">
@@ -50,13 +69,29 @@ foreach ($pronRows as $pronRow) {
                        maxlength="240" required autocomplete="off" spellcheck="false"
                        placeholder="Yorvaskr">
             </div>
-            <div>
-                <label class="pron-label" for="pron-add-tags">Oghma tags (optional)</label>
-                <input class="pron-field" type="text" id="pron-add-tags" name="oghma_tags"
-                       maxlength="512" autocomplete="off" spellcheck="false"
-                       list="pron-tag-options" placeholder="companions, whiterun"
-                       aria-describedby="pron-add-tags-help">
-                <span id="pron-add-tags-help" class="pron-count">Comma-separated. Blank applies to every NPC.</span>
+            <div class="pron-access">
+                <p class="pron-scope pron-scope-hint" id="pron-add-access-help">Blank fields add no restriction. Fill more than one and the speaker must match them all.</p>
+                <div class="pron-access-field">
+                    <label class="pron-label" for="pron-add-names">NPC names (optional)</label>
+                    <input class="pron-field" type="text" id="pron-add-names" name="npc_names"
+                           maxlength="512" autocomplete="off" spellcheck="false"
+                           placeholder="Lydia, Aela the Huntress"
+                           aria-describedby="pron-add-access-help">
+                </div>
+                <div class="pron-access-field">
+                    <label class="pron-label" for="pron-add-races">Races (optional)</label>
+                    <input class="pron-field" type="text" id="pron-add-races" name="races"
+                           maxlength="512" autocomplete="off" spellcheck="false"
+                           placeholder="Nord, Dunmer"
+                           aria-describedby="pron-add-access-help">
+                </div>
+                <div class="pron-access-field">
+                    <label class="pron-label" for="pron-add-tags">Oghma tags (optional)</label>
+                    <input class="pron-field" type="text" id="pron-add-tags" name="oghma_tags"
+                           maxlength="512" autocomplete="off" spellcheck="false"
+                           list="pron-tag-options" placeholder="companions, whiterun"
+                           aria-describedby="pron-add-access-help">
+                </div>
             </div>
             <div class="pron-toggle">
                 <input type="checkbox" id="pron-add-enabled" name="enabled" value="1" checked>
@@ -105,7 +140,7 @@ foreach ($pronRows as $pronRow) {
             <div class="pron-cols pron-head" aria-hidden="true">
                 <span>Original</span>
                 <span>Spoken Version</span>
-                <span>Oghma Tags</span>
+                <span>Applies To</span>
                 <span>Enabled</span>
                 <span>Actions</span>
             </div>
@@ -125,6 +160,7 @@ foreach ($pronRows as $pronRow) {
                     $pronKey = preg_replace('/[^A-Za-z0-9_-]/', '', $pronId);
                     $pronEnabled = chimTtsPronunciationBoolean($pronRow['enabled'] ?? false);
                     $pronSource = (string)($pronRow['source_text'] ?? '');
+                    $pronGroups = $pronScopeGroups($pronRow);
                     ?>
                     <form action="<?php echo $pronPostAction; ?>" method="post"
                           class="pron-cols pron-row <?php echo $pronEnabled ? '' : 'is-disabled'; ?>">
@@ -142,12 +178,41 @@ foreach ($pronRows as $pronRow) {
                                    name="spoken_text" value="<?php echo htmlspecialchars((string)($pronRow['spoken_text'] ?? '')); ?>"
                                    maxlength="240" required autocomplete="off" spellcheck="false">
                         </div>
-                        <div>
-                            <label class="pron-label" for="pron-tags-<?php echo $pronKey; ?>">Oghma tags</label>
-                            <input class="pron-field" type="text" id="pron-tags-<?php echo $pronKey; ?>"
-                                   name="oghma_tags" value="<?php echo htmlspecialchars((string)($pronRow['oghma_tags'] ?? '')); ?>"
-                                   maxlength="512" autocomplete="off" spellcheck="false"
-                                   list="pron-tag-options" placeholder="Blank = every NPC">
+                        <div class="pron-access">
+                            <p class="pron-scope" id="pron-scope-<?php echo $pronKey; ?>">
+                                <?php if (empty($pronGroups)): ?>
+                                    <span class="pron-badge">Global</span>
+                                    <span class="pron-scope-text">Every NPC uses this entry.</span>
+                                <?php else: ?>
+                                    <span class="pron-scope-text">Speaker must match
+                                        <?php foreach ($pronGroups as $pronGroupIndex => $pronGroup): ?><?php echo $pronGroupIndex > 0 ? ' <strong>and</strong> ' : ''; ?><span class="pron-scope-label"><?php echo htmlspecialchars($pronGroup['label']); ?>:</span> <?php echo htmlspecialchars(implode(' or ', $pronGroup['values'])); ?><?php endforeach; ?>.
+                                    </span>
+                                <?php endif; ?>
+                            </p>
+                            <div class="pron-access-field">
+                                <label class="pron-label" for="pron-names-<?php echo $pronKey; ?>">NPC names</label>
+                                <input class="pron-field" type="text" id="pron-names-<?php echo $pronKey; ?>"
+                                       name="npc_names" value="<?php echo htmlspecialchars((string)($pronRow['npc_names'] ?? '')); ?>"
+                                       maxlength="512" autocomplete="off" spellcheck="false"
+                                       placeholder="Blank = any name"
+                                       aria-describedby="pron-scope-<?php echo $pronKey; ?>">
+                            </div>
+                            <div class="pron-access-field">
+                                <label class="pron-label" for="pron-races-<?php echo $pronKey; ?>">Races</label>
+                                <input class="pron-field" type="text" id="pron-races-<?php echo $pronKey; ?>"
+                                       name="races" value="<?php echo htmlspecialchars((string)($pronRow['races'] ?? '')); ?>"
+                                       maxlength="512" autocomplete="off" spellcheck="false"
+                                       placeholder="Blank = any race"
+                                       aria-describedby="pron-scope-<?php echo $pronKey; ?>">
+                            </div>
+                            <div class="pron-access-field">
+                                <label class="pron-label" for="pron-tags-<?php echo $pronKey; ?>">Oghma tags</label>
+                                <input class="pron-field" type="text" id="pron-tags-<?php echo $pronKey; ?>"
+                                       name="oghma_tags" value="<?php echo htmlspecialchars((string)($pronRow['oghma_tags'] ?? '')); ?>"
+                                       maxlength="512" autocomplete="off" spellcheck="false"
+                                       list="pron-tag-options" placeholder="Blank = any tag"
+                                       aria-describedby="pron-scope-<?php echo $pronKey; ?>">
+                            </div>
                         </div>
                         <div class="pron-toggle">
                             <input type="checkbox" id="pron-enabled-<?php echo $pronKey; ?>" name="enabled" value="1"
@@ -174,13 +239,13 @@ foreach ($pronRows as $pronRow) {
 
     <div class="content-section full-width-section">
         <h1>Built-in Pronunciations</h1>
-        <p>Shipped defaults for common lore names. These are always global &mdash; they ignore Oghma tags and cannot be deleted. Disable any entry you would rather replace with a custom entry above.</p>
+        <p>Shipped defaults for common lore names. They cannot be deleted, but any of them can be disabled and replaced with a custom entry above. The <strong>Applies To</strong> column shows who each default actually reaches.</p>
 
         <div class="pron-grid">
             <div class="pron-cols pron-head" aria-hidden="true">
                 <span>Original</span>
                 <span>Spoken Version</span>
-                <span>Scope</span>
+                <span>Applies To</span>
                 <span>Enabled</span>
                 <span>Actions</span>
             </div>
@@ -193,6 +258,7 @@ foreach ($pronRows as $pronRow) {
                     $pronId = (string)($pronRow['id'] ?? '');
                     $pronKey = 'b' . preg_replace('/[^A-Za-z0-9_-]/', '', $pronId) . '-' . $pronIndex;
                     $pronEnabled = chimTtsPronunciationBoolean($pronRow['enabled'] ?? false);
+                    $pronGroups = $pronScopeGroups($pronRow);
                     ?>
                     <form action="<?php echo $pronPostAction; ?>" method="post"
                           class="pron-cols pron-row <?php echo $pronEnabled ? '' : 'is-disabled'; ?>">
@@ -200,7 +266,21 @@ foreach ($pronRows as $pronRow) {
                         <input type="hidden" name="id" value="<?php echo htmlspecialchars($pronId); ?>">
                         <div class="pron-static"><?php echo htmlspecialchars((string)($pronRow['source_text'] ?? '')); ?></div>
                         <div class="pron-static"><?php echo htmlspecialchars((string)($pronRow['spoken_text'] ?? '')); ?></div>
-                        <div><span class="pron-badge">Always global</span></div>
+                        <div>
+                            <?php if (empty($pronGroups)): ?>
+                                <span class="pron-badge">Global</span>
+                            <?php else: ?>
+                                <?php foreach ($pronGroups as $pronGroup): ?>
+                                    <p class="pron-scope">
+                                        <span class="pron-scope-label"><?php echo htmlspecialchars($pronGroup['label']); ?>:</span>
+                                        <span class="pron-scope-text"><?php echo htmlspecialchars(implode(' or ', $pronGroup['values'])); ?></span>
+                                    </p>
+                                <?php endforeach; ?>
+                                <?php if (count($pronGroups) > 1): ?>
+                                    <p class="pron-scope pron-scope-hint">All of these must match.</p>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                        </div>
                         <div class="pron-toggle">
                             <input type="checkbox" id="pron-enabled-<?php echo $pronKey; ?>" name="enabled" value="1"
                                    aria-label="Enable <?php echo htmlspecialchars((string)($pronRow['source_text'] ?? '')); ?>"

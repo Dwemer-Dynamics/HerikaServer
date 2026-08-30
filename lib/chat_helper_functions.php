@@ -1563,7 +1563,14 @@ function returnLines($lines,$writeOutput=true)
             $responseForSpeech = (string)$responseForTTS;
             $npcPronunciationApplied = false;
             if ($shouldEmitNpcLine && trim((string)$responseForTTS) !== "") {
-                $responseForSpeech = chimApplyTtsPronunciationDictionary((string)$responseForTTS);
+                $pronunciationScope = chimTtsPronunciationCurrentSpeakerScope();
+                $responseForSpeech = chimApplyTtsPronunciationDictionary(
+                    (string)$responseForTTS,
+                    null,
+                    $pronunciationScope['knowledge_tags'],
+                    $pronunciationScope['npc_name'],
+                    $pronunciationScope['race']
+                );
                 $npcPronunciationApplied = $responseForSpeech !== $responseForTTS;
                 $ttsCacheText = $npcPronunciationApplied ? $responseForSpeech : $responseForSubtitles;
 

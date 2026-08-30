@@ -8151,16 +8151,16 @@ if ($migrationOk) {
     Logger::error("Failed to apply eventlog_session_payload migration; existing views were preserved");
 }
 
-if ($checkVersion("core_tts_pronunciation") < 20260829001) {
-    Logger::debug("Applying core_tts_pronunciation 20260829001 - add tagged TTS pronunciations");
+if ($checkVersion("core_tts_pronunciation") < 20260829002) {
+    Logger::debug("Applying core_tts_pronunciation 20260829002 - add NPC name and race filters");
 
     $migrationOk = chimEnsureTtsPronunciationDictionary();
 
     if ($migrationOk) {
-        $updateVersion("core_tts_pronunciation", 20260829001);
-        Logger::info("Applied patch core_tts_pronunciation 20260829001");
+        $updateVersion("core_tts_pronunciation", 20260829002);
+        Logger::info("Applied patch core_tts_pronunciation 20260829002");
     } else {
-        Logger::error("Failed to apply patch core_tts_pronunciation 20260829001");
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260829002");
     }
 }
 

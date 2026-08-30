@@ -31,8 +31,8 @@ function chimEnsureTtsPronunciationDictionary(): bool
         $spoken = $GLOBALS['db']->escapeLiteral($entry['spoken_text']);
         $inserted = $GLOBALS['db']->execQuery(
             "INSERT INTO public.core_tts_pronunciation
-                (source_text, spoken_text, oghma_tags, is_builtin, enabled, updated_at)
-             VALUES ({$source}, {$spoken}, '', TRUE, TRUE, CURRENT_TIMESTAMP)
+                (source_text, spoken_text, npc_names, races, oghma_tags, is_builtin, enabled, updated_at)
+             VALUES ({$source}, {$spoken}, '', '', '', TRUE, TRUE, CURRENT_TIMESTAMP)
              ON CONFLICT DO NOTHING"
         );
         if ($inserted === false) {
@@ -70,6 +70,8 @@ final class TTSPronunciationDictionary
             return array_map(static function (array $entry): array {
                 return $entry + [
                     'id' => 0,
+                    'npc_names' => '',
+                    'races' => '',
                     'oghma_tags' => '',
                     'is_builtin' => true,
                     'enabled' => true,
@@ -78,7 +80,8 @@ final class TTSPronunciationDictionary
         }
 
         $rows = $GLOBALS['db']->fetchAll(
-            'SELECT id, source_text, spoken_text, oghma_tags, is_builtin, enabled, created_at, updated_at
+            'SELECT id, source_text, spoken_text, npc_names, races, oghma_tags,
+                    is_builtin, enabled, created_at, updated_at
              FROM public.' . self::TABLE . '
              ORDER BY is_builtin DESC, LOWER(source_text), id
              LIMIT 1024'
@@ -112,7 +115,15 @@ final class TTSPronunciationDictionary
         return array_values($tags);
     }
 
-    public function saveCustom(?int $id, string $source, string $spoken, string $oghmaTags, bool $enabled): bool
+    public function saveCustom(
+        ?int $id,
+        string $source,
+        string $spoken,
+        string $npcNames,
+        string $races,
+        string $oghmaTags,
+        bool $enabled
+    ): bool
     {
         if (!$this->isAvailable()) {
             return false;
@@ -124,16 +135,21 @@ final class TTSPronunciationDictionary
             return false;
         }
 
+        $normalizedNames = implode(', ', array_slice(chimTtsPronunciationNormalizeScopeValues($npcNames), 0, 32));
+        $normalizedRaces = implode(', ', array_slice(chimTtsPronunciationNormalizeScopeValues($races), 0, 32));
         $normalizedTags = implode(', ', array_slice(chimTtsPronunciationNormalizeTags($oghmaTags), 0, 32));
         $sourceValue = $GLOBALS['db']->escapeLiteral($source);
         $spokenValue = $GLOBALS['db']->escapeLiteral($spoken);
+        $namesValue = $GLOBALS['db']->escapeLiteral(substr($normalizedNames, 0, 512));
+        $racesValue = $GLOBALS['db']->escapeLiteral(substr($normalizedRaces, 0, 512));
         $tagsValue = $GLOBALS['db']->escapeLiteral(substr($normalizedTags, 0, 512));
         $enabledValue = $enabled ? 'TRUE' : 'FALSE';
 
         if ($id !== null && $id > 0) {
             return $GLOBALS['db']->execQuery(
                 "UPDATE public." . self::TABLE . "
-                 SET source_text = {$sourceValue}, spoken_text = {$spokenValue}, oghma_tags = {$tagsValue},
+                 SET source_text = {$sourceValue}, spoken_text = {$spokenValue},
+                     npc_names = {$namesValue}, races = {$racesValue}, oghma_tags = {$tagsValue},
                      enabled = {$enabledValue}, updated_at = CURRENT_TIMESTAMP
                  WHERE id = " . intval($id) . " AND is_builtin = FALSE"
             ) !== false;
@@ -141,8 +157,9 @@ final class TTSPronunciationDictionary
 
         return $GLOBALS['db']->execQuery(
             "INSERT INTO public." . self::TABLE . "
-                (source_text, spoken_text, oghma_tags, is_builtin, enabled, updated_at)
-             VALUES ({$sourceValue}, {$spokenValue}, {$tagsValue}, FALSE, {$enabledValue}, CURRENT_TIMESTAMP)"
+                (source_text, spoken_text, npc_names, races, oghma_tags, is_builtin, enabled, updated_at)
+             VALUES ({$sourceValue}, {$spokenValue}, {$namesValue}, {$racesValue}, {$tagsValue},
+                     FALSE, {$enabledValue}, CURRENT_TIMESTAMP)"
         ) !== false;
     }
 
@@ -193,9 +210,83 @@ function chimTtsPronunciationNormalizeTags($tags): array
     return array_values($normalized);
 }
 
-// Limit tagged custom entries to NPCs whose active Oghma knowledge tags match.
-function chimTtsPronunciationEntryAllows(array $entry, ?array $knowledgeTags = null): bool
+function chimTtsPronunciationNormalizeScopeValues($values): array
 {
+    $normalized = [];
+    foreach (explode(',', strval($values)) as $value) {
+        $value = trim($value);
+        if ($value === '' || strlen($value) > 120) {
+            continue;
+        }
+        $key = function_exists('mb_strtolower')
+            ? mb_strtolower($value, 'UTF-8')
+            : strtolower($value);
+        $normalized[$key] = $value;
+    }
+    return array_values($normalized);
+}
+
+function chimTtsPronunciationValueMatches(string $value, array $allowedValues): bool
+{
+    $value = function_exists('mb_strtolower')
+        ? mb_strtolower(trim($value), 'UTF-8')
+        : strtolower(trim($value));
+    if ($value === '') {
+        return false;
+    }
+
+    foreach ($allowedValues as $allowedValue) {
+        $allowedValue = function_exists('mb_strtolower')
+            ? mb_strtolower(trim(strval($allowedValue)), 'UTF-8')
+            : strtolower(trim(strval($allowedValue)));
+        if ($value === $allowedValue) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Resolve server-owned identity fields used to scope pronunciation access.
+function chimTtsPronunciationCurrentSpeakerScope(?array $npcData = null): array
+{
+    $scope = [
+        'knowledge_tags' => chimTtsPronunciationNormalizeTags($GLOBALS['OGHMA_KNOWLEDGE'] ?? ''),
+        'npc_name' => '',
+        'race' => '',
+    ];
+    $npcData = $npcData ?? ($GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] ?? null);
+    $speaker = trim(strval($GLOBALS['HERIKA_NAME'] ?? ''));
+    $npcName = is_array($npcData) ? trim(strval($npcData['npc_name'] ?? '')) : '';
+    if (!is_array($npcData) || $speaker === '' || $npcName === '' || strcasecmp($speaker, $npcName) !== 0) {
+        return $scope;
+    }
+
+    $scope['knowledge_tags'] = chimTtsPronunciationNormalizeTags(
+        $npcData['oghma_knowledge_tags'] ?? ($GLOBALS['OGHMA_KNOWLEDGE'] ?? '')
+    );
+    $scope['npc_name'] = $npcName;
+    $scope['race'] = trim(strval($npcData['race'] ?? ''));
+    return $scope;
+}
+
+// Require every populated speaker filter while allowing alternatives within each filter.
+function chimTtsPronunciationEntryAllows(
+    array $entry,
+    ?array $knowledgeTags = null,
+    string $npcName = '',
+    string $race = ''
+): bool
+{
+    $entryNames = chimTtsPronunciationNormalizeScopeValues($entry['npc_names'] ?? '');
+    if (!empty($entryNames) && !chimTtsPronunciationValueMatches($npcName, $entryNames)) {
+        return false;
+    }
+
+    $entryRaces = chimTtsPronunciationNormalizeScopeValues($entry['races'] ?? '');
+    if (!empty($entryRaces) && !chimTtsPronunciationValueMatches($race, $entryRaces)) {
+        return false;
+    }
+
     $entryTags = chimTtsPronunciationNormalizeTags($entry['oghma_tags'] ?? '');
     if (empty($entryTags)) {
         return true;
@@ -214,7 +305,12 @@ function chimTtsPronunciationEntryAllows(array $entry, ?array $knowledgeTags = n
 }
 
 // Resolve active rows with custom scoped entries taking priority over global defaults.
-function chimTtsPronunciationEntries(?array $rows = null, ?array $knowledgeTags = null): array
+function chimTtsPronunciationEntries(
+    ?array $rows = null,
+    ?array $knowledgeTags = null,
+    string $npcName = '',
+    string $race = ''
+): array
 {
     if ($rows === null) {
         static $cachedRows = null;
@@ -227,7 +323,7 @@ function chimTtsPronunciationEntries(?array $rows = null, ?array $knowledgeTags 
     $resolved = [];
     foreach (array_slice($rows, 0, 1024) as $row) {
         if (!chimTtsPronunciationBoolean($row['enabled'] ?? true)
-            || !chimTtsPronunciationEntryAllows($row, $knowledgeTags)) {
+            || !chimTtsPronunciationEntryAllows($row, $knowledgeTags, $npcName, $race)) {
             continue;
         }
 
@@ -241,8 +337,11 @@ function chimTtsPronunciationEntries(?array $rows = null, ?array $knowledgeTags 
             ? mb_strtolower($source, 'UTF-8')
             : strtolower($source);
         $isBuiltin = chimTtsPronunciationBoolean($row['is_builtin'] ?? false);
-        $hasTags = !empty(chimTtsPronunciationNormalizeTags($row['oghma_tags'] ?? ''));
-        $priority = ($isBuiltin ? 0 : 10) + ($hasTags ? 1 : 0);
+        $specificity = 0;
+        $specificity += !empty(chimTtsPronunciationNormalizeScopeValues($row['npc_names'] ?? '')) ? 1 : 0;
+        $specificity += !empty(chimTtsPronunciationNormalizeScopeValues($row['races'] ?? '')) ? 1 : 0;
+        $specificity += !empty(chimTtsPronunciationNormalizeTags($row['oghma_tags'] ?? '')) ? 1 : 0;
+        $priority = ($isBuiltin ? 0 : 10) + $specificity;
         if (isset($resolved[$normalizedSource]) && $resolved[$normalizedSource]['priority'] > $priority) {
             continue;
         }
@@ -264,13 +363,15 @@ function chimTtsPronunciationEntries(?array $rows = null, ?array $knowledgeTags 
 function chimApplyTtsPronunciationDictionary(
     string $text,
     ?array $rows = null,
-    ?array $knowledgeTags = null
+    ?array $knowledgeTags = null,
+    string $npcName = '',
+    string $race = ''
 ): string {
     if ($text === '') {
         return $text;
     }
 
-    $entries = chimTtsPronunciationEntries($rows, $knowledgeTags);
+    $entries = chimTtsPronunciationEntries($rows, $knowledgeTags, $npcName, $race);
     if (empty($entries)) {
         return $text;
     }

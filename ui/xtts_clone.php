@@ -2026,6 +2026,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pronunciationId > 0 ? $pronunciationId : null,
             strval($_POST['source_text'] ?? ''),
             strval($_POST['spoken_text'] ?? ''),
+            strval($_POST['npc_names'] ?? ''),
+            strval($_POST['races'] ?? ''),
             strval($_POST['oghma_tags'] ?? ''),
             isset($_POST['enabled'])
         );
