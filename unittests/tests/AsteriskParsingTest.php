@@ -567,4 +567,86 @@ final class AsteriskParsingTest extends TestCase
         $this->assertSame('lydia', $GLOBALS['TTS']['XTTSFASTAPI']['voiceid']);
         $this->assertSame('lydia', $GLOBALS['TTS']['PIPERTTS']['voiceid']);
     }
+
+    public function testTtsPronunciationsApplyWholeTermsWithoutCascading(): void
+    {
+        $defaults = array_column(chimDefaultTtsPronunciationEntries(), 'spoken_text', 'source_text');
+        $this->assertSame('Yarl', $defaults['Jarl']);
+        $this->assertSame('Doh-vah-keen', $defaults['Dovahkiin']);
+        $this->assertSame('Dweh-mer', $defaults['Dwemer']);
+        $this->assertSame('Meer-ack', $defaults['Miraak']);
+        $this->assertArrayNotHasKey('Aetherius', $defaults);
+        $this->assertArrayNotHasKey('Balgruuf', $defaults);
+
+        $GLOBALS['CHIM_TTS_PRONUNCIATION_BYPASS'] = true;
+        $this->assertSame(
+            'Jorrvaskr',
+            chimApplyTtsPronunciationDictionary('Jorrvaskr', [
+                ['source_text' => 'Jorrvaskr', 'spoken_text' => 'Yorvaskr', 'enabled' => true],
+            ])
+        );
+        unset($GLOBALS['CHIM_TTS_PRONUNCIATION_BYPASS']);
+
+        $rows = [
+            ['source_text' => 'Jorrvaskr', 'spoken_text' => 'Ysgramor', 'enabled' => true],
+            ['source_text' => 'Ysgramor', 'spoken_text' => 'Eesgramor', 'enabled' => true],
+            ['source_text' => 'Whiterun guard', 'spoken_text' => 'city guard', 'enabled' => true],
+        ];
+
+        $this->assertSame(
+            'Ysgramor greets Eesgramor. A city guard arrived; Whiterun guards stayed outside Jorrvaskrian lands.',
+            chimApplyTtsPronunciationDictionary(
+                'Jorrvaskr greets Ysgramor. A Whiterun guard arrived; Whiterun guards stayed outside Jorrvaskrian lands.',
+                $rows,
+                []
+            )
+        );
+    }
+
+    public function testTtsPronunciationsUseNameRaceAndOghmaFiltersWithCustomPriority(): void
+    {
+        $GLOBALS['HERIKA_NAME'] = 'Aela';
+        $scope = chimTtsPronunciationCurrentSpeakerScope([
+            'npc_name' => 'Aela',
+            'race' => 'NordRace',
+            'oghma_knowledge_tags' => 'companions, whiterun',
+        ]);
+        $this->assertSame(['companions', 'whiterun'], $scope['knowledge_tags']);
+        $this->assertSame('Aela', $scope['npc_name']);
+        $this->assertSame('NordRace', $scope['race']);
+
+        $rows = [
+            [
+                'source_text' => 'Jorrvaskr',
+                'spoken_text' => 'Yorvaskr',
+                'is_builtin' => true,
+                'enabled' => true,
+            ],
+            [
+                'source_text' => 'Jorrvaskr',
+                'spoken_text' => 'Companions Hall',
+                'npc_names' => 'Aela, Vilkas',
+                'races' => 'NordRace',
+                'oghma_tags' => 'companions, whiterun',
+                'is_builtin' => false,
+                'enabled' => true,
+            ],
+        ];
+
+        $this->assertSame('Visit Companions Hall.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['companions'], 'Aela', 'NordRace'
+        ));
+        $this->assertSame('Visit Yorvaskr.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['companions'], 'Lydia', 'NordRace'
+        ));
+        $this->assertSame('Visit Yorvaskr.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['companions'], 'Aela', 'BretonRace'
+        ));
+        $this->assertSame('Visit Yorvaskr.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['mage'], 'Aela', 'NordRace'
+        ));
+        $this->assertSame('Visit Companions Hall.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['knowall'], 'Aela', 'NordRace'
+        ));
+    }
 }
