@@ -576,6 +576,15 @@ final class AsteriskParsingTest extends TestCase
         $this->assertSame('Dweh-mer', $defaults['Dwemer']);
         $this->assertSame('Meer-ack', $defaults['Miraak']);
 
+        $GLOBALS['CHIM_TTS_PRONUNCIATION_BYPASS'] = true;
+        $this->assertSame(
+            'Jorrvaskr',
+            chimApplyTtsPronunciationDictionary('Jorrvaskr', [
+                ['source_text' => 'Jorrvaskr', 'spoken_text' => 'Yorvaskr', 'enabled' => true],
+            ])
+        );
+        unset($GLOBALS['CHIM_TTS_PRONUNCIATION_BYPASS']);
+
         $rows = [
             ['source_text' => 'Jorrvaskr', 'spoken_text' => 'Ysgramor', 'enabled' => true],
             ['source_text' => 'Ysgramor', 'spoken_text' => 'Eesgramor', 'enabled' => true],

@@ -411,7 +411,7 @@ function chimApplyTtsPronunciationDictionary(
     string $npcName = '',
     string $race = ''
 ): string {
-    if ($text === '') {
+    if ($text === '' || !empty($GLOBALS['CHIM_TTS_PRONUNCIATION_BYPASS'])) {
         return $text;
     }
 

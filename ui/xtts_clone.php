@@ -16,6 +16,7 @@ require_once($enginePath . "conf" . DIRECTORY_SEPARATOR . "conf_loader.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_connector.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_fallback.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_studio_provider_detection.php");
+require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "tts_pronunciation_preview.php");
 
 require_once(__DIR__.DIRECTORY_SEPARATOR."profile_loader.php");
 
@@ -2780,6 +2781,12 @@ if ($ttsPronunciationFilter !== '' && !in_array($ttsPronunciationFilter, $ttsPro
     $ttsPronunciationFilter = '';
 }
 $ttsPronunciationRows = $ttsPronunciationManager->getRows($ttsPronunciationFilter);
+$ttsPronunciationPreviewOptions = chimTtsPronunciationPreviewOptions($enginePath);
+$ttsPronunciationPreviewConnectors = $ttsPronunciationPreviewOptions['connectors'];
+$ttsPronunciationPreviewVoices = $ttsPronunciationPreviewOptions['voices'];
+$ttsPronunciationPreviewDefaultConnectorId = $ttsPronunciationPreviewOptions['default_connector_id'];
+$ttsPronunciationPreviewDefaultVoice = $ttsPronunciationPreviewOptions['default_voice'];
+$ttsPronunciationPreviewEndpoint = $webRoot . '/ui/api/tts_pronunciation_preview.php';
 
 // Add the JavaScript functions
 ?>

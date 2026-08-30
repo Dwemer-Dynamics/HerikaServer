@@ -8,6 +8,69 @@
     margin-bottom: 6px;
 }
 
+/* Compact preview strip: connector, voice, and one shared player for the page. */
+.pron-preview {
+    align-items: flex-end;
+    background: #202020;
+    border: 1px solid #414141;
+    border-radius: 7px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-top: 14px;
+    padding: 10px 12px;
+}
+
+.pron-preview-caption {
+    align-self: flex-end;
+    color: #cfd8e3;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin: 0;
+    padding-bottom: 9px;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.pron-preview-field {
+    flex: 1 1 170px;
+    max-width: 250px;
+    min-width: 0;
+}
+
+.pron-preview-player {
+    flex: 1 1 210px;
+    max-width: 320px;
+    min-width: 0;
+}
+
+.pron-preview-field .pron-label,
+.pron-preview-player .pron-label {
+    margin-bottom: 4px;
+}
+
+.pron-preview-audio {
+    display: block;
+    height: 32px;
+    max-width: 100%;
+    width: 100%;
+}
+
+.pron-preview-status {
+    color: #8b98a8;
+    flex: 1 1 100%;
+    font-size: 12px;
+    line-height: 1.4;
+    margin: 0;
+    min-height: 16px;
+    overflow-wrap: anywhere;
+}
+
+.pron-preview.is-unavailable .pron-preview-status {
+    color: #d5a849;
+}
+
 .pron-toolbar {
     align-items: flex-end;
     display: flex;
@@ -205,6 +268,99 @@
     background-color: #73241f;
 }
 
+/* The play control shares its cell with the text it speaks, so keep it square
+   and small enough not to change any row height. */
+.pron-input-row,
+.pron-static-row {
+    align-items: center;
+    display: flex;
+    gap: 6px;
+    min-width: 0;
+}
+
+.pron-input-row .pron-field,
+.pron-static-row .pron-static {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.pron-play {
+    align-items: center;
+    background: #2f2f2f !important;
+    border: 1px solid #4d4d4d !important;
+    border-radius: 5px !important;
+    display: grid;
+    flex: 0 0 auto;
+    height: 30px !important;
+    margin: 0 !important;
+    min-height: 30px !important;
+    padding: 0 !important;
+    place-items: center;
+    width: 30px;
+}
+
+.pron-play:hover:not(:disabled) {
+    background: #383838 !important;
+    border-color: rgba(242, 124, 17, 0.6) !important;
+}
+
+.pron-play-icon {
+    border-color: transparent transparent transparent rgb(242, 124, 17);
+    border-style: solid;
+    border-width: 5px 0 5px 8px;
+    display: block;
+    height: 0;
+    margin-left: 2px;
+    width: 0;
+}
+
+/* Busy rows stay disabled, so opt out of the theme's dimmed disabled look and
+   swap the triangle for a pulsing block instead. */
+.pron-play.is-busy:disabled {
+    filter: none !important;
+    opacity: 1 !important;
+}
+
+.pron-play.is-busy .pron-play-icon {
+    animation: pron-play-pulse 0.9s ease-in-out infinite;
+    background: rgb(242, 124, 17);
+    border: 0;
+    border-radius: 2px;
+    height: 9px;
+    margin-left: 0;
+    width: 9px;
+}
+
+@keyframes pron-play-pulse {
+    0%, 100% {
+        opacity: 0.35;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pron-play.is-busy .pron-play-icon {
+        animation: none;
+        opacity: 0.75;
+    }
+}
+
+/* The icon carries no text, so the button keeps a screen-reader-only name. */
+.pron-play-text {
+    border: 0;
+    clip: rect(0 0 0 0);
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+}
+
 .pron-hidden-form {
     display: none;
 }
@@ -286,8 +442,15 @@
         width: 100%;
     }
 
+    .pron-preview-field,
+    .pron-preview-player {
+        flex: 1 1 100%;
+        max-width: none;
+    }
+
     .pron-add-row .pron-toggle,
     .pron-add-row .pron-actions {
         margin-top: 0;
     }
 }
+    display: grid;
