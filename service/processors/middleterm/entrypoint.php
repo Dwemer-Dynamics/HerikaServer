@@ -222,11 +222,17 @@ $GLOBALS["TASKS"]["middleterm"]["fn"] = function () {
     foreach ($allEnabledBgLNpc as $npc) {
         $mwdata = json_decode($npc["extended_data"], true);
         $mustInstructBypassBgl=false;
+        $actorEscaped=$GLOBALS["db"]->escape($npc["npc_name"]);
         $npcIsNearToPlayer = $GLOBALS["db"]->fetchOne("SELECT max(gamets) as n from eventlog where 
             type='infonpc_close' and 
-            (data like '%/" . ($GLOBALS["db"]->escape($npc["npc_name"])) . "%/'
-                or data like '" . ($GLOBALS["db"]->escape($npc["npc_name"])) . "%/'
-                or data like '%/" . ($GLOBALS["db"]->escape($npc["npc_name"])) . "')
+            (
+                people like '%|$actorEscaped|%'
+                or people like '$actorEscaped'
+                or people like '%|$actorEscaped (busy)|%'
+                or people like '%|$actorEscaped (hostile)|%'
+                or people like '%|$actorEscaped (in combat)|%'
+                or people like '%|$actorEscaped (far away)|%'
+            )
             and gamets > $oneHourAgoGamets");
 
         if (isset($npcIsNearToPlayer) && $npcIsNearToPlayer["n"] > 0) {
