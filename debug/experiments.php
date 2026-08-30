@@ -1199,3 +1199,9 @@ if ($argv[1] == '32') {
     $skyrimCmd->send(cmd: $json);
 
 }
+
+if ($argv[1] == '33') {
+    
+    echo returnLines(["Hello world"]);
+    print_r($GLOBALS["SCRIPTLINE_UTTERANCE_ID"]);
+}
