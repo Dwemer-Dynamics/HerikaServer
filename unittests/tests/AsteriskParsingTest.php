@@ -570,6 +570,12 @@ final class AsteriskParsingTest extends TestCase
 
     public function testTtsPronunciationsApplyWholeTermsWithoutCascading(): void
     {
+        $defaults = array_column(chimDefaultTtsPronunciationEntries(), 'spoken_text', 'source_text');
+        $this->assertSame('Yarl', $defaults['Jarl']);
+        $this->assertSame('Doh-vah-keen', $defaults['Dovahkiin']);
+        $this->assertSame('Dweh-mer', $defaults['Dwemer']);
+        $this->assertSame('Meer-ack', $defaults['Miraak']);
+
         $rows = [
             ['source_text' => 'Jorrvaskr', 'spoken_text' => 'Ysgramor', 'enabled' => true],
             ['source_text' => 'Ysgramor', 'spoken_text' => 'Eesgramor', 'enabled' => true],
