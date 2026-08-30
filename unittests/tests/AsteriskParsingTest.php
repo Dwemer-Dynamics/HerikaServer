@@ -575,6 +575,8 @@ final class AsteriskParsingTest extends TestCase
         $this->assertSame('Doh-vah-keen', $defaults['Dovahkiin']);
         $this->assertSame('Dweh-mer', $defaults['Dwemer']);
         $this->assertSame('Meer-ack', $defaults['Miraak']);
+        $this->assertArrayNotHasKey('Aetherius', $defaults);
+        $this->assertArrayNotHasKey('Balgruuf', $defaults);
 
         $GLOBALS['CHIM_TTS_PRONUNCIATION_BYPASS'] = true;
         $this->assertSame(

@@ -8164,6 +8164,26 @@ if ($checkVersion("core_tts_pronunciation") < 20260829003) {
     }
 }
 
+if ($checkVersion("core_tts_pronunciation") < 20260829004) {
+    Logger::debug("Applying core_tts_pronunciation 20260829004 - retire selected Skyrim defaults");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+    if ($migrationOk) {
+        $migrationOk = $GLOBALS['db']->execQuery(
+            "DELETE FROM public.core_tts_pronunciation
+             WHERE is_builtin = TRUE
+               AND LOWER(BTRIM(source_text)) IN ('aetherius', 'balgruuf')"
+        ) !== false;
+    }
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260829004);
+        Logger::info("Applied patch core_tts_pronunciation 20260829004");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260829004");
+    }
+}
+
 Logger::info(__FILE__." update file processed");
 
 //----------------------------------------------------
