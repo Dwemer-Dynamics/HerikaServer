@@ -3628,6 +3628,7 @@ function chimParseServerSideRechatPayload($rawData)
         "origin_line" => trim((string)$rawData),
         "rechat_depth" => 0,
         "chain_id" => "",
+        "active_agents" => null,
     ];
 
     $rawData = trim((string)$rawData);
@@ -3657,6 +3658,9 @@ function chimParseServerSideRechatPayload($rawData)
     }
     if (!empty($decoded["chain_id"])) {
         $payload["chain_id"] = trim((string)$decoded["chain_id"]);
+    }
+    if (array_key_exists("active_agents", $decoded) && is_array($decoded["active_agents"])) {
+        $payload["active_agents"] = chimNormalizeRechatActorList($decoded["active_agents"]);
     }
 
     return $payload;
@@ -3738,6 +3742,16 @@ function chimResolveServerSideRechatTarget(array $payload)
     $listenerHint = normalizeDialogueListenerName($payload["listener_hint"] ?? "");
     $rechatTargetHint = normalizeDialogueListenerName($payload["rechat_target_hint"] ?? "");
     $configuredRechatMode = chimGetRechatMode();
+    $activeAgents = is_array($payload["active_agents"] ?? null)
+        ? chimNormalizeRechatActorList($payload["active_agents"])
+        : null;
+    $activeAgentKeys = null;
+    if ($activeAgents !== null) {
+        $activeAgentKeys = [];
+        foreach ($activeAgents as $activeAgent) {
+            $activeAgentKeys[mb_strtolower($activeAgent, "UTF-8")] = true;
+        }
+    }
 
     $peoplePipe = "";
     foreach ([$rechatTargetHint, $listenerHint] as $scopeTarget) {
@@ -3800,6 +3814,14 @@ function chimResolveServerSideRechatTarget(array $payload)
     $selected = "";
     $actorStateMap = chimLatestRechatActorStateMap();
     $speakerBlockReason = chimRechatActorStateBlockReason($speakerName, $actorStateMap, false);
+    if (
+        $speakerBlockReason === "" &&
+        $activeAgentKeys !== null &&
+        strcasecmp($speakerName, "The Narrator") !== 0 &&
+        !isset($activeAgentKeys[mb_strtolower($speakerName, "UTF-8")])
+    ) {
+        $speakerBlockReason = "inactive";
+    }
 
     if ($speakerBlockReason !== "") {
         Logger::info("[RECHAT_SELECT] Terminating rechat for {$speakerName}: {$speakerBlockReason}");
@@ -3816,6 +3838,13 @@ function chimResolveServerSideRechatTarget(array $payload)
             continue;
         }
         if (isPlayerDialogueListenerName($candidate)) {
+            continue;
+        }
+        if (
+            $activeAgentKeys !== null &&
+            !isset($activeAgentKeys[mb_strtolower($candidate, "UTF-8")])
+        ) {
+            Logger::info("[RECHAT_SELECT] Skipping {$candidate}: inactive");
             continue;
         }
         if (!$npcMaster->getByName($candidate)) {
@@ -3852,6 +3881,7 @@ function chimResolveServerSideRechatTarget(array $payload)
         "configured_mode" => $configuredRechatMode,
         "origin_line" => trim((string)($payload["origin_line"] ?? "")),
         "chain_id" => trim((string)($payload["chain_id"] ?? "")),
+        "active_agents" => $activeAgents,
     ];
 }
 
