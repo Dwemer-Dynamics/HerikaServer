@@ -61,7 +61,7 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'AUTOFILL_CUSTOM_PROFILES_TRIGGER', 'type' => 'integer', 'min' => 10, 'max' => 100],
             ['name' => 'BGL_TRIGGER_HOURS', 'type' => 'number', 'min' => 1, 'max' => 720, 'step' => 0.1, 'default' => 24],
             ['name' => 'END_CONVERSATION_COOLDOWN', 'type' => 'integer', 'min' => 0, 'max' => 300],
-            ['name' => 'BOOK_READ_LINES_PER_BATCH', 'type' => 'integer', 'min' => 1, 'default' => 8],
+            ['name' => 'BOOK_READ_LINES_PER_BATCH', 'label' => 'Lines Before Book Comment', 'type' => 'integer', 'min' => 1, 'default' => 8],
         ],
         'Quests' => [
             ['name' => 'CHIM_AI_QUEST_PROGRESSION', 'type' => 'boolean'],
