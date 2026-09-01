@@ -12,6 +12,11 @@ final class DiaryMemoryRecallTest extends TestCase
         $GLOBALS['db'] = new class {
             public array $queries = [];
 
+            /** @var array<string, array|null> */
+            public array $narratorSettings = [];
+
+            public ?array $latestDiaryEntry = null;
+
             public function escape($value): string
             {
                 return str_replace("'", "''", (string)$value);
@@ -21,6 +26,23 @@ final class DiaryMemoryRecallTest extends TestCase
             {
                 $this->queries[] = $query;
                 return true;
+            }
+
+            public function fetchOne(string $query)
+            {
+                $this->queries[] = $query;
+
+                if (strpos($query, 'core_narrator') !== false) {
+                    foreach ($this->narratorSettings as $key => $row) {
+                        if (strpos($query, "id = '{$key}'") !== false) {
+                            return $row;
+                        }
+                    }
+
+                    return null;
+                }
+
+                return $this->latestDiaryEntry;
             }
         };
     }
@@ -129,5 +151,47 @@ final class DiaryMemoryRecallTest extends TestCase
     {
         $this->assertFalse(chimShouldDiscardRecentMemory(48.0, 140.0, true));
         $this->assertTrue(chimShouldDiscardRecentMemory(48.0, 140.0, false));
+    }
+
+    private function narratorProfile(bool $latestDiaryContextEnabled): array
+    {
+        return ['metadata' => json_encode(['LATEST_DIARY_CONTEXT_ENABLED' => $latestDiaryContextEnabled])];
+    }
+
+    public function testNarratorInheritsProfileSettingWhenOverrideWasNeverSaved(): void
+    {
+        $this->assertTrue(chimIsLatestDiaryContextEnabledFor('The Narrator', $this->narratorProfile(true)));
+        $this->assertFalse(chimIsLatestDiaryContextEnabledFor('The Narrator', $this->narratorProfile(false)));
+    }
+
+    public function testSavedNarratorOverrideWinsOverAssignedProfile(): void
+    {
+        $GLOBALS['db']->narratorSettings['latest_diary_context_enabled'] = ['value' => '0'];
+        $this->assertFalse(chimIsLatestDiaryContextEnabledFor('The Narrator', $this->narratorProfile(true)));
+
+        $GLOBALS['db']->narratorSettings['latest_diary_context_enabled'] = ['value' => '1'];
+        $this->assertTrue(chimIsLatestDiaryContextEnabledFor('The Narrator', $this->narratorProfile(false)));
+    }
+
+    public function testOrdinaryNpcsAlwaysUseTheirOwnProfileSetting(): void
+    {
+        $GLOBALS['db']->narratorSettings['latest_diary_context_enabled'] = ['value' => '1'];
+
+        $this->assertFalse(chimIsLatestDiaryContextEnabledFor('Embry', $this->narratorProfile(false)));
+        $this->assertTrue(chimIsLatestDiaryContextEnabledFor('Embry', $this->narratorProfile(true)));
+    }
+
+    public function testNarratorOverrideGatesTheLatestDiaryContextBlock(): void
+    {
+        $GLOBALS['db']->latestDiaryEntry = ['topic' => 'Sundas', 'content' => 'We left Falkreath at dawn.'];
+
+        $GLOBALS['db']->narratorSettings['latest_diary_context_enabled'] = ['value' => '0'];
+        $this->assertSame('', chimBuildLatestDiaryContextBlock('The Narrator', $this->narratorProfile(true)));
+
+        $GLOBALS['db']->narratorSettings['latest_diary_context_enabled'] = ['value' => '1'];
+        $this->assertStringContainsString(
+            'We left Falkreath at dawn.',
+            chimBuildLatestDiaryContextBlock('The Narrator', $this->narratorProfile(false))
+        );
     }
 }

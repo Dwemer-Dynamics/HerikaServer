@@ -220,6 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_narrator'])) {
         $narrator->set('diary_enabled', isset($_POST['diary_enabled']) && $_POST['diary_enabled'] === '1' ? '1' : '0');
         $narrator->set('auto_diary_enabled', isset($_POST['auto_diary_enabled']) && $_POST['auto_diary_enabled'] === '1' ? '1' : '0');
         $narrator->set('only_diary_access', isset($_POST['only_diary_access']) && $_POST['only_diary_access'] === '1' ? '1' : '0');
+        $narrator->set('latest_diary_context_enabled', isset($_POST['latest_diary_context_enabled']) && $_POST['latest_diary_context_enabled'] === '1' ? '1' : '0');
         
         // Save integer settings
         if (isset($_POST['random_chance'])) {
@@ -396,6 +397,19 @@ foreach ($allProfiles as $prof) {
 
 // Get current profile data
 $currentProfileData = $profilesConnById[$profileId] ?? null;
+
+// Latest diary entry context: narrator-specific override in core_narrator.
+// Never saved -> inherit the assigned narrator profile so shared profiles stay untouched.
+$latestDiaryContextRaw = $narrator->get('latest_diary_context_enabled');
+if ($latestDiaryContextRaw === null || trim($latestDiaryContextRaw) === '') {
+    $narratorProfileMetadata = json_decode(strval($currentProfileData['metadata'] ?? '{}'), true);
+    $latestDiaryContextEnabled = is_array($narratorProfileMetadata)
+        && filter_var($narratorProfileMetadata['LATEST_DIARY_CONTEXT_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    $latestDiaryContextInherited = true;
+} else {
+    $latestDiaryContextEnabled = filter_var($latestDiaryContextRaw, FILTER_VALIDATE_BOOLEAN);
+    $latestDiaryContextInherited = false;
+}
 
 $advancedPromptOrderSql = [];
 foreach ($advancedPromptKeys as $index => $advancedPromptKey) {
@@ -1459,6 +1473,15 @@ if (!$isEmbed) {
                         <span class="toggle-label">Narrator only diary access</span>
                     </label>
                     <span class="hint">Restrict the Narrator to diary entries written by The Narrator. When disabled, the Narrator may recall relevant diary entries from all NPCs.</span>
+
+                    <label class="toggle-row">
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="latest_diary_context_enabled" name="latest_diary_context_enabled" value="1" <?php echo $latestDiaryContextEnabled ? 'checked' : ''; ?>>
+                            <span class="toggle-slider"></span>
+                        </div>
+                        <span class="toggle-label">&#x1F4D6; Include Latest Diary Entry</span>
+                    </label>
+                    <span class="hint">Include The Narrator's latest diary entry in response context. This does not change NPCs using the same Core Profile.<?php echo $latestDiaryContextInherited ? ' Currently inherited from the assigned Core Profile until Narrator settings are saved.' : ''; ?></span>
                 </div>
 
                 <!-- Narration Section -->

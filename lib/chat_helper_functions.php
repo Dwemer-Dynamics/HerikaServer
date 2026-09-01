@@ -13,6 +13,71 @@ require_once(__DIR__."/emote_moods.php");
 require_once(__DIR__."/core/event_type.php");
 require_once(__DIR__."/tts_pronunciation.php");
 
+/**
+ * Narrator-specific override key for the latest diary entry context toggle.
+ * Stored in core_narrator so the assigned Core Profile (which can be shared
+ * with NPCs) is never mutated by narrator-only preferences.
+ */
+define('_NARRATOR_LATEST_DIARY_CONTEXT_KEY', 'latest_diary_context_enabled');
+
+function chimIsCanonicalNarratorName(string $name): bool
+{
+    $canonical = class_exists('Narrator') ? Narrator::CANONICAL_NAME : 'The Narrator';
+
+    return strcasecmp(trim($name), $canonical) === 0;
+}
+
+/**
+ * Read the narrator-specific latest diary context toggle.
+ * Returns null when the narrator has never saved a value, so callers can
+ * fall back to the assigned narrator profile setting.
+ */
+function chimGetNarratorLatestDiaryContextOverride(): ?bool
+{
+    $db = $GLOBALS['db'] ?? null;
+    if (!is_object($db) || !method_exists($db, 'fetchOne') || !method_exists($db, 'escape')) {
+        return null;
+    }
+
+    try {
+        $escapedKey = $db->escape(_NARRATOR_LATEST_DIARY_CONTEXT_KEY);
+        $row = $db->fetchOne("SELECT value FROM core_narrator WHERE id = '{$escapedKey}' LIMIT 1");
+    } catch (Throwable $e) {
+        Logger::warn('[LATEST_DIARY_CONTEXT] Unable to load narrator override: ' . $e->getMessage());
+        return null;
+    }
+
+    if (!is_array($row) || !array_key_exists('value', $row) || $row['value'] === null) {
+        return null;
+    }
+
+    if (trim(strval($row['value'])) === '') {
+        return null;
+    }
+
+    return filter_var($row['value'], FILTER_VALIDATE_BOOLEAN);
+}
+
+/**
+ * Resolve whether the latest diary entry should be injected for a speaker.
+ * Ordinary NPCs always use their own Core Profile setting; the canonical
+ * Narrator prefers its narrator-specific override when one has been saved.
+ */
+function chimIsLatestDiaryContextEnabledFor(string $npcName, array $profileData): bool
+{
+    $metadata = json_decode(strval($profileData['metadata'] ?? '{}'), true);
+    $profileEnabled = is_array($metadata)
+        && filter_var($metadata['LATEST_DIARY_CONTEXT_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+    if (!chimIsCanonicalNarratorName($npcName)) {
+        return $profileEnabled;
+    }
+
+    $override = chimGetNarratorLatestDiaryContextOverride();
+
+    return $override === null ? $profileEnabled : $override;
+}
+
 function chimBuildLatestDiaryContextBlock(string $npcName, array $profileData): string
 {
     $safeNpcName = trim($npcName);
@@ -20,9 +85,7 @@ function chimBuildLatestDiaryContextBlock(string $npcName, array $profileData): 
         return '';
     }
 
-    $metadata = json_decode(strval($profileData['metadata'] ?? '{}'), true);
-    if (!is_array($metadata)
-        || !filter_var($metadata['LATEST_DIARY_CONTEXT_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+    if (!chimIsLatestDiaryContextEnabledFor($safeNpcName, $profileData)) {
         return '';
     }
 
