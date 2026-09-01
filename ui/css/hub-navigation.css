@@ -109,26 +109,29 @@ body.hub-page .config-navigation {
 
 /* border-box keeps the declared height honest: as content-box the old 38px
    buttons painted 54px once padding and border were added. */
-.config-navigation .tab-button {
+body .config-navigation .tab-button {
     box-sizing: border-box;
     width: auto;
     max-width: 100%;
     min-width: 0;
-    height: 32px;
+    height: 32px !important;
+    min-height: 32px !important;
     display: inline-flex;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: flex-start !important;
     gap: 6px;
-    margin: 0;
-    padding: 4px 8px;
+    margin: 0 !important;
+    padding: 4px 8px !important;
     overflow: hidden;
     border: 1px solid #4a4a4a;
     border-radius: 6px;
     background: #303030;
     color: #f0f0f0;
     cursor: pointer;
-    font-family: 'MagicCards', sans-serif;
-    font-size: 0.82em;
+    font-family: 'MagicCards', sans-serif !important;
+    font-size: 0.82em !important;
+    font-weight: normal !important;
+    line-height: 1.2 !important;
     letter-spacing: 0.6px;
     text-decoration: none;
     word-spacing: 1px;
@@ -206,9 +209,9 @@ body.hub-page .config-navigation {
 /* Smaller desktops: trimming letter-spacing and padding is usually enough to
    save a button row without shrinking the text further. */
 @media (max-width: 1200px) {
-    .config-navigation .tab-button {
-        padding: 4px 7px;
-        font-size: 0.78em;
+    body .config-navigation .tab-button {
+        padding: 4px 7px !important;
+        font-size: 0.78em !important;
         letter-spacing: 0.4px;
     }
 }
@@ -234,10 +237,11 @@ body.hub-page .config-navigation {
         white-space: normal;
     }
 
-    .config-navigation .tab-button {
+    body .config-navigation .tab-button {
         flex: 1 1 auto;
-        height: 38px;
-        justify-content: center;
-        font-size: 0.82em;
+        height: 38px !important;
+        min-height: 38px !important;
+        justify-content: center !important;
+        font-size: 0.82em !important;
     }
 }
