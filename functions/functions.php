@@ -3728,6 +3728,47 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 //unset($actionsCopy[$n]);// Remove action from list, so client does not execute it
 
                 error_log("[ACTION POSTFILTER Surrender] Executed server-side StopCombat(\"0x{$npc["refid"]}\")");
+
+            } else if ($actionCodeNameResolved=="ReadBook") {
+                
+                $rawParameter = implode("@", array_slice($actionParts2, 1));
+                $payload = decodeFunctionExecutionParameterPayload($rawParameter);
+                if (!is_array($payload)) {
+                    $payload = [];
+                }
+
+                $playerName = trim(strval($GLOBALS["PLAYER_NAME"] ?? "Player"));
+                $targetName = trim(strval($payload["target"] ?? ""));
+                $bookName = trim(strval($payload["item"] ?? ""));
+
+                if ($bookName === '') {
+                    error_log("[ACTION POSTFILTER ReadBook] Missing book name");
+                    unset($actionsCopy[$n]);
+                    continue;
+                }
+                // Remove refid part:
+                // '0x0001B22B:Light Armor Forging'
+                $bookName = preg_replace('/^0x[0-9A-Fa-f]+:/', '', $bookName);
+                $bookName = preg_replace('/^[0-9A-Fa-f]+:/', '', $bookName);
+
+                $cnBookName=$GLOBALS["db"]->escape($bookName) ?? $bookName;
+                $bookCandidate = $GLOBALS["db"]->fetchOne("SELECT * FROM books ORDER BY similarity(title, '{$cnBookName}') DESC LIMIT 1");
+
+                if ($bookCandidate) {
+                    $rootPath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
+                    require_once $rootPath.'lib/core/book_read.class.php'; // or include the relevant helpers
+                    error_log("[ACTION POSTFILTER ReadBook] Book found: '{$bookCandidate['title']}'");
+                    if ($bookCandidate) {
+                        $result = bookReadStateHandleBookAction($bookCandidate, $GLOBALS["HERIKA_NAME"], $playerName);
+                        // $result is one of: 'resumed', 'replaced', 'started', 'ignored'
+                        unset($actionsCopy[$n]);
+                    }
+
+                    
+
+                } else {
+                    error_log("[ACTION POSTFILTER ReadBook] Book not found: '{$bookName}'");
+                }
             }
         }
     }
