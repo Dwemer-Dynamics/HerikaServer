@@ -86,7 +86,7 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
             <li><strong>Blank field:</strong> that filter is not applied. With NPC names, races, and Oghma tags all blank the entry is global and every NPC uses it.</li>
             <li><strong>Commas inside one field</strong> are alternatives &mdash; <em>Nord, Dunmer</em> matches either race.</li>
             <li><strong>Two or more fields filled:</strong> the speaking NPC must match all of them, so <em>Nord</em> plus <em>companions</em> only fires for a Nord carrying that Oghma tag.</li>
-            <li><strong>Built-in entries</strong> cannot be deleted, but any of them can be disabled.</li>
+            <li><strong>Built-in entries</strong> cannot be deleted and keep their original term, but their spoken version can be edited and any of them can be disabled.</li>
         </ul>
 
         <div class="pron-preview<?php echo $pronPreviewReady ? '' : ' is-unavailable'; ?>" id="pron-preview"
@@ -345,7 +345,7 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
 
     <div class="content-section full-width-section">
         <h1>Built-in Pronunciations</h1>
-        <p>Shipped defaults for common lore names. They cannot be deleted, but any of them can be disabled and replaced with a custom entry above. The <strong>Applies To</strong> column shows who each default actually reaches.</p>
+        <p>Shipped defaults for common lore names. Edit the spoken version to retune one, or disable it and replace it with a custom entry above. Original terms stay fixed, and built-ins cannot be deleted. The <strong>Applies To</strong> column shows who each default actually reaches.</p>
 
         <div class="pron-grid">
             <div class="pron-cols pron-head" aria-hidden="true">
@@ -367,18 +367,29 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
                     $pronSource = (string)($pronRow['source_text'] ?? '');
                     $pronSpoken = (string)($pronRow['spoken_text'] ?? '');
                     $pronGroups = $pronScopeGroups($pronRow);
+                    // Fallback rows have no database id, so they can be previewed but not saved.
+                    $pronSavable = (int)($pronRow['id'] ?? 0) > 0;
                     ?>
                     <form action="<?php echo $pronPostAction; ?>" method="post"
                           class="pron-cols pron-row <?php echo $pronEnabled ? '' : 'is-disabled'; ?>">
-                        <input type="hidden" name="action" value="toggle_tts_pronunciation">
+                        <input type="hidden" name="action" value="save_builtin_tts_pronunciation">
                         <input type="hidden" name="id" value="<?php echo htmlspecialchars($pronId); ?>">
-                        <div class="pron-static-row">
-                            <div class="pron-static"><?php echo htmlspecialchars($pronSource); ?></div>
-                            <?php echo $pronPlayButton('Original', null, $pronSource, $pronSource); ?>
+                        <div>
+                            <span class="pron-label">Original</span>
+                            <div class="pron-static-row">
+                                <div class="pron-static"><?php echo htmlspecialchars($pronSource); ?></div>
+                                <?php echo $pronPlayButton('Original', null, $pronSource, $pronSource); ?>
+                            </div>
                         </div>
-                        <div class="pron-static-row">
-                            <div class="pron-static"><?php echo htmlspecialchars($pronSpoken); ?></div>
-                            <?php echo $pronPlayButton('Spoken version', null, $pronSpoken, $pronSource); ?>
+                        <div>
+                            <label class="pron-label" for="pron-spoken-<?php echo $pronKey; ?>">Spoken version</label>
+                            <div class="pron-input-row">
+                                <input class="pron-field" type="text" id="pron-spoken-<?php echo $pronKey; ?>"
+                                       name="spoken_text" value="<?php echo htmlspecialchars($pronSpoken); ?>"
+                                       maxlength="240" required autocomplete="off" spellcheck="false"
+                                       <?php echo $pronSavable ? '' : 'readonly'; ?>>
+                                <?php echo $pronPlayButton('Spoken version', 'pron-spoken-' . $pronKey, null, $pronSource); ?>
+                            </div>
                         </div>
                         <div>
                             <?php if (empty($pronGroups)): ?>
@@ -402,7 +413,9 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
                             <label class="pron-label pron-toggle-label" for="pron-enabled-<?php echo $pronKey; ?>">Enabled</label>
                         </div>
                         <div class="pron-actions">
-                            <button type="submit" id="pron-apply-<?php echo $pronKey; ?>" class="action-button edit pron-btn">Apply</button>
+                            <button type="submit" id="pron-save-<?php echo $pronKey; ?>"
+                                    class="action-button upload-csv pron-btn"
+                                    <?php echo $pronSavable ? '' : 'disabled title="Apply database updates before editing built-in entries."'; ?>>Save</button>
                         </div>
                     </form>
                 <?php endforeach; ?>

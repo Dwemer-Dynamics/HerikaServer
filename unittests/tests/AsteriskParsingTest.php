@@ -572,11 +572,14 @@ final class AsteriskParsingTest extends TestCase
     {
         $defaults = array_column(chimDefaultTtsPronunciationEntries(), 'spoken_text', 'source_text');
         $this->assertSame('Yarl', $defaults['Jarl']);
-        $this->assertSame('Doh-vah-keen', $defaults['Dovahkiin']);
-        $this->assertSame('Dweh-mer', $defaults['Dwemer']);
-        $this->assertSame('Meer-ack', $defaults['Miraak']);
+        $this->assertSame('Dohvahkeen', $defaults['Dovahkiin']);
+        $this->assertSame('Dwehmer', $defaults['Dwemer']);
+        $this->assertSame('Meerack', $defaults['Miraak']);
         $this->assertArrayNotHasKey('Aetherius', $defaults);
         $this->assertArrayNotHasKey('Balgruuf', $defaults);
+        foreach ($defaults as $spoken) {
+            $this->assertStringNotContainsString('-', $spoken);
+        }
 
         $GLOBALS['CHIM_TTS_PRONUNCIATION_BYPASS'] = true;
         $this->assertSame(
