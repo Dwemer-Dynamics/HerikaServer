@@ -1260,8 +1260,40 @@ class BookReader
         if (!$pendingPlayback && !($state['animation_end_done'] ?? false)) {
             $this->playStopReadingAnimation($state);
             error_log(date("d/m/Y H:i:s") . "[book_read] Paused session has no pending playback; triggered stop reading animation. reason: pendingPlayback={$pendingPlayback}, animation_end_done={$state['animation_end_done']}");
-        } else {
+        }
+
+        if (!$pendingPlayback && empty($state['comment_instruction_sent'])) {
+            $this->db->insert(
+                'responselog',
+                [
+                    'localts' => time(),
+                    'sent' => 0,
+                    'actor' => "rolemaster",
+                    'text' => "",
+                    'action' => "rolecommand|Instruction@{$this->commenter}@Briefly comment on {$this->narratorName}'s reading of '{$state['title']}', then use the Read_Book action with item '{$state['title']}' so the reading continues. Short sentence.@0",
+                    'tag' => "",
+                ]
+            );
+
+            $this->db->insert('eventlog', [
+                'ts' => $this->lastTs,
+                'gamets' => $this->lastGamets + 1,
+                'type' => 'innerchat',
+                'data' => "{$this->narratorName} has finished reading some pages of the book '{$state['title']}' and will continue after a brief comment.",
+                'sess' => 0,
+                'localts' => time(),
+                'people' => "|{$this->narratorName}|{$this->playerName}|",
+                'location' => null,
+                'party' => '',
+            ]);
+
+            $state['comment_instruction_sent'] = true;
+            $this->saveState($state);
+            error_log("[book_read] Requested comment after the current batch finished playing.");
+        } else if ($pendingPlayback) {
             error_log(date("d/m/Y H:i:s") . "[book_read] Reading of '{$state['title']}' is paused, doing nothing.");
+        } else {
+            error_log("[book_read] Waiting for the comment action to continue '{$state['title']}'.");
         }
         exit(0);
     }
@@ -1275,6 +1307,7 @@ class BookReader
 
         $state['status'] = 'reading';
         $state['lines_queued_in_batch'] = 0;
+        $state['comment_instruction_sent'] = false;
         $this->saveState($state);
         $this->playReadingAnimation($state);
         error_log("[book_read] Continued reading '{$state['title']}' after the comment break.");
@@ -1462,33 +1495,10 @@ class BookReader
             // Auto-pause after enqueuing the configured batch size so the caller can rest between batches.
             if (($state['lines_queued_in_batch'] ?? 0) >= $this->linesPerBatch) {
                 $state['status'] = 'paused';
+                $state['comment_instruction_sent'] = false;
                 $this->saveState($state);
 
-                $this->db->insert(
-                    'responselog',
-                    [
-                        'localts' => time() + 10,
-                        'sent' => 0,
-                        'actor' => "rolemaster",
-                        'text' => "",
-                        'action' => "rolecommand|Instruction@{$this->commenter}@Briefly comment on {$this->narratorName}'s reading of '{$state['title']}', then use the Read_Book action with item '{$state['title']}' so the reading continues. Short sentence.@0",
-                        'tag' => "",
-                    ]
-                );
-
-                $this->db->insert('eventlog', [
-                    'ts' => $this->lastTs,
-                    'gamets' => $this->lastGamets + 1,
-                    'type' => 'innerchat',
-                    'data' => "{$this->narratorName} has finished reading some pages of the book '{$state['title']}' and will continue after a brief comment.",
-                    'sess' => 0,
-                    'localts' => time(),
-                    'people' => "|{$this->narratorName}|{$this->playerName}|",
-                    'location' => null,
-                    'party' => '',
-                ]);
-
-                error_log("[book_read] Auto-paused after {$state['lines_queued_in_batch']} line(s) queued this batch.");
+                error_log("[book_read] Auto-paused after {$state['lines_queued_in_batch']} line(s) queued this batch; waiting for playback before requesting a comment.");
                 exit(0);
             }
         }
