@@ -3788,16 +3788,25 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     }
                     unset($actionsCopy[$n]);
                 } else {
-                    $safeBookName = trim(preg_replace('/[@|\r\n]+/', ' ', $bookName));
-                    $GLOBALS["db"]->insert('responselog', [
-                        'localts' => time(),
-                        'sent' => 0,
-                        'actor' => 'rolemaster',
-                        'text' => '',
-                        'action' => "rolecommand|DebugNotification@Book content for {$safeBookName} is not cached. Use its exact BaseID:BookTitle from inventory or open the book once.",
-                        'tag' => '',
-                    ]);
-                    error_log("[ACTION POSTFILTER ReadBook] Uncached book has no FormID: '{$bookName}'");
+                    try {
+                        $pendingState = bookReadStateRequestContentByTitle($bookName, $readerName, $playerName);
+                        $commandPayload = json_encode([
+                            'reader_b64' => base64_encode($readerName),
+                            'title_b64' => base64_encode($bookName),
+                            'request_token' => $pendingState['request_token'],
+                        ], JSON_UNESCAPED_SLASHES);
+                        $GLOBALS["db"]->insert('responselog', [
+                            'localts' => time(),
+                            'sent' => 0,
+                            'actor' => 'rolemaster',
+                            'text' => '',
+                            'action' => "rolecommand|UploadBookContentByTitle@{$commandPayload}",
+                            'tag' => '',
+                        ]);
+                        error_log("[ACTION POSTFILTER ReadBook] Requested CHIM inventory lookup for uncached book '{$bookName}'");
+                    } catch (Throwable $error) {
+                        error_log("[ACTION POSTFILTER ReadBook] Could not request book content by title: " . $error->getMessage());
+                    }
                     unset($actionsCopy[$n]);
                 }
             }

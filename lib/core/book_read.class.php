@@ -119,14 +119,14 @@ function bookReadStateForBook(array $bookCandidate, $narratorName, $playerName, 
 }
 
 /**
- * Persist a bounded request for CHIM to upload an uncached Skyrim book.
+ * Build the shared waiting state for an uncached Skyrim book upload.
  *
  * @return array The saved waiting state, including its correlation token.
  */
-function bookReadStateRequestContent($bookTitle, $formId, $narratorName, $playerName, $commenter = null)
+function bookReadStateCreateContentRequest($bookTitle, $formId, $narratorName, $playerName, $commenter = null, $allowTitleLookup = false)
 {
     $normalizedFormId = bookReadNormalizeFormId($formId);
-    if ($normalizedFormId === null) {
+    if ($normalizedFormId === null && !$allowTitleLookup) {
         throw new InvalidArgumentException('A valid book FormID is required to request content.');
     }
 
@@ -149,6 +149,40 @@ function bookReadStateRequestContent($bookTitle, $formId, $narratorName, $player
 }
 
 /**
+ * Persist a bounded request for CHIM to upload an uncached Skyrim book by FormID.
+ *
+ * @return array The saved waiting state, including its correlation token.
+ */
+function bookReadStateRequestContent($bookTitle, $formId, $narratorName, $playerName, $commenter = null)
+{
+    return bookReadStateCreateContentRequest(
+        $bookTitle,
+        $formId,
+        $narratorName,
+        $playerName,
+        $commenter,
+        false
+    );
+}
+
+/**
+ * Persist a bounded request for CHIM to find an uncached book in the reader or player inventory.
+ *
+ * @return array The saved waiting state, including its correlation token.
+ */
+function bookReadStateRequestContentByTitle($bookTitle, $narratorName, $playerName, $commenter = null)
+{
+    return bookReadStateCreateContentRequest(
+        $bookTitle,
+        null,
+        $narratorName,
+        $playerName,
+        $commenter,
+        true
+    );
+}
+
+/**
  * Complete a waiting request only when the upload matches server-owned state.
  */
 function bookReadStateAcceptUploadedContent(array $bookCandidate, $formId, $requestToken)
@@ -164,7 +198,7 @@ function bookReadStateAcceptUploadedContent(array $bookCandidate, $formId, $requ
 
     $normalizedFormId = bookReadNormalizeFormId($formId);
     $expectedFormId = bookReadNormalizeFormId($state['requested_form_id'] ?? '');
-    if ($normalizedFormId === null || $expectedFormId === null || $normalizedFormId !== $expectedFormId) {
+    if ($normalizedFormId === null || ($expectedFormId !== null && $normalizedFormId !== $expectedFormId)) {
         return false;
     }
 
@@ -1179,7 +1213,7 @@ class BookReader
             'sent' => 0,
             'actor' => 'rolemaster',
             'text' => '',
-            'action' => "rolecommand|DebugNotification@Could not retrieve book content for {$safeTitle}. Open the book once and try again.",
+            'action' => "rolecommand|DebugNotification@Could not retrieve book content for {$safeTitle}. Make sure the book is in your inventory or the reader's, then try again.",
             'tag' => '',
         ]);
 
