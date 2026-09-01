@@ -365,8 +365,9 @@ class BookReader
     private $commenter;
     private $animationsEnabled;
     private $linesPerBatch;
+    private $bookReadingVoice;
 
-    public function __construct($db, $lastTs, $lastGamets, $narratorName, $playerName, $commenter, $animationsEnabled, $linesPerBatch = 8)
+    public function __construct($db, $lastTs, $lastGamets, $narratorName, $playerName, $commenter, $animationsEnabled, $linesPerBatch = 8, $bookReadingVoice = true)
     {
         $this->db = $db;
         $this->lastTs = $lastTs;
@@ -376,6 +377,7 @@ class BookReader
         $this->commenter = $commenter;
         $this->animationsEnabled = $animationsEnabled;
         $this->linesPerBatch = max(1, intval($linesPerBatch));
+        $this->bookReadingVoice = filter_var($bookReadingVoice, FILTER_VALIDATE_BOOLEAN);
     }
 
     /**
@@ -901,17 +903,19 @@ class BookReader
         }
 
 
-        // ChatGPT's audiobook / professional narrator FFmpeg filter chain with EQ, compression, slight reverb, and speed adjustment
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['highpass'] = 'highpass=f=70';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['lowpass'] = 'lowpass=f=14500';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['warmth'] = 'equalizer=f=120:t=q:w=0.8:g=1.5';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['clarity_cut'] = 'equalizer=f=320:t=q:w=1.0:g=-1.5';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['presence'] = 'equalizer=f=3000:t=q:w=0.9:g=2.0';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['compressor'] = 'acompressor=threshold=-18dB:ratio=2.5:attack=8:release=120:makeup=2';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['aecho'] = 'aecho=1.0:0.92:55:0.16';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['speed'] = 'atempo=0.85';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['loudnorm'] = 'loudnorm=I=-16:TP=-1.5:LRA=7';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['aresample'] = 'aresample=24000';
+        if ($this->bookReadingVoice) {
+            // Audiobook-style EQ, compression, slight reverb, and speed adjustment.
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['highpass'] = 'highpass=f=70';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['lowpass'] = 'lowpass=f=14500';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['warmth'] = 'equalizer=f=120:t=q:w=0.8:g=1.5';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['clarity_cut'] = 'equalizer=f=320:t=q:w=1.0:g=-1.5';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['presence'] = 'equalizer=f=3000:t=q:w=0.9:g=2.0';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['compressor'] = 'acompressor=threshold=-18dB:ratio=2.5:attack=8:release=120:makeup=2';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['aecho'] = 'aecho=1.0:0.92:55:0.16';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['speed'] = 'atempo=0.85';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['loudnorm'] = 'loudnorm=I=-16:TP=-1.5:LRA=7';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['aresample'] = 'aresample=24000';
+        }
         $GLOBALS["SCRIPTLINE_ANIMATION_SENT"] = true;  // To avoid returnlines from sending any animation.
         $GLOBALS["AVOID_TTS_CACHE"] = true;
         returnLines([$lineText], true);

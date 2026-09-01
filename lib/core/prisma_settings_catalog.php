@@ -62,6 +62,7 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'BGL_TRIGGER_HOURS', 'type' => 'number', 'min' => 1, 'max' => 720, 'step' => 0.1, 'default' => 24],
             ['name' => 'END_CONVERSATION_COOLDOWN', 'type' => 'integer', 'min' => 0, 'max' => 300],
             ['name' => 'BOOK_READ_LINES_PER_BATCH', 'label' => 'Lines Before Book Comment', 'type' => 'integer', 'min' => 1, 'default' => 8],
+            ['name' => 'BOOK_READING_VOICE', 'label' => 'Book Reading Voice', 'type' => 'boolean', 'default' => true],
         ],
         'Quests' => [
             ['name' => 'CHIM_AI_QUEST_PROGRESSION', 'type' => 'boolean'],

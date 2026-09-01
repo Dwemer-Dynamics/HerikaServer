@@ -65,12 +65,13 @@ $GLOBALS["TASKS"]["bookreader"]["fn"] = function () {
     $commenter = $defaultNarratorName; // NPC that comments on the narrator's reading
     $animationsEnabled = true;
     $linesPerBatch = max(1, intval($GLOBALS['BOOK_READ_LINES_PER_BATCH'] ?? 8));
+    $bookReadingVoice = filter_var($GLOBALS['BOOK_READING_VOICE'] ?? true, FILTER_VALIDATE_BOOLEAN);
 
     require_once $enginePath . 'lib/core/book_read.class.php';
 
     // ─── Main entry point ─────────────────────────────────────────────────────────
 
-    $reader = new BookReader($db, $last_ts, $last_gamets, $defaultNarratorName, $defaultPlayerName, $commenter, $animationsEnabled, $linesPerBatch);
+    $reader = new BookReader($db, $last_ts, $last_gamets, $defaultNarratorName, $defaultPlayerName, $commenter, $animationsEnabled, $linesPerBatch, $bookReadingVoice);
     $reader->run([]);
 }
 // ─── Example external caller usage (commented out) ────────────────────────────

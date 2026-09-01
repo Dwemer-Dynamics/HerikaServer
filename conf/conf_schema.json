@@ -52,6 +52,7 @@
   "TIME_AWARENESS": {"userlvl":"pro","type":"boolean","description":"Whether the NPC will be aware of how long it has been since you last talked to them, or if you are talking for the first time."},
   "BOOK_EVENT_FULL": {"userlvl":"pro","type":"boolean","description":"Send full contents of book instead of only the book title to the AI. This will consume more tokens, but the AI will accurately summarize any book or note!"},
   "BOOK_READ_LINES_PER_BATCH": {"userlvl":"pro","type":"integer","default":8,"description":"Number of book lines read before pausing so a character can comment. Minimum: 1. Default: 8.","scope":"global"},
+  "BOOK_READING_VOICE": {"userlvl":"pro","type":"boolean","default":true,"description":"Apply the audiobook-style audio filter while reading books. Turn off to use the character's normal voice. Default: On.","scope":"global"},
   "BOOK_EVENT_ALWAYS_NARRATOR": {"userlvl":"basic","type":"boolean","description":"The Narrator will be the only one to summarize books.","scope":"global"},
   "NARRATOR_TALKS": {"userlvl":"basic","type":"boolean","description":"Enable the Narrator.","scope":"global"},
   "NARRATOR_WELCOME": {"userlvl":"basic","type":"boolean","description":"The Narrator will give you a quick recap of what happened previously after you have loaded a save game. Has a 10 minute IRL cooldown so its not annoying.","scope":"global"},
