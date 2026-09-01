@@ -45,19 +45,19 @@ body.hub-page .config-navigation {
     box-shadow: none;
 }
 
-/* Groups share one desktop row and buttons wrap inside them. A fixed
-   flex-basis is what keeps the three groups together: flex line breaking uses
-   the basis, not the grown width, so an `auto` basis (the max-content width of
-   every button in the group) would push each group onto a row of its own. */
+/* Desktop groups size from their own labels and buttons, then shrink and wrap
+   their buttons together if the row is tighter. They never grow merely to
+   absorb unused space, so any remainder stays at the right edge. */
 .config-navigation .tab-groups {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
     gap: 5px;
-    align-items: stretch;
+    align-items: flex-start;
 }
 
 .config-navigation .tab-group {
-    flex: 1 1 300px;
+    flex: 0 1 max-content;
     display: flex;
     flex-direction: column;
     gap: 3px;
@@ -70,13 +70,6 @@ body.hub-page .config-navigation {
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-/* Two-group hubs keep both groups on one row with a wider share each. */
-.config-navigation .tab-groups.two-groups .tab-group {
-    flex: 1 1 420px;
-}
-
-/* align-items: stretch above means the active group is exactly as tall as its
-   siblings, so selecting a short group never resizes the band. */
 .config-navigation .tab-group.active {
     border-color: rgba(242, 124, 17, 0.62);
     box-shadow: inset 0 0 0 1px rgba(242, 124, 17, 0.08);
@@ -102,6 +95,7 @@ body.hub-page .config-navigation {
     align-content: flex-start;
     gap: 4px;
     min-width: 0;
+    max-width: 100%;
     margin: 0;
     padding: 0;
     border: 0;
@@ -237,6 +231,10 @@ body .config-navigation .tab-button {
 /* Narrow viewports: one group per row, and buttons stretch to comfortable
    touch targets rather than shrinking. */
 @media (max-width: 900px) {
+    .config-navigation .tab-groups {
+        flex-wrap: wrap;
+    }
+
     .config-navigation .tab-groups .tab-group,
     .config-navigation .tab-groups.two-groups .tab-group {
         flex: 1 1 100%;
