@@ -2035,6 +2035,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message .= $saved
             ? "<p style='color:#4caf50;'><strong>Pronunciation saved.</strong></p>"
             : "<p style='color:#f44336;'><strong>Pronunciation could not be saved. Check the fields for blanks or duplicates, apply database updates, and try again.</strong></p>";
+    } elseif ($pronunciationAction === 'save_builtin_tts_pronunciation') {
+        // Built-ins expose only the spoken text and the enabled flag; the source
+        // term, scope, and built-in flag are never read from the request.
+        $savedBuiltin = $ttsPronunciationManager->saveBuiltin(
+            intval($_POST['id'] ?? 0),
+            strval($_POST['spoken_text'] ?? ''),
+            isset($_POST['enabled'])
+        );
+        $message .= $savedBuiltin
+            ? "<p style='color:#4caf50;'><strong>Built-in pronunciation saved.</strong></p>"
+            : "<p style='color:#f44336;'><strong>Built-in pronunciation could not be saved. Enter a spoken version, apply database updates, and try again.</strong></p>";
     } elseif ($pronunciationAction === 'toggle_tts_pronunciation') {
         $updated = $ttsPronunciationManager->setEnabled(
             intval($_POST['id'] ?? 0),
@@ -2044,10 +2055,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ? "<p style='color:#4caf50;'><strong>Pronunciation status updated.</strong></p>"
             : "<p style='color:#f44336;'><strong>Pronunciation status could not be updated.</strong></p>";
     } elseif ($pronunciationAction === 'delete_tts_pronunciation') {
-        $deleted = $ttsPronunciationManager->deleteCustom(intval($_POST['id'] ?? 0));
+        $deleted = $ttsPronunciationManager->deleteEntry(intval($_POST['id'] ?? 0));
         $message .= $deleted
-            ? "<p style='color:#4caf50;'><strong>Custom pronunciation deleted.</strong></p>"
-            : "<p style='color:#f44336;'><strong>Custom pronunciation could not be deleted.</strong></p>";
+            ? "<p style='color:#4caf50;'><strong>Pronunciation deleted.</strong></p>"
+            : "<p style='color:#f44336;'><strong>Pronunciation could not be deleted.</strong></p>";
     }
 
     if (($_POST['action'] ?? '') === 'save_tts_fallbacks') {

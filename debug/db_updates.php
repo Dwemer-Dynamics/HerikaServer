@@ -8184,6 +8184,35 @@ if ($checkVersion("core_tts_pronunciation") < 20260829004) {
     }
 }
 
+if ($checkVersion("core_tts_pronunciation") < 20260901001) {
+    Logger::debug("Applying core_tts_pronunciation 20260901001 - unhyphenate built-in spoken values");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+    if ($migrationOk) {
+        $migrationOk = chimUnhyphenateBuiltinTtsPronunciations();
+    }
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260901001);
+        Logger::info("Applied patch core_tts_pronunciation 20260901001");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260901001");
+    }
+}
+
+if ($checkVersion("core_tts_pronunciation") < 20260901002) {
+    Logger::debug("Applying core_tts_pronunciation 20260901002 - preserve deleted built-in pronunciations");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260901002);
+        Logger::info("Applied patch core_tts_pronunciation 20260901002");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260901002");
+    }
+}
+
 Logger::info(__FILE__." update file processed");
 
 //----------------------------------------------------

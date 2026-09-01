@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS public.core_tts_pronunciation (
     oghma_tags character varying(512) NOT NULL DEFAULT '',
     is_builtin boolean NOT NULL DEFAULT FALSE,
     enabled boolean NOT NULL DEFAULT TRUE,
+    deleted boolean NOT NULL DEFAULT FALSE,
     created_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT core_tts_pronunciation_source_not_blank CHECK (BTRIM(source_text) <> ''),
@@ -15,7 +16,8 @@ CREATE TABLE IF NOT EXISTS public.core_tts_pronunciation (
 
 ALTER TABLE public.core_tts_pronunciation
     ADD COLUMN IF NOT EXISTS npc_names character varying(512) NOT NULL DEFAULT '',
-    ADD COLUMN IF NOT EXISTS races character varying(512) NOT NULL DEFAULT '';
+    ADD COLUMN IF NOT EXISTS races character varying(512) NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS deleted boolean NOT NULL DEFAULT FALSE;
 
 DROP INDEX IF EXISTS public.core_tts_pronunciation_unique_entry;
 CREATE UNIQUE INDEX IF NOT EXISTS core_tts_pronunciation_unique_entry

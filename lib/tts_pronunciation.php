@@ -6,52 +6,52 @@ function chimDefaultTtsPronunciationEntries(): array
     return [
         ['source_text' => 'Jorrvaskr', 'spoken_text' => 'Yorvaskr'],
         ['source_text' => 'Ysgramor', 'spoken_text' => 'Eesgramor'],
-        ['source_text' => 'Aela', 'spoken_text' => 'Aye-ella'],
-        ['source_text' => 'Mjoll', 'spoken_text' => 'Mee-yoll'],
-        ['source_text' => 'Sovngarde', 'spoken_text' => 'Sovn-gard'],
+        ['source_text' => 'Aela', 'spoken_text' => 'Ayeella'],
+        ['source_text' => 'Mjoll', 'spoken_text' => 'Meeyoll'],
+        ['source_text' => 'Sovngarde', 'spoken_text' => 'Sovngard'],
         ['source_text' => "Thu'um", 'spoken_text' => 'Thoom'],
         ['source_text' => 'Jarl', 'spoken_text' => 'Yarl'],
-        ['source_text' => 'Brynjolf', 'spoken_text' => 'Brin-yolf'],
-        ['source_text' => 'Eorlund', 'spoken_text' => 'Yor-lund'],
-        ['source_text' => 'Hjaalmarch', 'spoken_text' => 'Yahl-march'],
-        ['source_text' => 'Njada', 'spoken_text' => 'Nyah-dah'],
-        ['source_text' => 'Skjor', 'spoken_text' => 'Skee-yor'],
-        ['source_text' => 'Arngeir', 'spoken_text' => 'Arn-geer'],
-        ['source_text' => 'Dovahkiin', 'spoken_text' => 'Doh-vah-keen'],
-        ['source_text' => 'Paarthurnax', 'spoken_text' => 'Par-thur-nax'],
-        ['source_text' => 'Odahviing', 'spoken_text' => 'Oh-dah-ving'],
-        ['source_text' => 'Alduin', 'spoken_text' => 'Al-doo-in'],
+        ['source_text' => 'Brynjolf', 'spoken_text' => 'Brinyolf'],
+        ['source_text' => 'Eorlund', 'spoken_text' => 'Yorlund'],
+        ['source_text' => 'Hjaalmarch', 'spoken_text' => 'Yahlmarch'],
+        ['source_text' => 'Njada', 'spoken_text' => 'Nyahdah'],
+        ['source_text' => 'Skjor', 'spoken_text' => 'Skeeyor'],
+        ['source_text' => 'Arngeir', 'spoken_text' => 'Arngeer'],
+        ['source_text' => 'Dovahkiin', 'spoken_text' => 'Dohvahkeen'],
+        ['source_text' => 'Paarthurnax', 'spoken_text' => 'Parthurnax'],
+        ['source_text' => 'Odahviing', 'spoken_text' => 'Ohdahving'],
+        ['source_text' => 'Alduin', 'spoken_text' => 'Aldooin'],
         ['source_text' => 'Fus Ro Dah', 'spoken_text' => 'Foos Roh Dah'],
-        ['source_text' => 'Falkreath', 'spoken_text' => 'Fall-kreeth'],
-        ['source_text' => 'Ivarstead', 'spoken_text' => 'Eye-var-stead'],
-        ['source_text' => 'Kynesgrove', 'spoken_text' => 'Kines-grove'],
-        ['source_text' => 'Rorikstead', 'spoken_text' => 'Roar-ik-stead'],
-        ['source_text' => 'Saarthal', 'spoken_text' => 'Sar-thall'],
-        ['source_text' => 'Solstheim', 'spoken_text' => 'Soul-stime'],
+        ['source_text' => 'Falkreath', 'spoken_text' => 'Fallkreeth'],
+        ['source_text' => 'Ivarstead', 'spoken_text' => 'Eyevarstead'],
+        ['source_text' => 'Kynesgrove', 'spoken_text' => 'Kinesgrove'],
+        ['source_text' => 'Rorikstead', 'spoken_text' => 'Roarikstead'],
+        ['source_text' => 'Saarthal', 'spoken_text' => 'Sarthall'],
+        ['source_text' => 'Solstheim', 'spoken_text' => 'Soulstime'],
         ['source_text' => 'Skaal', 'spoken_text' => 'Skahl'],
-        ['source_text' => 'Miraak', 'spoken_text' => 'Meer-ack'],
-        ['source_text' => 'Stalhrim', 'spoken_text' => 'Stahl-reem'],
-        ['source_text' => 'Riekling', 'spoken_text' => 'Ree-kling'],
-        ['source_text' => 'Dwemer', 'spoken_text' => 'Dweh-mer'],
-        ['source_text' => 'Draugr', 'spoken_text' => 'Draw-ger'],
-        ['source_text' => 'Khajiit', 'spoken_text' => 'Kah-jeet'],
-        ['source_text' => 'Daedra', 'spoken_text' => 'Day-dra'],
-        ['source_text' => 'Daedric', 'spoken_text' => 'Day-drick'],
-        ['source_text' => 'Aedra', 'spoken_text' => 'Ay-dra'],
-        ['source_text' => 'Cyrodiil', 'spoken_text' => 'Sir-oh-dill'],
-        ['source_text' => 'Akatosh', 'spoken_text' => 'Ah-kah-tosh'],
-        ['source_text' => 'Kynareth', 'spoken_text' => 'Kin-ah-reth'],
-        ['source_text' => 'Sheogorath', 'spoken_text' => 'Shee-oh-gor-ath'],
-        ['source_text' => 'Mehrunes Dagon', 'spoken_text' => 'Meh-roons Day-gon'],
-        ['source_text' => 'Hermaeus Mora', 'spoken_text' => 'Her-may-us More-ah'],
-        ['source_text' => 'Molag Bal', 'spoken_text' => 'Moe-lag Ball'],
-        ['source_text' => 'Peryite', 'spoken_text' => 'Per-eye-ite'],
-        ['source_text' => 'Vaermina', 'spoken_text' => 'Vair-mee-nah'],
-        ['source_text' => 'Hircine', 'spoken_text' => 'Her-seen'],
-        ['source_text' => 'Psijic', 'spoken_text' => 'Sigh-jick'],
-        ['source_text' => 'Volkihar', 'spoken_text' => 'Vol-kee-har'],
-        ['source_text' => 'Auriel', 'spoken_text' => 'Aw-ree-el'],
-        ['source_text' => 'Gelebor', 'spoken_text' => 'Geh-leh-bor'],
+        ['source_text' => 'Miraak', 'spoken_text' => 'Meerack'],
+        ['source_text' => 'Stalhrim', 'spoken_text' => 'Stahlreem'],
+        ['source_text' => 'Riekling', 'spoken_text' => 'Reekling'],
+        ['source_text' => 'Dwemer', 'spoken_text' => 'Dwehmer'],
+        ['source_text' => 'Draugr', 'spoken_text' => 'Drawger'],
+        ['source_text' => 'Khajiit', 'spoken_text' => 'Kahjeet'],
+        ['source_text' => 'Daedra', 'spoken_text' => 'Daydra'],
+        ['source_text' => 'Daedric', 'spoken_text' => 'Daydrick'],
+        ['source_text' => 'Aedra', 'spoken_text' => 'Aydra'],
+        ['source_text' => 'Cyrodiil', 'spoken_text' => 'Sirohdill'],
+        ['source_text' => 'Akatosh', 'spoken_text' => 'Ahkahtosh'],
+        ['source_text' => 'Kynareth', 'spoken_text' => 'Kinahreth'],
+        ['source_text' => 'Sheogorath', 'spoken_text' => 'Sheeohgorath'],
+        ['source_text' => 'Mehrunes Dagon', 'spoken_text' => 'Mehroons Daygon'],
+        ['source_text' => 'Hermaeus Mora', 'spoken_text' => 'Hermayus Moreah'],
+        ['source_text' => 'Molag Bal', 'spoken_text' => 'Moelag Ball'],
+        ['source_text' => 'Peryite', 'spoken_text' => 'Pereyeite'],
+        ['source_text' => 'Vaermina', 'spoken_text' => 'Vairmeenah'],
+        ['source_text' => 'Hircine', 'spoken_text' => 'Herseen'],
+        ['source_text' => 'Psijic', 'spoken_text' => 'Sighjick'],
+        ['source_text' => 'Volkihar', 'spoken_text' => 'Volkeehar'],
+        ['source_text' => 'Auriel', 'spoken_text' => 'Awreeel'],
+        ['source_text' => 'Gelebor', 'spoken_text' => 'Gehlehbor'],
     ];
 }
 
@@ -83,6 +83,21 @@ function chimEnsureTtsPronunciationDictionary(): bool
     }
 
     return true;
+}
+
+// Strip hyphens from shipped spoken values so built-ins read as whole words.
+// Custom rows are untouched, and a second run matches nothing.
+function chimUnhyphenateBuiltinTtsPronunciations(): bool
+{
+    if (!isset($GLOBALS['db']) || !$GLOBALS['db']) {
+        return false;
+    }
+
+    return $GLOBALS['db']->execQuery(
+        "UPDATE public.core_tts_pronunciation
+         SET spoken_text = REPLACE(spoken_text, '-', ''), updated_at = CURRENT_TIMESTAMP
+         WHERE is_builtin = TRUE AND spoken_text LIKE '%-%'"
+    ) !== false;
 }
 
 final class TTSPronunciationDictionary
@@ -117,14 +132,16 @@ final class TTSPronunciationDictionary
                     'oghma_tags' => '',
                     'is_builtin' => true,
                     'enabled' => true,
+                    'deleted' => false,
                 ];
             }, chimDefaultTtsPronunciationEntries());
         }
 
         $rows = $GLOBALS['db']->fetchAll(
             'SELECT id, source_text, spoken_text, npc_names, races, oghma_tags,
-                    is_builtin, enabled, created_at, updated_at
+                    is_builtin, enabled, deleted, created_at, updated_at
              FROM public.' . self::TABLE . '
+             WHERE deleted = FALSE
              ORDER BY is_builtin DESC, LOWER(source_text), id
              LIMIT 1024'
         );
@@ -205,6 +222,31 @@ final class TTSPronunciationDictionary
         ) !== false;
     }
 
+    // Built-ins keep their shipped source term and global scope so the default
+    // seeder never resurrects an old row; only the spoken text and the enabled
+    // flag can be changed, and the WHERE clause blocks custom rows entirely.
+    public function saveBuiltin(int $id, string $spoken, bool $enabled): bool
+    {
+        if ($id <= 0 || !$this->isAvailable()) {
+            return false;
+        }
+
+        $spoken = trim($spoken);
+        if ($spoken === '' || strlen($spoken) > 240) {
+            return false;
+        }
+
+        $spokenValue = $GLOBALS['db']->escapeLiteral($spoken);
+        $enabledValue = $enabled ? 'TRUE' : 'FALSE';
+
+        return $GLOBALS['db']->execQuery(
+            "UPDATE public." . self::TABLE . "
+             SET spoken_text = {$spokenValue}, enabled = {$enabledValue},
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = " . intval($id) . " AND is_builtin = TRUE AND deleted = FALSE"
+        ) !== false;
+    }
+
     public function setEnabled(int $id, bool $enabled): bool
     {
         if ($id <= 0 || !$this->isAvailable()) {
@@ -214,19 +256,39 @@ final class TTSPronunciationDictionary
         return $GLOBALS['db']->execQuery(
             'UPDATE public.' . self::TABLE . '
              SET enabled = ' . ($enabled ? 'TRUE' : 'FALSE') . ', updated_at = CURRENT_TIMESTAMP
-             WHERE id = ' . intval($id)
+             WHERE id = ' . intval($id) . ' AND deleted = FALSE'
         ) !== false;
     }
 
-    public function deleteCustom(int $id): bool
+    // Custom entries are removed outright. Built-ins retain a hidden tombstone
+    // so the default seeder cannot recreate a pronunciation the user deleted.
+    public function deleteEntry(int $id): bool
     {
         if ($id <= 0 || !$this->isAvailable()) {
             return false;
         }
 
+        $row = $GLOBALS['db']->fetchOne(
+            'SELECT is_builtin
+             FROM public.' . self::TABLE . '
+             WHERE id = ' . intval($id) . ' AND deleted = FALSE
+             LIMIT 1'
+        );
+        if (!is_array($row)) {
+            return false;
+        }
+
+        if (chimTtsPronunciationBoolean($row['is_builtin'] ?? false)) {
+            return $GLOBALS['db']->execQuery(
+                'UPDATE public.' . self::TABLE . '
+                 SET deleted = TRUE, enabled = FALSE, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ' . intval($id) . ' AND is_builtin = TRUE AND deleted = FALSE'
+            ) !== false;
+        }
+
         return $GLOBALS['db']->execQuery(
             'DELETE FROM public.' . self::TABLE . '
-             WHERE id = ' . intval($id) . ' AND is_builtin = FALSE'
+             WHERE id = ' . intval($id) . ' AND is_builtin = FALSE AND deleted = FALSE'
         ) !== false;
     }
 }
