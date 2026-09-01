@@ -4,7 +4,6 @@ define('BOOK_READ_STATE_KEY', 'book_reading_state');
 define('BOOK_READ_CHUNK_SIZE', 512);       // characters per LLM formatting chunk
 define('BOOK_READ_QUEUE_DEPTH', 4);        // lines kept in-flight in the ScriptQueue
 define('BOOK_READ_MIN_BUFFERED_LINES', 4); // don't start TTS enqueue until this many lines are formatted
-define('BOOK_READ_LINES_PER_BATCH', 8);    // pause after this many lines have been queued in total
 if (!defined('MAXIMUM_SENTENCE_SIZE')) {
     define('MAXIMUM_SENTENCE_SIZE', 125);
 }
@@ -157,8 +156,9 @@ class BookReader
     private $playerName;
     private $commenter;
     private $animationsEnabled;
+    private $linesPerBatch;
 
-    public function __construct($db, $lastTs, $lastGamets, $narratorName, $playerName, $commenter, $animationsEnabled)
+    public function __construct($db, $lastTs, $lastGamets, $narratorName, $playerName, $commenter, $animationsEnabled, $linesPerBatch = 8)
     {
         $this->db = $db;
         $this->lastTs = $lastTs;
@@ -167,6 +167,7 @@ class BookReader
         $this->playerName = $playerName;
         $this->commenter = $commenter;
         $this->animationsEnabled = $animationsEnabled;
+        $this->linesPerBatch = max(1, intval($linesPerBatch));
     }
 
     /**
@@ -768,7 +769,13 @@ class BookReader
 
     private function setupNarratorProfile($narratorName)
     {
-        if ($narratorName == "The Narrator") {
+        $configuredNarratorName = function_exists('chimGetNarratorRoleplayName')
+            ? chimGetNarratorRoleplayName()
+            : Narrator::DEFAULT_ROLEPLAY_NAME;
+        $isNarrator = strcasecmp((string) $narratorName, Narrator::CANONICAL_NAME) === 0
+            || strcasecmp((string) $narratorName, $configuredNarratorName) === 0;
+
+        if ($isNarrator) {
             $narrator = new Narrator();
             $narratorData = $narrator->getNarratorData();
             $narrator->loadIntoGlobals();
@@ -780,7 +787,7 @@ class BookReader
             $profile->setOldGlobals($currentProfileData);
             $narrator->loadCharacterIntoGlobals();
         } else {
-            error_log("[book_read] Using custom narrator '{$narratorName}' instead of the default 'The Narrator'.");
+            error_log("[book_read] Using custom narrator '{$narratorName}' instead of configured narrator '{$configuredNarratorName}'.");
             $npcMaster = new NpcMaster();
             $npcData = $npcMaster->getByName($narratorName);
 
@@ -1181,7 +1188,7 @@ class BookReader
             $state['animation_end_done'] = false; // Reset the end animation flag so it will be played when the book is finished.
 
             // Auto-pause after enqueuing the configured batch size so the caller can rest between batches.
-            if (($state['lines_queued_in_batch'] ?? 0) >= BOOK_READ_LINES_PER_BATCH) {
+            if (($state['lines_queued_in_batch'] ?? 0) >= $this->linesPerBatch) {
                 $state['status'] = 'paused';
                 $this->saveState($state);
 

@@ -7009,6 +7009,48 @@ if ($checkVersion("core_action") < 20260825001) {
     }
 }
 
+if ($checkVersion("core_action") < 20260901001) {
+    Logger::debug("Applying core_action 20260901001 - add equipment and book reading custom actions");
+
+    $migrationOk = $db->execQuery(<<<'SQL'
+INSERT INTO public.core_action_custom (
+    code_name, action_name, description, return_message,
+    available_to_npc, available_to_followers, available_to_narrator,
+    is_activated, parameters_json, metadata, game_function,
+    import_version, script_proxy_program
+) VALUES
+    (
+        'EquipGear',
+        'Equip_Gear',
+        'Equips one piece of gear or cloth.',
+        '#HERIKA_NAME# puts #ITEM#',
+        TRUE, TRUE, FALSE, TRUE,
+        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact baseID from <inventory> tag (e.g., 0x12345). Must match format exactly."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+        '{}'::jsonb,
+        TRUE, 0, '{}'::jsonb
+    ),
+    (
+        'ReadBook',
+        'Read_Book',
+        'Initiate request to read a book. Reads (or continue reading) a book aloud for #PLAYER_NAME#. Book contents will be provided in next turn.',
+        '#HERIKA_NAME# starts reading book.',
+        TRUE, TRUE, TRUE, TRUE,
+        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED:book title"},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+        '{}'::jsonb,
+        TRUE, 0, '{}'::jsonb
+    )
+ON CONFLICT (code_name) DO NOTHING
+SQL
+    ) !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20260901001);
+        Logger::info("Applied patch core_action 20260901001");
+    } else {
+        Logger::error("Failed to apply patch core_action 20260901001");
+    }
+}
+
 //----------------------------------------------------
 
 // Relationship Evaluation and Initialization Queues

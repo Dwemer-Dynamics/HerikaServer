@@ -3759,7 +3759,10 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     require_once $rootPath.'lib/core/book_read.class.php'; // or include the relevant helpers
                     error_log("[ACTION POSTFILTER ReadBook] Book found: '{$bookCandidate['title']}'");
                     if ($bookCandidate) {
-                        $result = bookReadStateHandleBookAction($bookCandidate, $GLOBALS["HERIKA_NAME"], $playerName);
+                        $readerName = function_exists('chimGetPromptCharacterName')
+                            ? chimGetPromptCharacterName()
+                            : ($GLOBALS["HERIKA_NAME"] ?? '');
+                        $result = bookReadStateHandleBookAction($bookCandidate, $readerName, $playerName);
                         // $result is one of: 'resumed', 'replaced', 'started', 'ignored'
                         unset($actionsCopy[$n]);
                     }

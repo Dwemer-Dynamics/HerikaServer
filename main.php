@@ -2451,9 +2451,12 @@ if ($currentHold) {
     $rumorsText = build_rumor_prompt_xml($rumors);
 }
 
-$bookReadingTask=bookReadIsNpcReading($GLOBALS["HERIKA_NAME"] ?? '');
+$bookReadingActorName = function_exists('chimGetPromptCharacterName')
+    ? chimGetPromptCharacterName()
+    : ($GLOBALS["HERIKA_NAME"] ?? '');
+$bookReadingTask=bookReadIsNpcReading($bookReadingActorName);
 if ($bookReadingTask) {
-    $bookReadingTaskText="\n<current_task>\n#{$GLOBALS["HERIKA_NAME"]} is reading book '{$bookReadingTask}'\n</current_task>";
+    $bookReadingTaskText="\n<current_task>\n#{$bookReadingActorName} is reading book '{$bookReadingTask}'\n</current_task>";
 } else {
     $bookReadingTaskText="";
 }

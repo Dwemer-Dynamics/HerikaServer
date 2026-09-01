@@ -52,6 +52,7 @@ $ALIVE_MESSAGE=false; //Leave as is - read only
 $TIME_AWARENESS=false; //Overwrites the prompt to the AI to make it more aware of the passage of time
 $MAX_WORDS_LIMIT=0; //Enforce a word limit for AI's responses. 0 = unlimited.
 $BOOK_EVENT_FULL=true; //Sends full contents of books to the AI
+$BOOK_READ_LINES_PER_BATCH=8; //Number of book lines read before pausing so a character can comment.
 $BOOK_EVENT_ALWAYS_NARRATOR=false; //Only The Narrator summarizes books.
 $NARRATOR_TALKS=true; //Enables the Narrator.
 $NARRATOR_WELCOME=false;
