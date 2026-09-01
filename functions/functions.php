@@ -3738,39 +3738,67 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 }
 
                 $playerName = trim(strval($GLOBALS["PLAYER_NAME"] ?? "Player"));
-                $targetName = trim(strval($payload["target"] ?? ""));
-                $bookName = trim(strval($payload["item"] ?? ""));
+                $bookIdentifier = trim(strval($payload["item"] ?? ""));
 
-                if ($bookName === '') {
+                if ($bookIdentifier === '') {
                     error_log("[ACTION POSTFILTER ReadBook] Missing book name");
                     unset($actionsCopy[$n]);
                     continue;
                 }
-                // Remove refid part:
-                // '0x0001B22B:Light Armor Forging'
-                $bookName = preg_replace('/^0x[0-9A-Fa-f]+:/', '', $bookName);
-                $bookName = preg_replace('/^[0-9A-Fa-f]+:/', '', $bookName);
 
-                $cnBookName=$GLOBALS["db"]->escape($bookName) ?? $bookName;
-                $bookCandidate = $GLOBALS["db"]->fetchOne("SELECT * FROM books ORDER BY similarity(title, '{$cnBookName}') DESC LIMIT 1");
+                $rootPath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
+                require_once $rootPath.'lib/core/book_read.class.php';
+
+                $parsedBook = bookReadParseBookIdentifier($bookIdentifier);
+                $bookName = trim(strval($parsedBook['title'] ?? ''));
+                $bookFormId = $parsedBook['form_id'] ?? null;
+                if ($bookName === '') {
+                    error_log("[ACTION POSTFILTER ReadBook] Missing book title after identifier parsing");
+                    unset($actionsCopy[$n]);
+                    continue;
+                }
+
+                $cnBookName = $GLOBALS["db"]->escape($bookName) ?? $bookName;
+                $bookCandidate = $GLOBALS["db"]->fetchOne(
+                    "SELECT * FROM books WHERE LOWER(title)=LOWER('{$cnBookName}') AND content IS NOT NULL AND BTRIM(content) <> '' ORDER BY rowid DESC LIMIT 1"
+                );
+                $readerName = function_exists('chimGetPromptCharacterName')
+                    ? chimGetPromptCharacterName()
+                    : ($GLOBALS["HERIKA_NAME"] ?? '');
 
                 if ($bookCandidate) {
-                    $rootPath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
-                    require_once $rootPath.'lib/core/book_read.class.php'; // or include the relevant helpers
                     error_log("[ACTION POSTFILTER ReadBook] Book found: '{$bookCandidate['title']}'");
-                    if ($bookCandidate) {
-                        $readerName = function_exists('chimGetPromptCharacterName')
-                            ? chimGetPromptCharacterName()
-                            : ($GLOBALS["HERIKA_NAME"] ?? '');
-                        $result = bookReadStateHandleBookAction($bookCandidate, $readerName, $playerName);
-                        // $result is one of: 'resumed', 'replaced', 'started', 'ignored'
-                        unset($actionsCopy[$n]);
+                    $result = bookReadStateHandleBookAction($bookCandidate, $readerName, $playerName);
+                    // $result is one of: 'resumed', 'replaced', 'started', 'ignored'
+                    unset($actionsCopy[$n]);
+                } else if ($bookFormId !== null) {
+                    try {
+                        $pendingState = bookReadStateRequestContent($bookName, $bookFormId, $readerName, $playerName);
+                        $GLOBALS["db"]->insert('responselog', [
+                            'localts' => time(),
+                            'sent' => 0,
+                            'actor' => 'rolemaster',
+                            'text' => '',
+                            'action' => "rolecommand|UploadBookContent@{$bookFormId}@{$pendingState['request_token']}",
+                            'tag' => '',
+                        ]);
+                        error_log("[ACTION POSTFILTER ReadBook] Requested CHIM upload for uncached book '{$bookName}' ({$bookFormId})");
+                    } catch (Throwable $error) {
+                        error_log("[ACTION POSTFILTER ReadBook] Could not request book content: " . $error->getMessage());
                     }
-
-                    
-
+                    unset($actionsCopy[$n]);
                 } else {
-                    error_log("[ACTION POSTFILTER ReadBook] Book not found: '{$bookName}'");
+                    $safeBookName = trim(preg_replace('/[@|\r\n]+/', ' ', $bookName));
+                    $GLOBALS["db"]->insert('responselog', [
+                        'localts' => time(),
+                        'sent' => 0,
+                        'actor' => 'rolemaster',
+                        'text' => '',
+                        'action' => "rolecommand|DebugNotification@Book content for {$safeBookName} is not cached. Use its exact BaseID:BookTitle from inventory or open the book once.",
+                        'tag' => '',
+                    ]);
+                    error_log("[ACTION POSTFILTER ReadBook] Uncached book has no FormID: '{$bookName}'");
+                    unset($actionsCopy[$n]);
                 }
             }
         }

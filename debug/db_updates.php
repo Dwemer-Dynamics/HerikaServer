@@ -7035,7 +7035,7 @@ INSERT INTO public.core_action_custom (
         'Initiate request to read a book. Reads (or continue reading) a book aloud for #PLAYER_NAME#. Book contents will be provided in next turn.',
         '#HERIKA_NAME# starts reading book.',
         TRUE, TRUE, TRUE, TRUE,
-        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED:book title"},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from <inventory> when available. A title alone works only when the book is already cached by the server."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
         '{}'::jsonb,
         TRUE, 0, '{}'::jsonb
     )

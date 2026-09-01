@@ -1,6 +1,7 @@
 <?php
 
 define('BOOK_READ_STATE_KEY', 'book_reading_state');
+define('BOOK_READ_PENDING_TIMEOUT_SECONDS', 90);
 define('BOOK_READ_CHUNK_SIZE', 512);       // characters per LLM formatting chunk
 define('BOOK_READ_QUEUE_DEPTH', 4);        // lines kept in-flight in the ScriptQueue
 define('BOOK_READ_MIN_BUFFERED_LINES', 4); // don't start TTS enqueue until this many lines are formatted
@@ -54,6 +55,50 @@ function bookReadNormalizeTitle($title)
 }
 
 /**
+ * Normalize a Skyrim runtime FormID for request correlation.
+ *
+ * @param string $formId
+ * @return string|null
+ */
+function bookReadNormalizeFormId($formId)
+{
+    $value = trim((string) $formId);
+    if (stripos($value, '0x') === 0) {
+        $value = substr($value, 2);
+    }
+
+    if ($value === '' || strlen($value) > 8 || !ctype_xdigit($value)) {
+        return null;
+    }
+
+    return sprintf('0x%08X', hexdec($value));
+}
+
+/**
+ * Split the BaseID:BookTitle identifier used by inventory prompt entries.
+ *
+ * @param string $identifier
+ * @return array{form_id: string|null, title: string}
+ */
+function bookReadParseBookIdentifier($identifier)
+{
+    $value = trim((string) $identifier);
+    if (strlen($value) >= 2 && $value[0] === '`' && substr($value, -1) === '`') {
+        $value = trim(substr($value, 1, -1));
+    }
+
+    if (preg_match('/^((?:0x[0-9A-Fa-f]{1,8})|(?:[0-9A-Fa-f]{8})):(.+)$/s', $value, $matches)) {
+        $formId = bookReadNormalizeFormId($matches[1]);
+        $title = trim($matches[2]);
+        if ($formId !== null && $title !== '') {
+            return ['form_id' => $formId, 'title' => $title];
+        }
+    }
+
+    return ['form_id' => null, 'title' => $value];
+}
+
+/**
  * Build a minimal fresh reading state for a book candidate.
  *
  * @param array $bookCandidate Book row with at least 'title' and 'rowid'.
@@ -71,6 +116,75 @@ function bookReadStateForBook(array $bookCandidate, $narratorName, $playerName, 
         'player' => $playerName,
         'commenter' => $commenter ?: $narratorName,
     ];
+}
+
+/**
+ * Persist a bounded request for CHIM to upload an uncached Skyrim book.
+ *
+ * @return array The saved waiting state, including its correlation token.
+ */
+function bookReadStateRequestContent($bookTitle, $formId, $narratorName, $playerName, $commenter = null)
+{
+    $normalizedFormId = bookReadNormalizeFormId($formId);
+    if ($normalizedFormId === null) {
+        throw new InvalidArgumentException('A valid book FormID is required to request content.');
+    }
+
+    $requestedAt = time();
+    $state = [
+        'title' => bookReadNormalizeTitle($bookTitle),
+        'rowid' => null,
+        'narrator' => $narratorName,
+        'player' => $playerName,
+        'commenter' => $commenter ?: $narratorName,
+        'status' => 'waiting_for_content',
+        'requested_form_id' => $normalizedFormId,
+        'request_token' => bin2hex(random_bytes(16)),
+        'requested_at' => $requestedAt,
+        'expires_at' => $requestedAt + BOOK_READ_PENDING_TIMEOUT_SECONDS,
+    ];
+
+    bookReadStateSet($state);
+    return $state;
+}
+
+/**
+ * Complete a waiting request only when the upload matches server-owned state.
+ */
+function bookReadStateAcceptUploadedContent(array $bookCandidate, $formId, $requestToken)
+{
+    $state = bookReadStateGet();
+    if (($state['status'] ?? '') !== 'waiting_for_content') {
+        return false;
+    }
+
+    if (intval($state['expires_at'] ?? 0) < time()) {
+        return false;
+    }
+
+    $normalizedFormId = bookReadNormalizeFormId($formId);
+    $expectedFormId = bookReadNormalizeFormId($state['requested_form_id'] ?? '');
+    if ($normalizedFormId === null || $expectedFormId === null || $normalizedFormId !== $expectedFormId) {
+        return false;
+    }
+
+    $expectedToken = strval($state['request_token'] ?? '');
+    $providedToken = trim(strval($requestToken));
+    if ($expectedToken === '' || $providedToken === '' || !hash_equals($expectedToken, $providedToken)) {
+        return false;
+    }
+
+    if (bookReadNormalizeTitle($bookCandidate['title'] ?? '') !== bookReadNormalizeTitle($state['title'] ?? '')) {
+        return false;
+    }
+
+    bookReadStateSet(bookReadStateForBook(
+        $bookCandidate,
+        $state['narrator'] ?? '',
+        $state['player'] ?? '',
+        $state['commenter'] ?? null
+    ));
+    return true;
 }
 
 /**
@@ -95,7 +209,7 @@ function bookReadStateHandleBookAction(array $bookCandidate, $narratorName, $pla
             return 'resumed';
         }
 
-        if ($state['status'] === 'done' || $state['status'] === 'paused') {
+        if ($state['status'] === 'done' || $state['status'] === 'paused' || $state['status'] === 'waiting_for_content') {
             bookReadStateSet(bookReadStateForBook($bookCandidate, $narratorName, $playerName, $commenter));
             error_log("[book_read] Replaced reading session with new book '{$bookCandidate['title']}'");
             return 'replaced';
@@ -213,6 +327,9 @@ class BookReader
 
         // ── 3. Load persisted state and decide if we are resuming ─────────────
         $state = $this->loadState();
+        if (($state['status'] ?? '') === 'waiting_for_content') {
+            $this->handleWaitingForContent($state);
+        }
         $resuming = (
             isset($state["status"])
             && isset($state['title'])
@@ -267,7 +384,8 @@ class BookReader
 
         // ── 8. New book: create a session and exit (no LLM call on first run) ─
         if (!$resuming) {
-            $this->initializeSession($requestedTitle);
+            $this->initializeSession($requestedTitle, $state['rowid'] ?? null);
+            return;
         }
 
         // ── 9. Enqueue the next batch of lines if the queue has room ──────────
@@ -315,8 +433,14 @@ class BookReader
 
     // ─── Book lookup ───────────────────────────────────────────────────────────
 
-    private function findBook($title)
+    private function findBook($title, $rowId = null)
     {
+        if (intval($rowId) > 0) {
+            return $this->db->fetchOne(
+                "SELECT * FROM public.books WHERE rowid=" . intval($rowId) . " AND content IS NOT NULL LIMIT 1"
+            );
+        }
+
         $escapedTitle = $this->db->escape($title);
         return $this->db->fetchOne(
             "SELECT * FROM public.books WHERE title ILIKE '%{$escapedTitle}%' and content is not null ORDER BY rowid DESC LIMIT 1"
@@ -1038,6 +1162,31 @@ class BookReader
         exit(0);
     }
 
+    private function handleWaitingForContent(&$state)
+    {
+        $expiresAt = intval($state['expires_at'] ?? 0);
+        if ($expiresAt > time()) {
+            error_log("[book_read] Waiting for CHIM to upload '{$state['title']}'.");
+            exit(0);
+        }
+
+        $state['status'] = 'done';
+        $this->saveState($state);
+
+        $safeTitle = trim(preg_replace('/[@|\r\n]+/', ' ', strval($state['title'] ?? 'book')));
+        $this->db->insert('responselog', [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => 'rolemaster',
+            'text' => '',
+            'action' => "rolecommand|DebugNotification@Could not retrieve book content for {$safeTitle}. Open the book once and try again.",
+            'tag' => '',
+        ]);
+
+        error_log("[book_read] Timed out waiting for CHIM to upload '{$safeTitle}'.");
+        exit(0);
+    }
+
     private function handleDone(&$state)
     {
         if (!$state['animation_end_done']) {
@@ -1130,9 +1279,9 @@ class BookReader
         $this->saveState($state);
     }
 
-    private function initializeSession($requestedTitle)
+    private function initializeSession($requestedTitle, $requestedRowId = null)
     {
-        $book = $this->findBook($requestedTitle);
+        $book = $this->findBook($requestedTitle, $requestedRowId);
         if (!$book) {
             fwrite(STDERR, "Book not found: {$requestedTitle}\n");
             exit(1);
