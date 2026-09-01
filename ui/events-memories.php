@@ -441,6 +441,269 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
     }
 </style>
 <link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/hub-navigation.css?v=<?php echo filemtime(__DIR__ . DIRECTORY_SEPARATOR . 'css' . DIRECTORY_SEPARATOR . 'hub-navigation.css'); ?>">
+<style>
+    /*
+     * Compact Memories workspace.
+     *
+     * The roleplay navigation is compacted by the shared hub-navigation.css,
+     * so everything below is scoped to the memory tab (#memory-tab) and its
+     * overview band, leaving the other tabs on this page untouched. Loaded
+     * after hub-navigation.css so these overrides win on source order as well
+     * as specificity.
+     */
+
+    /* --- Memory tab fills the remaining viewport -------------------------- */
+    #memory-tab .table-container {
+        box-sizing: border-box;
+        /* main.css gives .table-container a 20px bottom margin, which would
+           sit as dead space between the last row and the footer. */
+        margin: 8px 0 0;
+        padding-top: 0;
+        overflow: auto;
+    }
+
+    /* Only worth pinning the tab to the viewport where there is a viewport
+       worth filling. Narrow screens keep the ordinary document flow and the
+       shared max-height, so the page scrolls as it always has. */
+    @media (min-width: 901px) {
+        /* :has() keeps this flex chain tied to the memory tab, so the event,
+           quest and embedded tabs keep their normal document flow when they
+           are active. Browsers without :has() simply keep the old layout. */
+
+        /* body carries min-height:100vh on top of a 64px top padding, which
+           would leave the page scrollable by the height of the navbar even
+           once the tab itself fits. */
+        body.hub-page:has(#memory-tab.active) {
+            min-height: 0;
+        }
+
+        body.hub-page:has(#memory-tab.active) > .container-fluid {
+            display: flex;
+            flex-direction: column;
+            /* Viewport minus the fixed navbar and the 20px fixed footer. */
+            height: calc(100vh - var(--hub-navbar-offset, 64px) - 24px);
+            min-height: 0;
+        }
+
+        body.hub-page:has(#memory-tab.active) > .container-fluid > .tab-container {
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        #memory-tab.active {
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        /* The table absorbs whatever the overview band leaves and scrolls
+           internally instead of pushing rows past the bottom of the viewport. */
+        #memory-tab .table-container {
+            /* Basis 0 rather than auto: with `auto` the flex base size is the
+               full height of every row, so the shrink pass leaves the container
+               short of the space actually available. */
+            flex: 1 1 0;
+            min-height: 160px;
+            max-height: none !important;
+        }
+    }
+
+    #memory-tab .table-container thead th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #232323;
+    }
+
+    /* --- Dense memory overview band --------------------------------------- */
+    /* Intro, configuration statuses, settings link, TXT2VEC warning and the
+       sync/delete actions, previously four tall stacked blocks. */
+    .memory-overview {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin: 8px 0 0;
+        padding: 8px 12px;
+        background: #1f1f1f;
+        border: 1px solid #3a3a3a;
+        border-left: 4px solid rgb(242, 124, 17);
+        border-radius: 6px;
+        font-size: 0.86em;
+    }
+
+    /* Heading and description sit beside the actions rather than above them,
+       which costs no extra height: the two buttons are shorter than the two
+       lines of description they sit next to. */
+    .memory-overview-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 6px 16px;
+    }
+
+    .memory-overview-main {
+        flex: 1 1 340px;
+        min-width: 0;
+    }
+
+    /* Statuses and the settings link share one strip below. */
+    .memory-overview-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .memory-overview-title {
+        margin: 0 0 2px;
+        color: rgb(242, 124, 17);
+        font-size: 1.1em;
+        word-spacing: 5px;
+    }
+
+    .memory-overview-desc {
+        margin: 0;
+        color: #f8f9fa;
+        line-height: 1.4;
+    }
+
+    .memory-overview-term {
+        color: rgb(242, 124, 17);
+        font-weight: bold;
+    }
+
+    .memory-status {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 7px;
+        max-width: 100%;
+        padding: 4px 9px;
+        background: #2a2a2a;
+        border: 1px solid #3a3a3a;
+        border-radius: 5px;
+    }
+
+    .memory-status-label {
+        color: rgb(242, 124, 17);
+        font-weight: bold;
+        white-space: nowrap;
+    }
+
+    .memory-status-url {
+        color: #c9c9c9;
+        overflow-wrap: anywhere;
+    }
+
+    /* Sized to sit in the status row it configures rather than beside the
+       sync/delete actions, which keeps the description column wide. */
+    .memory-status-link {
+        flex: 0 0 auto;
+        margin: 0;
+        padding: 5px 11px;
+        font-size: 0.95em;
+        white-space: nowrap;
+    }
+
+    /* The word carries the meaning, so colour is reinforcement only. */
+    .memory-status-pill {
+        padding: 2px 9px;
+        border: 1px solid;
+        border-radius: 999px;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .memory-status-pill.is-on {
+        color: #7ee2a0;
+        background: rgba(76, 175, 80, 0.14);
+        border-color: rgba(76, 175, 80, 0.5);
+    }
+
+    .memory-status-pill.is-off {
+        color: #ff9189;
+        background: rgba(244, 67, 54, 0.14);
+        border-color: rgba(244, 67, 54, 0.55);
+    }
+
+    .memory-status-warning {
+        min-width: 0;
+        margin: 0;
+        padding: 4px 9px;
+        background: #2a2a2a;
+        border: 1px solid #3a3a3a;
+        border-left: 3px solid rgb(242, 124, 17);
+        border-radius: 5px;
+        color: #f8f9fa;
+        line-height: 1.35;
+    }
+
+    .memory-status-warning strong {
+        color: rgb(242, 124, 17);
+    }
+
+    .memory-actions {
+        flex: 0 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-left: auto;
+    }
+
+    .memory-actions .btn-base {
+        margin: 0;
+        padding: 7px 13px;
+        font-size: 14px;
+        font-weight: bold;
+    }
+
+    /* .btn-base clears the default outline, so restore a visible focus ring. */
+    #memory-tab .btn-base:focus-visible {
+        outline: 2px solid rgb(242, 124, 17);
+        outline-offset: 2px;
+    }
+
+    .memory-notice {
+        margin: 8px 0 0;
+        padding: 8px 12px;
+        border-radius: 5px;
+        color: #fff;
+        font-size: 0.88em;
+    }
+
+    .memory-notice.is-success {
+        background: #28a745;
+    }
+
+    .memory-notice.is-deleted {
+        background: #dc3545;
+    }
+
+    @media (max-width: 768px) {
+        .memory-actions {
+            width: 100%;
+            margin-left: 0;
+        }
+
+        .memory-actions .btn-base {
+            flex: 1 1 auto;
+            width: 100%;
+            text-align: center;
+        }
+
+        /* Grows to a full-width touch target alongside the stacked actions
+           instead of staying a 30px-tall inline chip. */
+        .memory-status-link {
+            flex: 1 1 100%;
+            padding: 9px 12px;
+            text-align: center;
+        }
+    }
+</style>
 <?php
 
 include(__DIR__.DIRECTORY_SEPARATOR."tmpl/navbar.php");
@@ -1693,10 +1956,10 @@ function getTimeColor($time) {
             <?php
             // Show success/delete messages
             if (isset($_GET['updated'])) {
-                echo "<div style='background: #28a745; color: white; padding: 10px; border-radius: 5px; margin: 10px 0;'>Memory summary updated successfully!</div>";
+                echo "<div class='memory-notice is-success'>Memory summary updated successfully!</div>";
             }
             if (isset($_GET['deleted'])) {
-                echo "<div style='background: #dc3545; color: white; padding: 10px; border-radius: 5px; margin: 10px 0;'>Memory summary deleted successfully!</div>";
+                echo "<div class='memory-notice is-deleted'>Memory summary deleted successfully!</div>";
             }
 
             // Display Memory Configuration Status
@@ -1707,8 +1970,8 @@ function getTimeColor($time) {
 
             $statusIcon = function ($enabled) {
                 return $enabled
-                    ? "<span style='color: #4caf50;'>Enabled</span>"
-                    : "<span style='color: #f44336;'>Disabled</span>";
+                    ? "<span class='memory-status-pill is-on'>Enabled</span>"
+                    : "<span class='memory-status-pill is-off'>Disabled</span>";
             };
 
             $results = $db->fetchAll(
@@ -1718,45 +1981,38 @@ function getTimeColor($time) {
                  LIMIT 150"
             );
             ?>
-            <div style="background: #2a2a2a; border-left: 4px solid rgb(242, 124, 17); padding: 12px 15px; border-radius: 5px; margin: 15px 0; font-size: 0.9em;">
-                <span style="color: rgb(242, 124, 17); font-weight: bold;">🧠 Memories:</span>
-                <span style="color: #f8f9fa;">Complete log of memory summaries with scope, participants, and period coverage. Use this to verify memory continuity and long-term context quality.</span>
-            </div>
+            <section class="memory-overview" aria-labelledby="memory-overview-title">
+                <div class="memory-overview-head">
+                    <div class="memory-overview-main">
+                        <h3 class="memory-overview-title" id="memory-overview-title">Memory System Configuration</h3>
+                        <p class="memory-overview-desc"><span class="memory-overview-term">🧠 Memories:</span> Complete log of memory summaries with scope, participants, and period coverage. Use this to verify memory continuity and long-term context quality.</p>
+                    </div>
 
-            <div style="background: #1a1a1a; border: 1px solid #3a3a3a; border-radius: 8px; padding: 20px; margin: 15px 0;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; gap: 10px; flex-wrap: wrap;">
-                    <h3 style="margin: 0; color: rgb(242, 124, 17); word-spacing: 5px;">Memory System Configuration</h3>
-                    <a href="<?php echo $webRoot; ?>/ui/core/config_hub.php?tab=globals" target="_blank" class="btn-base btn-primary" style="font-size: 13px; padding: 6px 12px;">Configure Settings</a>
+                    <div class="memory-actions">
+                        <button type="button" onclick="syncMemoriesConfirm()" class="btn-base action-button add-new">Sync Memory Summaries Now</button>
+                        <button type="button" onclick="deleteAllMemoriesConfirm()" class="btn-base btn-danger" style="background-color: #dc2626;">Delete All Memory Summaries</button>
+                    </div>
                 </div>
 
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
-                    <div style="background: #2a2a2a; padding: 15px; border-radius: 5px; border: 1px solid #3a3a3a;">
-                        <div style="font-weight: bold; margin-bottom: 8px; color: rgb(242, 124, 17); font-size: 14px;">Memory System</div>
-                        <div style="font-size: 14px;"><?php echo $statusIcon($memoryEnabled); ?></div>
+                <div class="memory-overview-bar">
+                    <div class="memory-status">
+                        <span class="memory-status-label">Memory System</span>
+                        <?php echo $statusIcon($memoryEnabled); ?>
                     </div>
 
-                    <div style="background: #2a2a2a; padding: 15px; border-radius: 5px; border: 1px solid #3a3a3a;">
-                        <div style="font-weight: bold; margin-bottom: 8px; color: rgb(242, 124, 17); font-size: 14px;">TXT2VEC (Embeddings)</div>
-                        <div style="font-size: 14px;"><?php echo $statusIcon($useText2Vec); ?></div>
-                        <div style="font-size: 12px; color: #aaa; margin-top: 4px;">URL: <?php echo htmlspecialchars($txtaiUrl); ?></div>
+                    <div class="memory-status">
+                        <span class="memory-status-label">TXT2VEC (Embeddings)</span>
+                        <?php echo $statusIcon($useText2Vec); ?>
+                        <span class="memory-status-url">URL: <?php echo htmlspecialchars($txtaiUrl); ?></span>
                     </div>
 
+                    <a href="<?php echo $webRoot; ?>/ui/core/config_hub.php?tab=globals" target="_blank" class="btn-base btn-primary memory-status-link">Configure Settings</a>
                 </div>
 
                 <?php if (!$useText2Vec): ?>
-                    <div style="background: #2a2a2a; border-left: 4px solid rgb(242, 124, 17); padding: 12px; margin-top: 15px; border-radius: 4px;">
-                        <strong style="color: rgb(242, 124, 17);">Warning:</strong>
-                        <span style="color: #f8f9fa;">TXT2VEC is disabled. Memory embeddings and vector search features are unavailable.</span>
-                    </div>
+                    <p class="memory-status-warning"><strong>Warning:</strong> TXT2VEC is disabled. Memory embeddings and vector search features are unavailable.</p>
                 <?php endif; ?>
-            </div>
-
-            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 15px 0; flex-wrap: wrap;">
-                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                    <button type="button" onclick="syncMemoriesConfirm()" class="btn-base action-button add-new" style="font-weight: bold;">Sync Memory Summaries Now</button>
-                </div>
-                <button type="button" onclick="deleteAllMemoriesConfirm()" class="btn-base btn-danger" style="background-color: #dc2626; font-weight: bold;">Delete All Memory Summaries</button>
-            </div>
+            </section>
 
             <style>
                 .edit-form {
