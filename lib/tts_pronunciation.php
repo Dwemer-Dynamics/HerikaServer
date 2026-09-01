@@ -132,14 +132,16 @@ final class TTSPronunciationDictionary
                     'oghma_tags' => '',
                     'is_builtin' => true,
                     'enabled' => true,
+                    'deleted' => false,
                 ];
             }, chimDefaultTtsPronunciationEntries());
         }
 
         $rows = $GLOBALS['db']->fetchAll(
             'SELECT id, source_text, spoken_text, npc_names, races, oghma_tags,
-                    is_builtin, enabled, created_at, updated_at
+                    is_builtin, enabled, deleted, created_at, updated_at
              FROM public.' . self::TABLE . '
+             WHERE deleted = FALSE
              ORDER BY is_builtin DESC, LOWER(source_text), id
              LIMIT 1024'
         );
@@ -241,7 +243,7 @@ final class TTSPronunciationDictionary
             "UPDATE public." . self::TABLE . "
              SET spoken_text = {$spokenValue}, enabled = {$enabledValue},
                  updated_at = CURRENT_TIMESTAMP
-             WHERE id = " . intval($id) . " AND is_builtin = TRUE"
+             WHERE id = " . intval($id) . " AND is_builtin = TRUE AND deleted = FALSE"
         ) !== false;
     }
 
@@ -254,19 +256,39 @@ final class TTSPronunciationDictionary
         return $GLOBALS['db']->execQuery(
             'UPDATE public.' . self::TABLE . '
              SET enabled = ' . ($enabled ? 'TRUE' : 'FALSE') . ', updated_at = CURRENT_TIMESTAMP
-             WHERE id = ' . intval($id)
+             WHERE id = ' . intval($id) . ' AND deleted = FALSE'
         ) !== false;
     }
 
-    public function deleteCustom(int $id): bool
+    // Custom entries are removed outright. Built-ins retain a hidden tombstone
+    // so the default seeder cannot recreate a pronunciation the user deleted.
+    public function deleteEntry(int $id): bool
     {
         if ($id <= 0 || !$this->isAvailable()) {
             return false;
         }
 
+        $row = $GLOBALS['db']->fetchOne(
+            'SELECT is_builtin
+             FROM public.' . self::TABLE . '
+             WHERE id = ' . intval($id) . ' AND deleted = FALSE
+             LIMIT 1'
+        );
+        if (!is_array($row)) {
+            return false;
+        }
+
+        if (chimTtsPronunciationBoolean($row['is_builtin'] ?? false)) {
+            return $GLOBALS['db']->execQuery(
+                'UPDATE public.' . self::TABLE . '
+                 SET deleted = TRUE, enabled = FALSE, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ' . intval($id) . ' AND is_builtin = TRUE AND deleted = FALSE'
+            ) !== false;
+        }
+
         return $GLOBALS['db']->execQuery(
             'DELETE FROM public.' . self::TABLE . '
-             WHERE id = ' . intval($id) . ' AND is_builtin = FALSE'
+             WHERE id = ' . intval($id) . ' AND is_builtin = FALSE AND deleted = FALSE'
         ) !== false;
     }
 }

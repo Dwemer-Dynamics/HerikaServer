@@ -2055,10 +2055,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ? "<p style='color:#4caf50;'><strong>Pronunciation status updated.</strong></p>"
             : "<p style='color:#f44336;'><strong>Pronunciation status could not be updated.</strong></p>";
     } elseif ($pronunciationAction === 'delete_tts_pronunciation') {
-        $deleted = $ttsPronunciationManager->deleteCustom(intval($_POST['id'] ?? 0));
+        $deleted = $ttsPronunciationManager->deleteEntry(intval($_POST['id'] ?? 0));
         $message .= $deleted
-            ? "<p style='color:#4caf50;'><strong>Custom pronunciation deleted.</strong></p>"
-            : "<p style='color:#f44336;'><strong>Custom pronunciation could not be deleted.</strong></p>";
+            ? "<p style='color:#4caf50;'><strong>Pronunciation deleted.</strong></p>"
+            : "<p style='color:#f44336;'><strong>Pronunciation could not be deleted.</strong></p>";
     }
 
     if (($_POST['action'] ?? '') === 'save_tts_fallbacks') {

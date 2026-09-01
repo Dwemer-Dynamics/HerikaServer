@@ -86,7 +86,7 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
             <li><strong>Blank field:</strong> that filter is not applied. With NPC names, races, and Oghma tags all blank the entry is global and every NPC uses it.</li>
             <li><strong>Commas inside one field</strong> are alternatives &mdash; <em>Nord, Dunmer</em> matches either race.</li>
             <li><strong>Two or more fields filled:</strong> the speaking NPC must match all of them, so <em>Nord</em> plus <em>companions</em> only fires for a Nord carrying that Oghma tag.</li>
-            <li><strong>Built-in entries</strong> cannot be deleted and keep their original term, but their spoken version can be edited and any of them can be disabled.</li>
+            <li><strong>Built-in entries</strong> keep their original term, but their spoken version can be edited and they can be disabled or deleted.</li>
         </ul>
 
         <div class="pron-preview<?php echo $pronPreviewReady ? '' : ' is-unavailable'; ?>" id="pron-preview"
@@ -345,7 +345,7 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
 
     <div class="content-section full-width-section">
         <h1>Built-in Pronunciations</h1>
-        <p>Shipped defaults for common lore names. Edit the spoken version to retune one, or disable it and replace it with a custom entry above. Original terms stay fixed, and built-ins cannot be deleted. The <strong>Applies To</strong> column shows who each default actually reaches.</p>
+        <p>Shipped defaults for common lore names. Edit the spoken version to retune one, or delete it when you do not want it. Deleted defaults stay removed after database updates. The <strong>Applies To</strong> column shows who each default actually reaches.</p>
 
         <div class="pron-grid">
             <div class="pron-cols pron-head" aria-hidden="true">
@@ -416,7 +416,16 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
                             <button type="submit" id="pron-save-<?php echo $pronKey; ?>"
                                     class="action-button upload-csv pron-btn"
                                     <?php echo $pronSavable ? '' : 'disabled title="Apply database updates before editing built-in entries."'; ?>>Save</button>
+                            <button type="submit" form="pron-delete-form-<?php echo $pronKey; ?>"
+                                    class="action-button delete pron-btn"
+                                    <?php echo $pronSavable ? '' : 'disabled title="Apply database updates before deleting built-in entries."'; ?>
+                                    onclick="return confirm('Delete the built-in pronunciation for <?php echo htmlspecialchars(str_replace(["\\", "'"], ["\\\\", "\\'"], $pronSource), ENT_QUOTES); ?>?');">Delete</button>
                         </div>
+                    </form>
+                    <form action="<?php echo $pronPostAction; ?>" method="post"
+                          id="pron-delete-form-<?php echo $pronKey; ?>" class="pron-hidden-form">
+                        <input type="hidden" name="action" value="delete_tts_pronunciation">
+                        <input type="hidden" name="id" value="<?php echo htmlspecialchars($pronId); ?>">
                     </form>
                 <?php endforeach; ?>
             <?php endif; ?>

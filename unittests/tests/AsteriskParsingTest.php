@@ -33,7 +33,8 @@ final class AsteriskParsingTest extends TestCase
             $GLOBALS['PATCH_OVERRIDE_TTS_LANGUAGE'],
             $GLOBALS['PATCH_OVERRIDE_TTS_OPTIONS'],
             $GLOBALS['CHIM_EXECUTION_MODE'],
-            $GLOBALS['TTS']
+            $GLOBALS['TTS'],
+            $GLOBALS['db']
         );
     }
 
@@ -651,5 +652,45 @@ final class AsteriskParsingTest extends TestCase
         $this->assertSame('Visit Companions Hall.', chimApplyTtsPronunciationDictionary(
             'Visit Jorrvaskr.', $rows, ['knowall'], 'Aela', 'NordRace'
         ));
+    }
+
+    public function testTtsPronunciationDeletionKeepsBuiltinTombstones(): void
+    {
+        $db = new class {
+            public bool $builtin = true;
+            public array $queries = [];
+
+            public function escapeLiteral($value): string
+            {
+                return "'" . str_replace("'", "''", strval($value)) . "'";
+            }
+
+            public function fetchOne(string $query): array
+            {
+                if (strpos($query, 'information_schema.tables') !== false) {
+                    return ['present' => 1];
+                }
+                return ['is_builtin' => $this->builtin];
+            }
+
+            public function execQuery(string $query): bool
+            {
+                $this->queries[] = $query;
+                return true;
+            }
+        };
+        $GLOBALS['db'] = $db;
+        $dictionary = new TTSPronunciationDictionary();
+
+        $this->assertTrue($dictionary->deleteEntry(42));
+        $builtinQuery = strval(end($db->queries));
+        $this->assertStringContainsString('SET deleted = TRUE, enabled = FALSE', $builtinQuery);
+        $this->assertStringContainsString('AND is_builtin = TRUE AND deleted = FALSE', $builtinQuery);
+
+        $db->builtin = false;
+        $this->assertTrue($dictionary->deleteEntry(43));
+        $customQuery = strval(end($db->queries));
+        $this->assertStringContainsString('DELETE FROM public.core_tts_pronunciation', $customQuery);
+        $this->assertStringContainsString('AND is_builtin = FALSE AND deleted = FALSE', $customQuery);
     }
 }
