@@ -18,6 +18,7 @@ require_once($path . "lib" . DIRECTORY_SEPARATOR . "data_functions.php");
 require_once($path . "lib" . DIRECTORY_SEPARATOR . "chat_helper_functions.php");
 require_once($path . "lib" . DIRECTORY_SEPARATOR . "auditing.php");
 require_once($path . "lib" . DIRECTORY_SEPARATOR . "logger.php");
+require_once($path . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "book_read.class.php");
 
 
 
@@ -96,6 +97,27 @@ if ($alreadyinDb) {
         )
     );
 
+}
+
+$readRequestId = trim(strval($_GET['read_request_id'] ?? ''));
+$bookFormId = trim(strval($_GET['book_form_id'] ?? ''));
+if ($readRequestId !== '' || $bookFormId !== '') {
+    $validRequestId = preg_match('/^[0-9A-Fa-f]{32}$/', $readRequestId) === 1;
+    $normalizedBookFormId = bookReadNormalizeFormId($bookFormId);
+
+    if (!$validRequestId || $normalizedBookFormId === null) {
+        Logger::warn("BOOK ignored invalid read request correlation data");
+    } else {
+        $bookCandidate = $db->fetchOne(
+            "SELECT * FROM books WHERE LOWER(title)=LOWER('{$titleEsc}') AND content IS NOT NULL AND BTRIM(content) <> '' ORDER BY rowid DESC LIMIT 1"
+        );
+
+        if ($bookCandidate && bookReadStateAcceptUploadedContent($bookCandidate, $normalizedBookFormId, $readRequestId)) {
+            Logger::info("BOOK completed pending reading request for title: " . $title);
+        } else {
+            Logger::warn("BOOK upload did not match an active reading request for title: " . $title);
+        }
+    }
 }
 
 

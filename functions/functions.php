@@ -3738,36 +3738,103 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 }
 
                 $playerName = trim(strval($GLOBALS["PLAYER_NAME"] ?? "Player"));
-                $targetName = trim(strval($payload["target"] ?? ""));
-                $bookName = trim(strval($payload["item"] ?? ""));
+                $bookIdentifier = trim(strval($payload["item"] ?? ""));
+                $bookLookupByQuery = false;
 
-                if ($bookName === '') {
-                    error_log("[ACTION POSTFILTER ReadBook] Missing book name");
+                $rootPath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
+                require_once $rootPath.'lib/core/book_read.class.php';
+
+                if ($bookIdentifier === '') {
+                    $activeReading = bookReadStateGet();
+                    if (
+                        !empty($activeReading['title'])
+                        && in_array($activeReading['status'] ?? '', ['reading', 'paused', 'unpaused', 'resume_requested'], true)
+                    ) {
+                        $bookIdentifier = trim(strval($activeReading['title']));
+                        error_log("[ACTION POSTFILTER ReadBook] Reused active book title '{$bookIdentifier}' for an empty action item");
+                    } else {
+                        $inputRows = $GLOBALS["db"]->fetchAll("
+                            SELECT data
+                            FROM public.eventlog
+                            WHERE type IN ('inputtext', 'narrator_inputtext')
+                              AND COALESCE(data, '') <> ''
+                            ORDER BY gamets DESC, ts DESC
+                            LIMIT 1
+                        ");
+                        $bookIdentifier = trim(strval($inputRows[0]['data'] ?? ''));
+                        $bookIdentifier = preg_replace('/^[^:]+:\s*/u', '', $bookIdentifier) ?? $bookIdentifier;
+                        $bookIdentifier = preg_replace('/\s*\(Talking to .*$/iu', '', $bookIdentifier) ?? $bookIdentifier;
+                        $bookIdentifier = trim($bookIdentifier);
+                        $bookLookupByQuery = $bookIdentifier !== '';
+                    }
+                }
+
+                if ($bookIdentifier === '') {
+                    error_log("[ACTION POSTFILTER ReadBook] Missing book name and request text");
                     unset($actionsCopy[$n]);
                     continue;
                 }
-                // Remove refid part:
-                // '0x0001B22B:Light Armor Forging'
-                $bookName = preg_replace('/^0x[0-9A-Fa-f]+:/', '', $bookName);
-                $bookName = preg_replace('/^[0-9A-Fa-f]+:/', '', $bookName);
 
-                $cnBookName=$GLOBALS["db"]->escape($bookName) ?? $bookName;
-                $bookCandidate = $GLOBALS["db"]->fetchOne("SELECT * FROM books ORDER BY similarity(title, '{$cnBookName}') DESC LIMIT 1");
+                $parsedBook = bookReadParseBookIdentifier($bookIdentifier);
+                $bookName = trim(strval($parsedBook['title'] ?? ''));
+                $bookFormId = $parsedBook['form_id'] ?? null;
+                if ($bookName === '') {
+                    error_log("[ACTION POSTFILTER ReadBook] Missing book title after identifier parsing");
+                    unset($actionsCopy[$n]);
+                    continue;
+                }
+
+                $cnBookName = $GLOBALS["db"]->escape($bookName) ?? $bookName;
+                $bookCandidate = $GLOBALS["db"]->fetchOne(
+                    "SELECT * FROM books WHERE LOWER(title)=LOWER('{$cnBookName}') AND content IS NOT NULL AND BTRIM(content) <> '' ORDER BY rowid DESC LIMIT 1"
+                );
+                $readerName = function_exists('chimGetPromptCharacterName')
+                    ? chimGetPromptCharacterName()
+                    : ($GLOBALS["HERIKA_NAME"] ?? '');
 
                 if ($bookCandidate) {
-                    $rootPath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
-                    require_once $rootPath.'lib/core/book_read.class.php'; // or include the relevant helpers
                     error_log("[ACTION POSTFILTER ReadBook] Book found: '{$bookCandidate['title']}'");
-                    if ($bookCandidate) {
-                        $result = bookReadStateHandleBookAction($bookCandidate, $GLOBALS["HERIKA_NAME"], $playerName);
-                        // $result is one of: 'resumed', 'replaced', 'started', 'ignored'
-                        unset($actionsCopy[$n]);
+                    $result = bookReadStateHandleBookAction($bookCandidate, $readerName, $playerName);
+                    // $result is one of: 'resumed', 'replaced', 'started', 'ignored'
+                    unset($actionsCopy[$n]);
+                } else if ($bookFormId !== null) {
+                    try {
+                        $pendingState = bookReadStateRequestContent($bookName, $bookFormId, $readerName, $playerName);
+                        $GLOBALS["db"]->insert('responselog', [
+                            'localts' => time(),
+                            'sent' => 0,
+                            'actor' => 'rolemaster',
+                            'text' => '',
+                            'action' => "rolecommand|UploadBookContent@{$bookFormId}@{$pendingState['request_token']}",
+                            'tag' => '',
+                        ]);
+                        error_log("[ACTION POSTFILTER ReadBook] Requested CHIM upload for uncached book '{$bookName}' ({$bookFormId})");
+                    } catch (Throwable $error) {
+                        error_log("[ACTION POSTFILTER ReadBook] Could not request book content: " . $error->getMessage());
                     }
-
-                    
-
+                    unset($actionsCopy[$n]);
                 } else {
-                    error_log("[ACTION POSTFILTER ReadBook] Book not found: '{$bookName}'");
+                    try {
+                        $pendingState = bookReadStateRequestContentByQuery($bookName, $readerName, $playerName);
+                        $commandPayload = json_encode([
+                            'reader_b64' => base64_encode($readerName),
+                            'title_b64' => base64_encode($bookName),
+                            'request_token' => $pendingState['request_token'],
+                        ], JSON_UNESCAPED_SLASHES);
+                        $GLOBALS["db"]->insert('responselog', [
+                            'localts' => time(),
+                            'sent' => 0,
+                            'actor' => 'rolemaster',
+                            'text' => '',
+                            'action' => "rolecommand|UploadBookContentByTitle@{$commandPayload}",
+                            'tag' => '',
+                        ]);
+                        $lookupKind = $bookLookupByQuery ? 'request text' : 'title words';
+                        error_log("[ACTION POSTFILTER ReadBook] Requested CHIM inventory lookup by {$lookupKind} for uncached book '{$bookName}'");
+                    } catch (Throwable $error) {
+                        error_log("[ACTION POSTFILTER ReadBook] Could not request book content by title: " . $error->getMessage());
+                    }
+                    unset($actionsCopy[$n]);
                 }
             }
         }

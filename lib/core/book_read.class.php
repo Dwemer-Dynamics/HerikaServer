@@ -1,10 +1,10 @@
 <?php
 
 define('BOOK_READ_STATE_KEY', 'book_reading_state');
+define('BOOK_READ_PENDING_TIMEOUT_SECONDS', 90);
 define('BOOK_READ_CHUNK_SIZE', 512);       // characters per LLM formatting chunk
 define('BOOK_READ_QUEUE_DEPTH', 4);        // lines kept in-flight in the ScriptQueue
 define('BOOK_READ_MIN_BUFFERED_LINES', 4); // don't start TTS enqueue until this many lines are formatted
-define('BOOK_READ_LINES_PER_BATCH', 8);    // pause after this many lines have been queued in total
 if (!defined('MAXIMUM_SENTENCE_SIZE')) {
     define('MAXIMUM_SENTENCE_SIZE', 125);
 }
@@ -55,6 +55,86 @@ function bookReadNormalizeTitle($title)
 }
 
 /**
+ * Compare a natural-language book request with an exact inventory title.
+ */
+function bookReadTitleMatchesQuery($title, $query)
+{
+    if (bookReadNormalizeTitle($title) === bookReadNormalizeTitle($query)) {
+        return true;
+    }
+
+    $stopWords = [
+        'a', 'aloud', 'an', 'book', 'can', 'could', 'it', 'me', 'please',
+        'read', 'that', 'the', 'this', 'to', 'will', 'would', 'you',
+    ];
+    $tokenize = static function ($value) use ($stopWords) {
+        preg_match_all('/[[:alnum:]]+/u', mb_strtolower(strval($value)), $matches);
+        return array_values(array_unique(array_filter(
+            $matches[0] ?? [],
+            static fn($token) => !in_array($token, $stopWords, true)
+        )));
+    };
+
+    $titleTokens = $tokenize($title);
+    $queryTokens = $tokenize($query);
+    if (empty($titleTokens) || empty($queryTokens)) {
+        return false;
+    }
+
+    foreach ($queryTokens as $queryToken) {
+        if (!in_array($queryToken, $titleTokens, true)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Normalize a Skyrim runtime FormID for request correlation.
+ *
+ * @param string $formId
+ * @return string|null
+ */
+function bookReadNormalizeFormId($formId)
+{
+    $value = trim((string) $formId);
+    if (stripos($value, '0x') === 0) {
+        $value = substr($value, 2);
+    }
+
+    if ($value === '' || strlen($value) > 8 || !ctype_xdigit($value)) {
+        return null;
+    }
+
+    return sprintf('0x%08X', hexdec($value));
+}
+
+/**
+ * Split the BaseID:BookTitle identifier used by inventory prompt entries.
+ *
+ * @param string $identifier
+ * @return array{form_id: string|null, title: string}
+ */
+function bookReadParseBookIdentifier($identifier)
+{
+    $value = trim((string) $identifier);
+    if (strlen($value) >= 2 && $value[0] === '`' && substr($value, -1) === '`') {
+        $value = trim(substr($value, 1, -1));
+    }
+
+    if (preg_match('/^((?:0x[0-9A-Fa-f]{1,8})|(?:[0-9A-Fa-f]{8})):(.+)$/s', $value, $matches)) {
+        $formId = bookReadNormalizeFormId($matches[1]);
+        $title = trim($matches[2]);
+        if ($formId !== null && $title !== '') {
+            return ['form_id' => $formId, 'title' => $title];
+        }
+    }
+
+    return ['form_id' => null, 'title' => $value];
+}
+
+/**
  * Build a minimal fresh reading state for a book candidate.
  *
  * @param array $bookCandidate Book row with at least 'title' and 'rowid'.
@@ -75,6 +155,133 @@ function bookReadStateForBook(array $bookCandidate, $narratorName, $playerName, 
 }
 
 /**
+ * Build the shared waiting state for an uncached Skyrim book upload.
+ *
+ * @return array The saved waiting state, including its correlation token.
+ */
+function bookReadStateCreateContentRequest($bookTitle, $formId, $narratorName, $playerName, $commenter = null, $allowTitleLookup = false, $titleIsQuery = false)
+{
+    $normalizedFormId = bookReadNormalizeFormId($formId);
+    if ($normalizedFormId === null && !$allowTitleLookup) {
+        throw new InvalidArgumentException('A valid book FormID is required to request content.');
+    }
+
+    $requestedAt = time();
+    $state = [
+        'title' => bookReadNormalizeTitle($bookTitle),
+        'rowid' => null,
+        'narrator' => $narratorName,
+        'player' => $playerName,
+        'commenter' => $commenter ?: $narratorName,
+        'status' => 'waiting_for_content',
+        'requested_form_id' => $normalizedFormId,
+        'request_token' => bin2hex(random_bytes(16)),
+        'requested_at' => $requestedAt,
+        'expires_at' => $requestedAt + BOOK_READ_PENDING_TIMEOUT_SECONDS,
+    ];
+    if ($titleIsQuery) {
+        $state['requested_title_query'] = bookReadNormalizeTitle($bookTitle);
+    }
+
+    bookReadStateSet($state);
+    return $state;
+}
+
+/**
+ * Persist a bounded request for CHIM to upload an uncached Skyrim book by FormID.
+ *
+ * @return array The saved waiting state, including its correlation token.
+ */
+function bookReadStateRequestContent($bookTitle, $formId, $narratorName, $playerName, $commenter = null)
+{
+    return bookReadStateCreateContentRequest(
+        $bookTitle,
+        $formId,
+        $narratorName,
+        $playerName,
+        $commenter,
+        false
+    );
+}
+
+/**
+ * Persist a bounded request for CHIM to find an uncached book in the reader or player inventory.
+ *
+ * @return array The saved waiting state, including its correlation token.
+ */
+function bookReadStateRequestContentByTitle($bookTitle, $narratorName, $playerName, $commenter = null)
+{
+    return bookReadStateCreateContentRequest(
+        $bookTitle,
+        null,
+        $narratorName,
+        $playerName,
+        $commenter,
+        true
+    );
+}
+
+/**
+ * Persist a bounded request using the player's natural-language book description.
+ */
+function bookReadStateRequestContentByQuery($bookQuery, $narratorName, $playerName, $commenter = null)
+{
+    return bookReadStateCreateContentRequest(
+        $bookQuery,
+        null,
+        $narratorName,
+        $playerName,
+        $commenter,
+        true,
+        true
+    );
+}
+
+/**
+ * Complete a waiting request only when the upload matches server-owned state.
+ */
+function bookReadStateAcceptUploadedContent(array $bookCandidate, $formId, $requestToken)
+{
+    $state = bookReadStateGet();
+    if (($state['status'] ?? '') !== 'waiting_for_content') {
+        return false;
+    }
+
+    if (intval($state['expires_at'] ?? 0) < time()) {
+        return false;
+    }
+
+    $normalizedFormId = bookReadNormalizeFormId($formId);
+    $expectedFormId = bookReadNormalizeFormId($state['requested_form_id'] ?? '');
+    if ($normalizedFormId === null || ($expectedFormId !== null && $normalizedFormId !== $expectedFormId)) {
+        return false;
+    }
+
+    $expectedToken = strval($state['request_token'] ?? '');
+    $providedToken = trim(strval($requestToken));
+    if ($expectedToken === '' || $providedToken === '' || !hash_equals($expectedToken, $providedToken)) {
+        return false;
+    }
+
+    $requestedTitleQuery = trim(strval($state['requested_title_query'] ?? ''));
+    if ($requestedTitleQuery !== '') {
+        if (!bookReadTitleMatchesQuery($bookCandidate['title'] ?? '', $requestedTitleQuery)) {
+            return false;
+        }
+    } else if (bookReadNormalizeTitle($bookCandidate['title'] ?? '') !== bookReadNormalizeTitle($state['title'] ?? '')) {
+        return false;
+    }
+
+    bookReadStateSet(bookReadStateForBook(
+        $bookCandidate,
+        $state['narrator'] ?? '',
+        $state['player'] ?? '',
+        $state['commenter'] ?? null
+    ));
+    return true;
+}
+
+/**
  * Handle resuming or replacing a book-reading session from outside code.
  *
  * @param array $bookCandidate Book row with at least 'title' and 'rowid'.
@@ -90,13 +297,13 @@ function bookReadStateHandleBookAction(array $bookCandidate, $narratorName, $pla
 
     if (!empty($state['status'])) {
         if ($state['status'] === 'paused' && bookReadNormalizeTitle($state['title'] ?? '') === $normalizedCandidateTitle) {
-            $state['status'] = 'unpaused';
-            error_log("[book_read] Resuming paused reading session for '{$state['title']}'");
+            $state['status'] = 'resume_requested';
+            error_log("[book_read] Queued resume after pending speech for '{$state['title']}'");
             bookReadStateSet($state);
             return 'resumed';
         }
 
-        if ($state['status'] === 'done' || $state['status'] === 'paused') {
+        if ($state['status'] === 'done' || $state['status'] === 'paused' || $state['status'] === 'waiting_for_content') {
             bookReadStateSet(bookReadStateForBook($bookCandidate, $narratorName, $playerName, $commenter));
             error_log("[book_read] Replaced reading session with new book '{$bookCandidate['title']}'");
             return 'replaced';
@@ -131,7 +338,7 @@ function bookReadIsNpcReading($npcName)
         return false;
     }
 
-    $activeStatuses = ['reading', 'paused', 'unpaused'];
+    $activeStatuses = ['reading', 'paused', 'unpaused', 'resume_requested'];
     if (!in_array($state['status'], $activeStatuses, true)) {
         return false;
     }
@@ -157,8 +364,10 @@ class BookReader
     private $playerName;
     private $commenter;
     private $animationsEnabled;
+    private $linesPerBatch;
+    private $bookReadingVoice;
 
-    public function __construct($db, $lastTs, $lastGamets, $narratorName, $playerName, $commenter, $animationsEnabled)
+    public function __construct($db, $lastTs, $lastGamets, $narratorName, $playerName, $commenter, $animationsEnabled, $linesPerBatch = 8, $bookReadingVoice = true)
     {
         $this->db = $db;
         $this->lastTs = $lastTs;
@@ -167,6 +376,8 @@ class BookReader
         $this->playerName = $playerName;
         $this->commenter = $commenter;
         $this->animationsEnabled = $animationsEnabled;
+        $this->linesPerBatch = max(1, intval($linesPerBatch));
+        $this->bookReadingVoice = filter_var($bookReadingVoice, FILTER_VALIDATE_BOOLEAN);
     }
 
     /**
@@ -212,6 +423,9 @@ class BookReader
 
         // ── 3. Load persisted state and decide if we are resuming ─────────────
         $state = $this->loadState();
+        if (($state['status'] ?? '') === 'waiting_for_content') {
+            $this->handleWaitingForContent($state);
+        }
         $resuming = (
             isset($state["status"])
             && isset($state['title'])
@@ -260,13 +474,20 @@ class BookReader
             $this->handlePaused($state);
         }
 
+        if ($resuming && isset($state['status']) && $state['status'] === 'resume_requested') {
+            $this->handleResumeRequested($state);
+        }
+
         if (isset($state['status']) && $state['status'] === 'done') {
             $this->handleDone($state);
         }
 
-        // ── 8. New book: create a session and exit (no LLM call on first run) ─
+        // ── 8. New book: create a session and continue into the first enqueue ─
         if (!$resuming) {
-            $this->initializeSession($requestedTitle);
+            $state = $this->initializeSession($requestedTitle, $state['rowid'] ?? null);
+            $totalChunks = count($state['chunks']);
+            $allChunksFormatted = $state['chunk_position'] >= $totalChunks;
+            $bufferedUnqueuedLines = $this->countBufferedUnqueued($state['lines']);
         }
 
         // ── 9. Enqueue the next batch of lines if the queue has room ──────────
@@ -314,8 +535,14 @@ class BookReader
 
     // ─── Book lookup ───────────────────────────────────────────────────────────
 
-    private function findBook($title)
+    private function findBook($title, $rowId = null)
     {
+        if (intval($rowId) > 0) {
+            return $this->db->fetchOne(
+                "SELECT * FROM public.books WHERE rowid=" . intval($rowId) . " AND content IS NOT NULL LIMIT 1"
+            );
+        }
+
         $escapedTitle = $this->db->escape($title);
         return $this->db->fetchOne(
             "SELECT * FROM public.books WHERE title ILIKE '%{$escapedTitle}%' and content is not null ORDER BY rowid DESC LIMIT 1"
@@ -339,6 +566,9 @@ class BookReader
     ): array {
         // Normalize line endings.
         $text = str_replace(["\r\n", "\r"], "\n", $text);
+
+        // Drop the transport title prefix; the book's formatted cover follows the first page break.
+        $text = preg_replace('/^\s*Title:\s*[^\n]*?\s*\[pagebreak\]\s*/i', '', $text, 1);
 
         // Remove pagebreak markers.
         $text = preg_replace('/\[pagebreak\]/i', "\n\n", $text);
@@ -673,17 +903,19 @@ class BookReader
         }
 
 
-        // ChatGPT's audiobook / professional narrator FFmpeg filter chain with EQ, compression, slight reverb, and speed adjustment
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['highpass'] = 'highpass=f=70';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['lowpass'] = 'lowpass=f=14500';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['warmth'] = 'equalizer=f=120:t=q:w=0.8:g=1.5';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['clarity_cut'] = 'equalizer=f=320:t=q:w=1.0:g=-1.5';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['presence'] = 'equalizer=f=3000:t=q:w=0.9:g=2.0';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['compressor'] = 'acompressor=threshold=-18dB:ratio=2.5:attack=8:release=120:makeup=2';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['aecho'] = 'aecho=1.0:0.92:55:0.16';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['speed'] = 'atempo=0.85';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['loudnorm'] = 'loudnorm=I=-16:TP=-1.5:LRA=7';
-        $GLOBALS["TTS_FFMPEG_FILTERS"]['aresample'] = 'aresample=24000';
+        if ($this->bookReadingVoice) {
+            // Audiobook-style EQ, compression, slight reverb, and speed adjustment.
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['highpass'] = 'highpass=f=70';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['lowpass'] = 'lowpass=f=14500';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['warmth'] = 'equalizer=f=120:t=q:w=0.8:g=1.5';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['clarity_cut'] = 'equalizer=f=320:t=q:w=1.0:g=-1.5';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['presence'] = 'equalizer=f=3000:t=q:w=0.9:g=2.0';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['compressor'] = 'acompressor=threshold=-18dB:ratio=2.5:attack=8:release=120:makeup=2';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['aecho'] = 'aecho=1.0:0.92:55:0.16';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['speed'] = 'atempo=0.85';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['loudnorm'] = 'loudnorm=I=-16:TP=-1.5:LRA=7';
+            $GLOBALS["TTS_FFMPEG_FILTERS"]['aresample'] = 'aresample=24000';
+        }
         $GLOBALS["SCRIPTLINE_ANIMATION_SENT"] = true;  // To avoid returnlines from sending any animation.
         $GLOBALS["AVOID_TTS_CACHE"] = true;
         returnLines([$lineText], true);
@@ -768,7 +1000,13 @@ class BookReader
 
     private function setupNarratorProfile($narratorName)
     {
-        if ($narratorName == "The Narrator") {
+        $configuredNarratorName = function_exists('chimGetNarratorRoleplayName')
+            ? chimGetNarratorRoleplayName()
+            : Narrator::DEFAULT_ROLEPLAY_NAME;
+        $isNarrator = strcasecmp((string) $narratorName, Narrator::CANONICAL_NAME) === 0
+            || strcasecmp((string) $narratorName, $configuredNarratorName) === 0;
+
+        if ($isNarrator) {
             $narrator = new Narrator();
             $narratorData = $narrator->getNarratorData();
             $narrator->loadIntoGlobals();
@@ -780,7 +1018,7 @@ class BookReader
             $profile->setOldGlobals($currentProfileData);
             $narrator->loadCharacterIntoGlobals();
         } else {
-            error_log("[book_read] Using custom narrator '{$narratorName}' instead of the default 'The Narrator'.");
+            error_log("[book_read] Using custom narrator '{$narratorName}' instead of configured narrator '{$configuredNarratorName}'.");
             $npcMaster = new NpcMaster();
             $npcData = $npcMaster->getByName($narratorName);
 
@@ -1008,26 +1246,102 @@ class BookReader
         }
     }
 
+    private function hasPendingPlayback(array $state): bool
+    {
+        foreach ($state['lines'] ?? [] as $line) {
+            if (($line['enqueued'] ?? false) && !($line['spoken'] ?? false)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private function handlePaused(&$state)
     {
         // Pending playback means any line has been queued for TTS but not yet spoken.
         // We no longer rely on queue indices alone because all lines are created on the
         // first run; a line can be enqueued=true while its index is not in the queue.
-        $pendingPlayback = false;
-        foreach ($state['lines'] as $line) {
-            if (($line['enqueued'] ?? false) && !($line['spoken'] ?? false)) {
-                $pendingPlayback = true;
-                break;
-            }
-        }
+        $pendingPlayback = $this->hasPendingPlayback($state);
         error_log(date("d/m/Y H:i:s") . " [book_read] PAUSED\n");
 
         if (!$pendingPlayback && !($state['animation_end_done'] ?? false)) {
             $this->playStopReadingAnimation($state);
             error_log(date("d/m/Y H:i:s") . "[book_read] Paused session has no pending playback; triggered stop reading animation. reason: pendingPlayback={$pendingPlayback}, animation_end_done={$state['animation_end_done']}");
-        } else {
-            error_log(date("d/m/Y H:i:s") . "[book_read] Reading of '{$state['title']}' is paused, doing nothing.");
         }
+
+        if (!$pendingPlayback && empty($state['comment_instruction_sent'])) {
+            $this->db->insert(
+                'responselog',
+                [
+                    'localts' => time(),
+                    'sent' => 0,
+                    'actor' => "rolemaster",
+                    'text' => "",
+                    'action' => "rolecommand|Instruction@{$this->commenter}@Briefly comment on {$this->narratorName}'s reading of '{$state['title']}', then use the Read_Book action with item '{$state['title']}' so the reading continues. Short sentence.@0",
+                    'tag' => "",
+                ]
+            );
+
+            $this->db->insert('eventlog', [
+                'ts' => $this->lastTs,
+                'gamets' => $this->lastGamets + 1,
+                'type' => 'innerchat',
+                'data' => "{$this->narratorName} has finished reading some pages of the book '{$state['title']}' and will continue after a brief comment.",
+                'sess' => 0,
+                'localts' => time(),
+                'people' => "|{$this->narratorName}|{$this->playerName}|",
+                'location' => null,
+                'party' => '',
+            ]);
+
+            $state['comment_instruction_sent'] = true;
+            $this->saveState($state);
+            error_log("[book_read] Requested comment after the current batch finished playing.");
+        } else if ($pendingPlayback) {
+            error_log(date("d/m/Y H:i:s") . "[book_read] Reading of '{$state['title']}' is paused, doing nothing.");
+        } else {
+            error_log("[book_read] Waiting for the comment action to continue '{$state['title']}'.");
+        }
+        exit(0);
+    }
+
+    private function handleResumeRequested(&$state)
+    {
+        if ($this->hasPendingPlayback($state)) {
+            error_log("[book_read] Resume requested for '{$state['title']}', waiting for the current batch to finish.");
+            exit(0);
+        }
+
+        $state['status'] = 'reading';
+        $state['lines_queued_in_batch'] = 0;
+        $state['comment_instruction_sent'] = false;
+        $this->saveState($state);
+        $this->playReadingAnimation($state);
+        error_log("[book_read] Continued reading '{$state['title']}' after the comment break.");
+    }
+
+    private function handleWaitingForContent(&$state)
+    {
+        $expiresAt = intval($state['expires_at'] ?? 0);
+        if ($expiresAt > time()) {
+            error_log("[book_read] Waiting for CHIM to upload '{$state['title']}'.");
+            exit(0);
+        }
+
+        $state['status'] = 'done';
+        $this->saveState($state);
+
+        $safeTitle = trim(preg_replace('/[@|\r\n]+/', ' ', strval($state['title'] ?? 'book')));
+        $this->db->insert('responselog', [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => 'rolemaster',
+            'text' => '',
+            'action' => "rolecommand|DebugNotification@Could not retrieve book content for {$safeTitle}. Make sure the book is in your inventory or the reader's, then try again.",
+            'tag' => '',
+        ]);
+
+        error_log("[book_read] Timed out waiting for CHIM to upload '{$safeTitle}'.");
         exit(0);
     }
 
@@ -1072,7 +1386,7 @@ class BookReader
                         'localts' => time(),
                         'sent' => 0,
                         'text' => "WaitHere@",
-                        'actor' => "Jaryra",
+                        'actor' => $this->narratorName,
                         'action' => 'command'
                     )
                 );
@@ -1123,9 +1437,9 @@ class BookReader
         $this->saveState($state);
     }
 
-    private function initializeSession($requestedTitle)
+    private function initializeSession($requestedTitle, $requestedRowId = null)
     {
-        $book = $this->findBook($requestedTitle);
+        $book = $this->findBook($requestedTitle, $requestedRowId);
         if (!$book) {
             fwrite(STDERR, "Book not found: {$requestedTitle}\n");
             exit(1);
@@ -1158,7 +1472,7 @@ class BookReader
         error_log("[book_read] Initialized reading session for '{$state['title']}' (" . count($rawChunks) . " chunks, " . count($allLines) . " lines).");
         $this->playReadingAnimation($state);
         $this->saveState($state);
-        // exit(0);
+        return $state;
     }
 
     private function enqueueLines(&$state, $totalChunks)
@@ -1171,6 +1485,11 @@ class BookReader
             }
             $lineText = $state['lines'][$nextIndex]['text'];
             $utteranceId = $this->queueLine($lineText, $state['title']);
+            if ($utteranceId === null) {
+                $this->saveState($state);
+                error_log("[book_read] TTS generation failed for line " . ($nextIndex + 1) . "; leaving it unqueued for retry.");
+                exit(1);
+            }
             $state['queue'][] = $nextIndex;
             $state['lines'][$nextIndex]['enqueued'] = true;
             $state['lines'][$nextIndex]['utterance_id'] = $utteranceId;
@@ -1181,35 +1500,12 @@ class BookReader
             $state['animation_end_done'] = false; // Reset the end animation flag so it will be played when the book is finished.
 
             // Auto-pause after enqueuing the configured batch size so the caller can rest between batches.
-            if (($state['lines_queued_in_batch'] ?? 0) >= BOOK_READ_LINES_PER_BATCH) {
+            if (($state['lines_queued_in_batch'] ?? 0) >= $this->linesPerBatch) {
                 $state['status'] = 'paused';
+                $state['comment_instruction_sent'] = false;
                 $this->saveState($state);
 
-                $this->db->insert(
-                    'responselog',
-                    [
-                        'localts' => time() + 10,
-                        'sent' => 0,
-                        'actor' => "rolemaster",
-                        'text' => "",
-                        'action' => "rolecommand|Suggestion@{$this->commenter}@Should comment the {$this->narratorName}'s reading of '{$state['title']}', expressing interest and wondering about the plot. Short sentence.@0",
-                        'tag' => "",
-                    ]
-                );
-
-                $this->db->insert('eventlog', [
-                    'ts' => $this->lastTs,
-                    'gamets' => $this->lastGamets + 1,
-                    'type' => 'innerchat',
-                    'data' => "{$this->narratorName} has finished reading some pages of the book '{$state['title']}'. {$this->narratorName} should use action Read_Book (item {$state['title']}) to resume reading if requested.",
-                    'sess' => 0,
-                    'localts' => time(),
-                    'people' => "|{$this->narratorName}|{$this->playerName}|",
-                    'location' => null,
-                    'party' => '',
-                ]);
-
-                error_log("[book_read] Auto-paused after {$state['lines_queued_in_batch']} line(s) queued this batch.");
+                error_log("[book_read] Auto-paused after {$state['lines_queued_in_batch']} line(s) queued this batch; waiting for playback before requesting a comment.");
                 exit(0);
             }
         }
@@ -1220,7 +1516,9 @@ class BookReader
 
     private function finishIfComplete(&$state, $allChunksFormatted)
     {
-        $allLinesSpoken = count($state['lines']) > 0 && !$this->findNextUnqueuedLineIndex($state['lines']) && empty($state['queue']);
+        $allLinesSpoken = count($state['lines']) > 0
+            && $this->findNextUnqueuedLineIndex($state['lines']) === null
+            && empty($state['queue']);
         if ($allLinesSpoken && $allChunksFormatted) {
             $state['status'] = 'done';
             $this->saveState($state);
