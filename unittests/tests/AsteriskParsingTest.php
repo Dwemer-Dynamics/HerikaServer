@@ -576,6 +576,7 @@ final class AsteriskParsingTest extends TestCase
         $this->assertSame('Dohvahkeen', $defaults['Dovahkiin']);
         $this->assertSame('Dwehmer', $defaults['Dwemer']);
         $this->assertSame('Meerack', $defaults['Miraak']);
+        $this->assertSame('Arngeer', $defaults['Arngeir']);
         $this->assertArrayNotHasKey('Aetherius', $defaults);
         $this->assertArrayNotHasKey('Balgruuf', $defaults);
         foreach ($defaults as $spoken) {
