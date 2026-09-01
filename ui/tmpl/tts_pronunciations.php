@@ -345,7 +345,6 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
 
     <div class="content-section full-width-section">
         <h1>Built-in Pronunciations</h1>
-        <p>Shipped defaults for common lore names. Edit the spoken version to retune one, or delete it when you do not want it. Deleted defaults stay removed after database updates. The <strong>Applies To</strong> column shows who each default actually reaches.</p>
 
         <div class="pron-grid">
             <div class="pron-cols pron-head" aria-hidden="true">
@@ -371,8 +370,9 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
                     $pronSavable = (int)($pronRow['id'] ?? 0) > 0;
                     ?>
                     <form action="<?php echo $pronPostAction; ?>" method="post"
-                          class="pron-cols pron-row <?php echo $pronEnabled ? '' : 'is-disabled'; ?>">
-                        <input type="hidden" name="action" value="save_builtin_tts_pronunciation">
+                          class="pron-cols pron-row <?php echo $pronEnabled ? '' : 'is-disabled'; ?>"
+                          data-pron-builtin-row>
+                        <input type="hidden" name="action" value="toggle_tts_pronunciation" data-pron-action>
                         <input type="hidden" name="id" value="<?php echo htmlspecialchars($pronId); ?>">
                         <div>
                             <span class="pron-label">Original</span>
@@ -383,7 +383,12 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
                         </div>
                         <div>
                             <label class="pron-label" for="pron-spoken-<?php echo $pronKey; ?>">Spoken version</label>
-                            <div class="pron-input-row">
+                            <div class="pron-static-row pron-built-in-display" data-pron-display>
+                                <div class="pron-static"><?php echo htmlspecialchars($pronSpoken); ?></div>
+                                <?php echo $pronPlayButton('Spoken version', null, $pronSpoken, $pronSource); ?>
+                            </div>
+                            <div class="pron-input-row pron-built-in-editor" id="pron-editor-<?php echo $pronKey; ?>"
+                                 data-pron-editor hidden>
                                 <input class="pron-field" type="text" id="pron-spoken-<?php echo $pronKey; ?>"
                                        name="spoken_text" value="<?php echo htmlspecialchars($pronSpoken); ?>"
                                        maxlength="240" required autocomplete="off" spellcheck="false"
@@ -413,9 +418,14 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
                             <label class="pron-label pron-toggle-label" for="pron-enabled-<?php echo $pronKey; ?>">Enabled</label>
                         </div>
                         <div class="pron-actions">
-                            <button type="submit" id="pron-save-<?php echo $pronKey; ?>"
+                            <button type="submit" id="pron-apply-<?php echo $pronKey; ?>"
+                                    data-pron-apply
                                     class="action-button upload-csv pron-btn"
-                                    <?php echo $pronSavable ? '' : 'disabled title="Apply database updates before editing built-in entries."'; ?>>Save</button>
+                                    <?php echo $pronSavable ? '' : 'disabled title="Apply database updates before changing built-in entries."'; ?>>Apply</button>
+                            <button type="button" class="action-button pron-btn"
+                                    data-pron-edit aria-expanded="false"
+                                    aria-controls="pron-editor-<?php echo $pronKey; ?>"
+                                    <?php echo $pronSavable ? '' : 'disabled title="Apply database updates before editing built-in entries."'; ?>>Edit</button>
                             <button type="submit" form="pron-delete-form-<?php echo $pronKey; ?>"
                                     class="action-button delete pron-btn"
                                     <?php echo $pronSavable ? '' : 'disabled title="Apply database updates before deleting built-in entries."'; ?>
@@ -572,6 +582,76 @@ $pronPlayButton = static function (string $label, ?string $inputId = null, ?stri
                 event.stopPropagation();
                 requestPreview(button);
             });
+        });
+
+        var editButtons = document.querySelectorAll('[data-pron-edit]');
+        Array.prototype.forEach.call(editButtons, function (editButton) {
+            editButton.addEventListener('click', function () {
+                var row = editButton.closest('[data-pron-builtin-row]');
+                if (!row) {
+                    return;
+                }
+
+                var action = row.querySelector('[data-pron-action]');
+                var applyButton = row.querySelector('[data-pron-apply]');
+                var display = row.querySelector('[data-pron-display]');
+                var editor = row.querySelector('[data-pron-editor]');
+                var field = editor ? editor.querySelector('.pron-field') : null;
+                var editing = editButton.getAttribute('aria-expanded') === 'true';
+
+                if (editing) {
+                    if (field) {
+                        field.value = field.defaultValue;
+                    }
+                    if (display) {
+                        display.hidden = false;
+                    }
+                    if (editor) {
+                        editor.hidden = true;
+                    }
+                    if (action) {
+                        action.value = 'toggle_tts_pronunciation';
+                    }
+                    if (applyButton) {
+                        applyButton.textContent = 'Apply';
+                    }
+                    editButton.textContent = 'Edit';
+                    editButton.setAttribute('aria-expanded', 'false');
+                    return;
+                }
+
+                if (display) {
+                    display.hidden = true;
+                }
+                if (editor) {
+                    editor.hidden = false;
+                }
+                if (action) {
+                    action.value = 'save_builtin_tts_pronunciation';
+                }
+                if (applyButton) {
+                    applyButton.textContent = 'Save';
+                }
+                editButton.textContent = 'Cancel';
+                editButton.setAttribute('aria-expanded', 'true');
+                if (field) {
+                    field.focus();
+                    field.select();
+                }
+            });
+
+            var editorId = editButton.getAttribute('aria-controls');
+            var editor = editorId ? document.getElementById(editorId) : null;
+            var field = editor ? editor.querySelector('.pron-field') : null;
+            if (field) {
+                field.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape') {
+                        event.preventDefault();
+                        editButton.click();
+                        editButton.focus();
+                    }
+                });
+            }
         });
     })();
     </script>

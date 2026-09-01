@@ -118,7 +118,7 @@
     align-items: center;
     display: grid;
     gap: 10px;
-    grid-template-columns: minmax(120px, 1fr) minmax(130px, 1.15fr) minmax(190px, 1.5fr) 96px 172px;
+    grid-template-columns: minmax(120px, 1fr) minmax(130px, 1.15fr) minmax(190px, 1.5fr) 96px 210px;
     padding: 10px 12px;
 }
 
@@ -276,6 +276,11 @@
     display: flex;
     gap: 6px;
     min-width: 0;
+}
+
+.pron-built-in-editor[hidden],
+.pron-built-in-display[hidden] {
+    display: none !important;
 }
 
 .pron-input-row .pron-field,
@@ -453,4 +458,3 @@
         margin-top: 0;
     }
 }
-    display: grid;
