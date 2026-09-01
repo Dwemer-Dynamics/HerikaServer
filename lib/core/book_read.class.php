@@ -565,6 +565,9 @@ class BookReader
         // Normalize line endings.
         $text = str_replace(["\r\n", "\r"], "\n", $text);
 
+        // Drop the transport title prefix; the book's formatted cover follows the first page break.
+        $text = preg_replace('/^\s*Title:\s*[^\n]*?\s*\[pagebreak\]\s*/i', '', $text, 1);
+
         // Remove pagebreak markers.
         $text = preg_replace('/\[pagebreak\]/i', "\n\n", $text);
 
