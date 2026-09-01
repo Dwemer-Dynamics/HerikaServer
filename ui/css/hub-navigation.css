@@ -185,6 +185,24 @@ body .config-navigation .tab-button {
     outline-offset: 2px;
 }
 
+/* Two-group hubs are small enough to keep their labels beside the buttons on
+   ordinary desktops, avoiding a dedicated label row. */
+@media (min-width: 901px) {
+    .config-navigation .tab-groups.two-groups .tab-group {
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .config-navigation .tab-groups.two-groups .tab-group-label {
+        flex: 0 0 auto;
+        padding: 0 8px 0 0;
+        border-bottom: 0;
+        border-right: 1px solid rgba(242, 124, 17, 0.22);
+        white-space: nowrap;
+    }
+}
+
 /* Very wide desktops have room to sit each label beside its buttons, which
    drops the label row entirely. The breakpoint is deliberately high: an inline
    label takes width away from the buttons, so below ~1800px the config hubs
