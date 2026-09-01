@@ -136,7 +136,7 @@ try {
         $items = [];
         foreach ($fields as $field) {
             $name = $field['name'];
-            $field['label'] = chimGlobalSettingsLabel($name);
+            $field['label'] = (string)($field['label'] ?? chimGlobalSettingsLabel($name));
             $field['description'] = (string)($descriptionMap[$name] ?? $field['description'] ?? $field['help'] ?? '');
             $field['value'] = chimReadLegacyGlobalValue($name, $field['default'] ?? '');
             if (($field['type'] ?? '') === 'boolean') {

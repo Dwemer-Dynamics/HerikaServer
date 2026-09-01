@@ -3,6 +3,7 @@
 require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib/logger.php");
 require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib/settings.php");
 require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib/oghma_aliases.php");
+require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib/tts_pronunciation.php");
 
 $checkVersion = function($tablename) {
     global $db;
@@ -108,6 +109,10 @@ try {
     }
     if ($checkTableExists("core_tts_fallback") == -1) {
         $db->execQuery(file_get_contents(__DIR__."/../lib/core/database_schema/core_tts_fallback.sql"));
+        $db->execQuery("SET search_path TO public");
+    }
+    if ($checkTableExists("core_tts_pronunciation") == -1) {
+        chimEnsureTtsPronunciationDictionary();
         $db->execQuery("SET search_path TO public");
     }
     if ($checkTableExists("core_llm_connector") == -1) {
@@ -3779,6 +3784,7 @@ try {
         ["name"=>"core_llm_connector","file"=>__DIR__."/../lib/core/database_schema/core_llm_connector.sql"],
         ["name"=>"core_tts_connector","file"=>__DIR__."/../lib/core/database_schema/core_tts_connector.sql"],
         ["name"=>"core_tts_fallback","file"=>__DIR__."/../lib/core/database_schema/core_tts_fallback.sql"],
+        ["name"=>"core_tts_pronunciation","file"=>__DIR__."/../lib/core/database_schema/core_tts_pronunciation.sql"],
         ["name"=>"core_stt_connector","file"=>__DIR__."/../lib/core/database_schema/core_stt_connector.sql"],
         ["name"=>"core_profiles",     "file"=>__DIR__."/../lib/core/database_schema/core_profiles.sql"],
         ["name"=>"core_npc_master",   "file"=>__DIR__."/../lib/core/database_schema/core_npc_master.sql"]
@@ -3789,6 +3795,7 @@ try {
             $db->execQuery(file_get_contents($t["file"]));
         }
     }
+    chimEnsureTtsPronunciationDictionary();
 } catch (Exception $e) {
     Logger::error("Final repair pass failed: ".$e->getMessage());
 }
@@ -6973,6 +6980,99 @@ if ($checkVersion("core_action") < 20260803001) {
     }
 }
 
+if ($checkVersion("core_action") < 20260825001) {
+    Logger::debug("Applying core_action 20260825001 - make Brawl unarmed and non-lethal");
+
+    $migrationOk = $db->execQuery("
+        UPDATE public.core_action
+           SET description = '#HERIKA_NAME# starts a brawl with #PLAYER_NAME# or another nearby NPC: an agreed, bare-fisted fight that is not meant to kill. Fists only, no weapons, shields, spells, staves, or poisons. Use Attack instead when #HERIKA_NAME# truly means to kill.',
+               parameters_json = '{\"type\":\"object\",\"required\":[\"target\"],\"properties\":{\"target\":{\"type\":\"string\",\"description\":\"Who #HERIKA_NAME# brawls: a nearby NPC, actor, or #PLAYER_NAME#. Prefer exact Name [RefID: XXXXXXXX] from people_present; otherwise use the actor name.\"}}}'::jsonb,
+               updated_at = NOW()
+         WHERE code_name = 'Brawl'
+    ") !== false;
+
+    $migrationOk = $db->execQuery("
+        UPDATE public.core_action_custom
+           SET description = '#HERIKA_NAME# starts a brawl with #PLAYER_NAME# or another nearby NPC: an agreed, bare-fisted fight that is not meant to kill. Fists only, no weapons, shields, spells, staves, or poisons. Use Attack instead when #HERIKA_NAME# truly means to kill.',
+               parameters_json = '{\"type\":\"object\",\"required\":[\"target\"],\"properties\":{\"target\":{\"type\":\"string\",\"description\":\"Who #HERIKA_NAME# brawls: a nearby NPC, actor, or #PLAYER_NAME#. Prefer exact Name [RefID: XXXXXXXX] from people_present; otherwise use the actor name.\"}}}'::jsonb,
+               updated_at = NOW()
+         WHERE code_name = 'Brawl'
+           AND description = '#HERIKA_NAME# engages in non-lethal combat with another actor, using weapons.'
+           AND parameters_json = '{\"type\":\"object\",\"required\":[\"target\"],\"properties\":{\"target\":{\"type\":\"string\",\"description\":\"Target NPC, Actor, or being\"}}}'::jsonb
+    ") !== false && $migrationOk;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20260825001);
+        Logger::info("Applied patch core_action 20260825001");
+    } else {
+        Logger::error("Failed to apply patch core_action 20260825001");
+    }
+}
+
+if ($checkVersion("core_action") < 20260901001) {
+    Logger::debug("Applying core_action 20260901001 - add equipment and book reading custom actions");
+
+    $migrationOk = $db->execQuery(<<<'SQL'
+INSERT INTO public.core_action_custom (
+    code_name, action_name, description, return_message,
+    available_to_npc, available_to_followers, available_to_narrator,
+    is_activated, parameters_json, metadata, game_function,
+    import_version, script_proxy_program
+) VALUES
+    (
+        'EquipGear',
+        'Equip_Gear',
+        'Equips one piece of gear or cloth.',
+        '#HERIKA_NAME# puts #ITEM#',
+        TRUE, TRUE, FALSE, TRUE,
+        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact baseID from <inventory> tag (e.g., 0x12345). Must match format exactly."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+        '{}'::jsonb,
+        TRUE, 0, '{}'::jsonb
+    ),
+    (
+        'ReadBook',
+        'Read_Book',
+        'Reads or resumes a book aloud for #PLAYER_NAME#. The server supplies the exact book text on a later turn, so reply with one short acknowledgement and nothing more. Never invent, summarize, or quote book content.',
+        '#HERIKA_NAME# starts reading book.',
+        TRUE, TRUE, TRUE, TRUE,
+        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from the <inventory> tag when the book is listed (e.g., 0x0001AFD5:The Real Barenziah). Otherwise send title words only, as close to the real title as #PLAYER_NAME#''s request allows, and the server will look it up in inventory."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+        '{}'::jsonb,
+        TRUE, 0, '{}'::jsonb
+    )
+ON CONFLICT (code_name) DO NOTHING
+SQL
+    ) !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20260901001);
+        Logger::info("Applied patch core_action 20260901001");
+    } else {
+        Logger::error("Failed to apply patch core_action 20260901001");
+    }
+}
+
+if ($checkVersion("core_action") < 20260901002) {
+    Logger::debug("Applying core_action 20260901002 - clarify book reading handoff");
+
+    $migrationOk = $db->execQuery(<<<'SQL'
+UPDATE public.core_action_custom
+   SET description = 'Reads or resumes a book aloud for #PLAYER_NAME#. The server supplies the exact book text on a later turn, so reply with one short acknowledgement and nothing more. Never invent, summarize, or quote book content.',
+       parameters_json = '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from the <inventory> tag when the book is listed (e.g., 0x0001AFD5:The Real Barenziah). Otherwise send title words only, as close to the real title as #PLAYER_NAME#''s request allows, and the server will look it up in inventory."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+       updated_at = NOW()
+ WHERE code_name = 'ReadBook'
+   AND description = 'Initiate request to read a book. Reads (or continue reading) a book aloud for #PLAYER_NAME#. Book contents will be provided in next turn.'
+   AND parameters_json = '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from <inventory> when available. A title alone works only when the book is already cached by the server."},"target":{"type":"string","description":"leave empty"}}}'::jsonb
+SQL
+    ) !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20260901002);
+        Logger::info("Applied patch core_action 20260901002");
+    } else {
+        Logger::error("Failed to apply patch core_action 20260901002");
+    }
+}
+
 //----------------------------------------------------
 
 // Relationship Evaluation and Initialization Queues
@@ -8113,6 +8213,68 @@ if ($migrationOk) {
     }
 } else {
     Logger::error("Failed to apply eventlog_session_payload migration; existing views were preserved");
+}
+
+if ($checkVersion("core_tts_pronunciation") < 20260829003) {
+    Logger::debug("Applying core_tts_pronunciation 20260829003 - expand Skyrim pronunciation defaults");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260829003);
+        Logger::info("Applied patch core_tts_pronunciation 20260829003");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260829003");
+    }
+}
+
+if ($checkVersion("core_tts_pronunciation") < 20260829004) {
+    Logger::debug("Applying core_tts_pronunciation 20260829004 - retire selected Skyrim defaults");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+    if ($migrationOk) {
+        $migrationOk = $GLOBALS['db']->execQuery(
+            "DELETE FROM public.core_tts_pronunciation
+             WHERE is_builtin = TRUE
+               AND LOWER(BTRIM(source_text)) IN ('aetherius', 'balgruuf')"
+        ) !== false;
+    }
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260829004);
+        Logger::info("Applied patch core_tts_pronunciation 20260829004");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260829004");
+    }
+}
+
+if ($checkVersion("core_tts_pronunciation") < 20260901001) {
+    Logger::debug("Applying core_tts_pronunciation 20260901001 - unhyphenate built-in spoken values");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+    if ($migrationOk) {
+        $migrationOk = chimUnhyphenateBuiltinTtsPronunciations();
+    }
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260901001);
+        Logger::info("Applied patch core_tts_pronunciation 20260901001");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260901001");
+    }
+}
+
+if ($checkVersion("core_tts_pronunciation") < 20260901002) {
+    Logger::debug("Applying core_tts_pronunciation 20260901002 - preserve deleted built-in pronunciations");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260901002);
+        Logger::info("Applied patch core_tts_pronunciation 20260901002");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260901002");
+    }
 }
 
 Logger::info(__FILE__." update file processed");
