@@ -3,6 +3,7 @@
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../../lib/data_functions.php';
+require_once __DIR__ . '/../../lib/chat_helper_functions.php';
 
 final class DiaryMemoryRecallTest extends TestCase
 {
@@ -32,6 +33,15 @@ final class DiaryMemoryRecallTest extends TestCase
     public function testNarratorSearchesTheGlobalMemoryBankByDefault(): void
     {
         $this->assertSame('TRUE', dataGetMemoryCompanionConditionSql(''));
+    }
+
+    public function testForcedDiaryRecallRestrictsSearchToDiaryMemories(): void
+    {
+        $this->assertSame(
+            "memory_summary.classifier IN ('diary','auto_diary','backgroundlife_diary')",
+            dataGetMemoryClassifierConditionSql(true, 'memory_summary.classifier')
+        );
+        $this->assertSame('TRUE', dataGetMemoryClassifierConditionSql(false));
     }
 
     public function testNarratorCanBeRestrictedToItsOwnDiary(): void
@@ -73,5 +83,51 @@ final class DiaryMemoryRecallTest extends TestCase
             "(companions LIKE '%|M''aiq''s Friend|%' OR companions='M''aiq''s Friend')",
             dataGetMemoryCompanionConditionSql("M'aiq's Friend")
         );
+    }
+
+    public function testExplicitNarratorDiaryRequestForcesRecall(): void
+    {
+        $this->assertTrue(chimShouldForceNarratorDiaryRecall([
+            'narrator_inputtext',
+            100,
+            200,
+            'Wrong. Use the diary. I am referring to the Covenant spy character.',
+        ]));
+    }
+
+    public function testNarratorSceneContinuationForcesRecall(): void
+    {
+        $this->assertTrue(chimShouldForceNarratorDiaryRecall([
+            'narrator_inputtext',
+            100,
+            200,
+            'Write the story as we return to the character who sent us to the Jarl.',
+        ]));
+    }
+
+    public function testOrdinaryNarratorRequestKeepsNormalRecallClassification(): void
+    {
+        $this->assertFalse(chimShouldForceNarratorDiaryRecall([
+            'narrator_inputtext',
+            100,
+            200,
+            'Describe the weather over Falkreath.',
+        ]));
+    }
+
+    public function testNpcDiaryMentionDoesNotUseNarratorRecallOverride(): void
+    {
+        $this->assertFalse(chimShouldForceNarratorDiaryRecall([
+            'inputtext',
+            100,
+            200,
+            'Use the diary to remember the Covenant spy.',
+        ]));
+    }
+
+    public function testForcedDiaryRecallKeepsRecentMemoryEligible(): void
+    {
+        $this->assertFalse(chimShouldDiscardRecentMemory(48.0, 140.0, true));
+        $this->assertTrue(chimShouldDiscardRecentMemory(48.0, 140.0, false));
     }
 }

@@ -17,6 +17,7 @@ require_once(__DIR__."/prompt_injections.php");
 require_once(__DIR__."/vr_items.php");
 require_once(__DIR__."/visual_context.php");
 require_once(__DIR__."/memory_ranking.php");
+require_once(__DIR__."/memory_recall.php");
 
 
 function ChangeHerikaName($new_name="") {
@@ -5080,7 +5081,7 @@ function chimAttachShortTermMemoryToWindow(array $window, string $actor, string 
 }
 
 
-function DataSearchMemory($rawstring,$npcfilter) {
+function DataSearchMemory($rawstring,$npcfilter,$diaryOnly=false) {
     
     //$kw=explode(" ",($rawstring));
     if (is_array($rawstring)) {
@@ -5104,7 +5105,11 @@ function DataSearchMemory($rawstring,$npcfilter) {
         $pattern = '/\((?:(?:talking|whispering|shouting)|speaking privately)\s+to\s+[^()]+\)/i';
         $TEST_TEXT = preg_replace($pattern, '', $TEST_TEXT);
 
-        $keywords=minimeExtract($TEST_TEXT);
+        if (!empty($GLOBALS["PATCH_BYPASS_MINIME_EXTRACT"])) {
+            $keywords=json_encode([]);
+        } else {
+            $keywords=minimeExtract($TEST_TEXT);
+        }
         $reponse=json_decode($keywords,true);
         
         //print_r($reponse);
@@ -5205,6 +5210,7 @@ function DataSearchMemory($rawstring,$npcfilter) {
     
     
     $scopeConditionSql = dataGetMemoryScopeConditionSql($npcfilter);
+    $classifierConditionSql = dataGetMemoryClassifierConditionSql((bool)$diaryOnly, 'A.classifier');
     $companionConditionSql = dataGetMemoryCompanionConditionSql($npcfilter, 'A.companions', 'A.classifier');
 
     $memory=$GLOBALS["db"]->fetchAll("
@@ -5215,6 +5221,7 @@ function DataSearchMemory($rawstring,$npcfilter) {
         where native_vec @@to_tsquery('$kwStringAny')
         and not (native_vec @@to_tsquery('#Reminiscence'))
         and $scopeConditionSql
+        and $classifierConditionSql
         and $companionConditionSql
 
         ORDER BY rank_all DESC, rank_any DESC;
@@ -5257,7 +5264,7 @@ function chimNormalizeTsQueryTerms(string $text): array {
     return array_values(array_unique($terms));
 }
 
-function DataSearchMemoryByVector($rawstring,$npcfilter,$useContextKw=false,$timeThreshold=0) {
+function DataSearchMemoryByVector($rawstring,$npcfilter,$useContextKw=false,$timeThreshold=0,$diaryOnly=false) {
     
         $localStartTime=microtime(true);
         Logger::info("Using DataSearchMemoryByVector $rawstring,$npcfilter,$useContextKw=false,$timeThreshold=0");
@@ -5417,6 +5424,7 @@ function DataSearchMemoryByVector($rawstring,$npcfilter,$useContextKw=false,$tim
         }
 
         $scopeConditionSql = dataGetMemoryScopeConditionSql($npcfilter);
+        $classifierConditionSql = dataGetMemoryClassifierConditionSql((bool)$diaryOnly);
         $companionConditionSql = dataGetMemoryCompanionConditionSql($npcfilter);
 
         $contextKeywords  = implode(" ", $result);
@@ -5483,6 +5491,7 @@ function DataSearchMemoryByVector($rawstring,$npcfilter,$useContextKw=false,$tim
                     FROM public.memory_summary 
                     WHERE embedding IS NOT NULL
                     and $scopeConditionSql
+                    and $classifierConditionSql
                     and $companionConditionSql
                     and (gamets_truncated<$timeThreshold or $timeThreshold=0)
                     

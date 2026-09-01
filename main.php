@@ -2098,13 +2098,20 @@ error_log("TRACE:\t".__LINE__. "\t".__FILE__.":\t".(microtime(true) - $startTime
 
 if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext_s","narrator_inputtext","rechat","narration","continue","continue_group"]) ) {
 
-    $memoryInjection=offerMemory($gameRequest);
+    $forceNarratorDiaryRecall = chimShouldForceNarratorDiaryRecall($gameRequest);
+    $memoryInjection=offerMemory($gameRequest, false, $forceNarratorDiaryRecall);
     //Logger::info("Memory injection:".json_encode($memoryInjection));
 
     if (!empty($memoryInjection)) {
         
         //$memoryInjectionCtx[]= array('role' => 'user', 'content' => $gameRequest[3]);
-        $memoryInjectionCtx[]= array('role' => 'user', 'content' => "<memory> {$GLOBALS["HERIKA_NAME"]} remembers this: [$memoryInjection] </memory>");
+        $memoryPriority = $forceNarratorDiaryRecall
+            ? ' source="requested_diary" priority="high"'
+            : '';
+        $memoryInstruction = $forceNarratorDiaryRecall
+            ? 'Use this requested diary memory to resolve prior scenes, events, and off-screen characters instead of substituting unrelated nearby actors. '
+            : '';
+        $memoryInjectionCtx[]= array('role' => 'user', 'content' => "<memory{$memoryPriority}> {$memoryInstruction}{$GLOBALS["HERIKA_NAME"]} remembers this: [$memoryInjection] </memory>");
         //$GLOBALS["COMMAND_PROMPT"].="'{$gameRequest[3]}'\n{$GLOBALS["HERIKA_NAME"]}:$memoryInjection\n";
         
     } else {
@@ -2564,6 +2571,16 @@ $latestDiaryContext = function_exists('chimBuildLatestDiaryContextBlock')
             : []
     )
     : "";
+if (!empty($forceNarratorDiaryRecall) && empty($memoryInjectionCtx) && $latestDiaryContext !== '') {
+    $memoryInjectionCtx[] = [
+        'role' => 'user',
+        'content' => '<memory source="latest_diary" priority="high">'
+            . 'Use this requested diary entry to resolve prior scenes, events, and off-screen characters instead of substituting unrelated nearby actors. '
+            . $latestDiaryContext
+            . '</memory>',
+    ];
+    $latestDiaryContext = '';
+}
 $promptBottomInjections = function_exists('chimRenderPromptInjections')
     ? chimRenderPromptInjections("prompt_bottom", $promptInjectionContext)
     : "";
