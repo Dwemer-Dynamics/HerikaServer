@@ -13,25 +13,9 @@ require_once(__DIR__."/emote_moods.php");
 require_once(__DIR__."/core/event_type.php");
 require_once(__DIR__."/tts_pronunciation.php");
 
-/**
- * Narrator-specific override key for the latest diary entry context toggle.
- * Stored in core_narrator so the assigned Core Profile (which can be shared
- * with NPCs) is never mutated by narrator-only preferences.
- */
-define('_NARRATOR_LATEST_DIARY_CONTEXT_KEY', 'latest_diary_context_enabled');
-
-function chimIsCanonicalNarratorName(string $name): bool
-{
-    $canonical = class_exists('Narrator') ? Narrator::CANONICAL_NAME : 'The Narrator';
-
-    return strcasecmp(trim($name), $canonical) === 0;
-}
-
-/**
- * Read the narrator-specific latest diary context toggle.
- * Returns null when the narrator has never saved a value, so callers can
- * fall back to the assigned narrator profile setting.
- */
+// Narrator-specific override for the latest diary entry toggle. It lives in
+// core_narrator so the assigned Core Profile, which NPCs can share, is never changed.
+// Returns null when the Narrator has never saved a value.
 function chimGetNarratorLatestDiaryContextOverride(): ?bool
 {
     $db = $GLOBALS['db'] ?? null;
@@ -40,36 +24,27 @@ function chimGetNarratorLatestDiaryContextOverride(): ?bool
     }
 
     try {
-        $escapedKey = $db->escape(_NARRATOR_LATEST_DIARY_CONTEXT_KEY);
+        $escapedKey = $db->escape('latest_diary_context_enabled');
         $row = $db->fetchOne("SELECT value FROM core_narrator WHERE id = '{$escapedKey}' LIMIT 1");
     } catch (Throwable $e) {
         Logger::warn('[LATEST_DIARY_CONTEXT] Unable to load narrator override: ' . $e->getMessage());
         return null;
     }
 
-    if (!is_array($row) || !array_key_exists('value', $row) || $row['value'] === null) {
-        return null;
-    }
+    $value = is_array($row) ? trim(strval($row['value'] ?? '')) : '';
 
-    if (trim(strval($row['value'])) === '') {
-        return null;
-    }
-
-    return filter_var($row['value'], FILTER_VALIDATE_BOOLEAN);
+    return $value === '' ? null : filter_var($value, FILTER_VALIDATE_BOOLEAN);
 }
 
-/**
- * Resolve whether the latest diary entry should be injected for a speaker.
- * Ordinary NPCs always use their own Core Profile setting; the canonical
- * Narrator prefers its narrator-specific override when one has been saved.
- */
+// Only the canonical Narrator uses that override; every other NPC keeps its Core Profile setting.
 function chimIsLatestDiaryContextEnabledFor(string $npcName, array $profileData): bool
 {
     $metadata = json_decode(strval($profileData['metadata'] ?? '{}'), true);
     $profileEnabled = is_array($metadata)
         && filter_var($metadata['LATEST_DIARY_CONTEXT_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
-    if (!chimIsCanonicalNarratorName($npcName)) {
+    $canonicalNarrator = class_exists('Narrator') ? Narrator::CANONICAL_NAME : 'The Narrator';
+    if (strcasecmp(trim($npcName), $canonicalNarrator) !== 0) {
         return $profileEnabled;
     }
 
@@ -2623,7 +2598,7 @@ function chimMemorySearchInputFromRequest(array $gameRequest): string
     return trim((string)($payload['origin_line'] ?? ''));
 }
 
-function offerMemory($gameRequest, $useLocationContext = false, $forceRecall = false)
+function offerMemory($gameRequest, $useLocationContext = false)
 {
     global $db;
     
@@ -2643,54 +2618,34 @@ function offerMemory($gameRequest, $useLocationContext = false, $forceRecall = f
        $npc=""; 
     }
 
-    $timeThreshold=$forceRecall ? 0 : round($gameRequest[2]-(getGametsLimitFor($npc)/0.0000024),0)-1;
+    $timeThreshold=round($gameRequest[2]-(getGametsLimitFor($npc)/0.0000024),0)-1;
     $memorySearchInput = chimMemorySearchInputFromRequest($gameRequest);
 
     error_log("[DataSearchMemoryByVector] Using timeThreshold $timeThreshold");
     $contextKeywords  = implode(" ", lastKeyWordsContext(5,$npc));
 
-    $previousBypassWasSet = array_key_exists("PATCH_BYPASS_MINIME_EXTRACT", $GLOBALS);
-    $previousBypass = $GLOBALS["PATCH_BYPASS_MINIME_EXTRACT"] ?? null;
-    if ($forceRecall) {
-        Logger::info("[MEMORY] Forcing Narrator diary recall for an explicit continuity request");
-        $GLOBALS["PATCH_BYPASS_MINIME_EXTRACT"] = true;
-    }
-
-    try {
-        if ($GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["USE_TEXT2VEC"]) {
-            $localStartTime = microtime(true);
-            error_log("[DataSearchMemoryByVector calling]  : " . (microtime(true) - $localStartTime) . " seconds");
-            $res = DataSearchMemoryByVector($memorySearchInput, $npc, true,$timeThreshold,$forceRecall);
-            error_log("[DataSearchMemoryByVector called 1]  : " . (microtime(true) - $localStartTime) . " seconds");
-            $res2 = DataSearchMemoryByVector($memorySearchInput, $npc,false,$timeThreshold,$forceRecall);
+    if ($GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["USE_TEXT2VEC"]) {
+        $localStartTime = microtime(true);
+        error_log("[DataSearchMemoryByVector calling]  : " . (microtime(true) - $localStartTime) . " seconds");
+        $res = DataSearchMemoryByVector($memorySearchInput, $npc, true,$timeThreshold);
+        error_log("[DataSearchMemoryByVector called 1]  : " . (microtime(true) - $localStartTime) . " seconds");
+        $res2 = DataSearchMemoryByVector($memorySearchInput, $npc,false,$timeThreshold);
+        error_log("[DataSearchMemoryByVector called 2]  : " . (microtime(true) - $localStartTime) . " seconds");
+        if ($useLocationContext) {
+            $location=DataLastKnownLocationHuman();
+            $res2 = DataSearchMemoryByVector("$memorySearchInput $location", $npc,false,$timeThreshold);
             error_log("[DataSearchMemoryByVector called 2]  : " . (microtime(true) - $localStartTime) . " seconds");
-            if ($useLocationContext) {
-                $location=DataLastKnownLocationHuman();
-                $res2 = DataSearchMemoryByVector("$memorySearchInput $location", $npc,false,$timeThreshold,$forceRecall);
-                error_log("[DataSearchMemoryByVector called 2]  : " . (microtime(true) - $localStartTime) . " seconds");
-            }
+        }
 
-            if (isset($res[0]) && isset($res2[0])) {
-                $resFinal = ($res[0]['rank_any'] >= $res2[0]['rank_any']) ? $res : $res2;
-            } else {
-                $resFinal = isset($res[0]['rank_any']) ? $res : (isset($res2[0]['rank_any']) ? $res2 : []);
-            }
-            $memories = $resFinal;
+        if (isset($res[0]) && isset($res2[0])) {
+            $resFinal = ($res[0]['rank_any'] >= $res2[0]['rank_any']) ? $res : $res2;
         } else {
-            $memories=DataSearchMemory($memorySearchInput,$npc,$forceRecall);
+            $resFinal = isset($res[0]['rank_any']) ? $res : (isset($res2[0]['rank_any']) ? $res2 : []);
         }
-    } finally {
-        if ($forceRecall) {
-            if ($previousBypassWasSet) {
-                $GLOBALS["PATCH_BYPASS_MINIME_EXTRACT"] = $previousBypass;
-            } else {
-                unset($GLOBALS["PATCH_BYPASS_MINIME_EXTRACT"]);
-            }
-        }
-    }
-
-    if (!isset($memories)) {
-        $memories = [];
+        $memories = $resFinal;
+        
+    } else {
+        $memories=DataSearchMemory($memorySearchInput,$npc);
     }
    
     
@@ -2727,18 +2682,15 @@ function offerMemory($gameRequest, $useLocationContext = false, $forceRecall = f
     if (!empty($memory)) {
         Logger::trace("adding date to memory <".substr($memory,0,25)."...>");
         $hoursAgo=round(($gameRequest[2]-$memories[0]["gamets_truncated"]) * 0.0000024, 0);
-        $contextHours = getGametsLimitFor($npc);
-        if($hoursAgo > $contextHours) {
+        if($hoursAgo > getGametsLimitFor($GLOBALS["HERIKA_NAME"])) {
             $daysAgo = floor(($gameRequest[2]-$memories[0]["gamets_truncated"]) * 0.0000001);
             $sk_date = gamets2str_format_date($memories[0]["gamets_truncated"], 'Y-m-d');    
             $s_prefix = "{$daysAgo} days ago, on {$sk_date} ... ";
         } else {
             $s_prefix = "{$hoursAgo} hours ago ... ";
-            if (chimShouldDiscardRecentMemory((float)$hoursAgo, (float)$contextHours, (bool)$forceRecall)) {
-                Logger::trace("Discarding memory because recent ($hoursAgo} hours ago ... )"); ////DataSearchMemoryByVector filter  by gamets, this should happend if using it
-                error_log("[MEMORY] Discarding memory because recent ($hoursAgo} hours ago");
-                return "";// Do not offer memory if its recent
-            }
+            Logger::trace("Discarding memory because recent ($hoursAgo} hours ago ... )"); ////DataSearchMemoryByVector filter  by gamets, this should happend if using it
+            error_log("[MEMORY] Discarding memory because recent ($hoursAgo} hours ago");
+            return "";// Do not offer memory if its recent
         }
         $pattern = '/#Tags:.*/';
         $replacement = '';

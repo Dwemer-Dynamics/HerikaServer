@@ -1481,7 +1481,7 @@ if (!$isEmbed) {
                         </div>
                         <span class="toggle-label">&#x1F4D6; Include Latest Diary Entry</span>
                     </label>
-                    <span class="hint">Include The Narrator's latest diary entry in response context. This does not change NPCs using the same Core Profile.<?php echo $latestDiaryContextInherited ? ' Currently inherited from the assigned Core Profile until Narrator settings are saved.' : ''; ?></span>
+                    <span class="hint">Add The Narrator's most recent diary entry to its context. Narrator only &mdash; NPCs sharing the same Core Profile are unaffected.<?php echo $latestDiaryContextInherited ? ' Currently inherited from the Core Profile until you save Narrator settings.' : ''; ?></span>
                 </div>
 
                 <!-- Narration Section -->
