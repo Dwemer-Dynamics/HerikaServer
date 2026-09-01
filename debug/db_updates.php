@@ -7032,10 +7032,10 @@ INSERT INTO public.core_action_custom (
     (
         'ReadBook',
         'Read_Book',
-        'Initiate request to read a book. Reads (or continue reading) a book aloud for #PLAYER_NAME#. Book contents will be provided in next turn.',
+        'Reads or resumes a book aloud for #PLAYER_NAME#. The server supplies the exact book text on a later turn, so reply with one short acknowledgement and nothing more. Never invent, summarize, or quote book content.',
         '#HERIKA_NAME# starts reading book.',
         TRUE, TRUE, TRUE, TRUE,
-        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from <inventory> when available. A title alone works only when the book is already cached by the server."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from the <inventory> tag when the book is listed (e.g., 0x0001AFD5:The Real Barenziah). Otherwise send title words only, as close to the real title as #PLAYER_NAME#''s request allows, and the server will look it up in inventory."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
         '{}'::jsonb,
         TRUE, 0, '{}'::jsonb
     )
@@ -7048,6 +7048,28 @@ SQL
         Logger::info("Applied patch core_action 20260901001");
     } else {
         Logger::error("Failed to apply patch core_action 20260901001");
+    }
+}
+
+if ($checkVersion("core_action") < 20260901002) {
+    Logger::debug("Applying core_action 20260901002 - clarify book reading handoff");
+
+    $migrationOk = $db->execQuery(<<<'SQL'
+UPDATE public.core_action_custom
+   SET description = 'Reads or resumes a book aloud for #PLAYER_NAME#. The server supplies the exact book text on a later turn, so reply with one short acknowledgement and nothing more. Never invent, summarize, or quote book content.',
+       parameters_json = '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from the <inventory> tag when the book is listed (e.g., 0x0001AFD5:The Real Barenziah). Otherwise send title words only, as close to the real title as #PLAYER_NAME#''s request allows, and the server will look it up in inventory."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+       updated_at = NOW()
+ WHERE code_name = 'ReadBook'
+   AND description = 'Initiate request to read a book. Reads (or continue reading) a book aloud for #PLAYER_NAME#. Book contents will be provided in next turn.'
+   AND parameters_json = '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from <inventory> when available. A title alone works only when the book is already cached by the server."},"target":{"type":"string","description":"leave empty"}}}'::jsonb
+SQL
+    ) !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20260901002);
+        Logger::info("Applied patch core_action 20260901002");
+    } else {
+        Logger::error("Failed to apply patch core_action 20260901002");
     }
 }
 
