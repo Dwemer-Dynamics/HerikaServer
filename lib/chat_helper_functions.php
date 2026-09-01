@@ -13,6 +13,46 @@ require_once(__DIR__."/emote_moods.php");
 require_once(__DIR__."/core/event_type.php");
 require_once(__DIR__."/tts_pronunciation.php");
 
+// Narrator-specific override for the latest diary entry toggle. It lives in
+// core_narrator so the assigned Core Profile, which NPCs can share, is never changed.
+// Returns null when the Narrator has never saved a value.
+function chimGetNarratorLatestDiaryContextOverride(): ?bool
+{
+    $db = $GLOBALS['db'] ?? null;
+    if (!is_object($db) || !method_exists($db, 'fetchOne') || !method_exists($db, 'escape')) {
+        return null;
+    }
+
+    try {
+        $escapedKey = $db->escape('latest_diary_context_enabled');
+        $row = $db->fetchOne("SELECT value FROM core_narrator WHERE id = '{$escapedKey}' LIMIT 1");
+    } catch (Throwable $e) {
+        Logger::warn('[LATEST_DIARY_CONTEXT] Unable to load narrator override: ' . $e->getMessage());
+        return null;
+    }
+
+    $value = is_array($row) ? trim(strval($row['value'] ?? '')) : '';
+
+    return $value === '' ? null : filter_var($value, FILTER_VALIDATE_BOOLEAN);
+}
+
+// Only the canonical Narrator uses that override; every other NPC keeps its Core Profile setting.
+function chimIsLatestDiaryContextEnabledFor(string $npcName, array $profileData): bool
+{
+    $metadata = json_decode(strval($profileData['metadata'] ?? '{}'), true);
+    $profileEnabled = is_array($metadata)
+        && filter_var($metadata['LATEST_DIARY_CONTEXT_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+    $canonicalNarrator = class_exists('Narrator') ? Narrator::CANONICAL_NAME : 'The Narrator';
+    if (strcasecmp(trim($npcName), $canonicalNarrator) !== 0) {
+        return $profileEnabled;
+    }
+
+    $override = chimGetNarratorLatestDiaryContextOverride();
+
+    return $override === null ? $profileEnabled : $override;
+}
+
 function chimBuildLatestDiaryContextBlock(string $npcName, array $profileData): string
 {
     $safeNpcName = trim($npcName);
@@ -20,9 +60,7 @@ function chimBuildLatestDiaryContextBlock(string $npcName, array $profileData): 
         return '';
     }
 
-    $metadata = json_decode(strval($profileData['metadata'] ?? '{}'), true);
-    if (!is_array($metadata)
-        || !filter_var($metadata['LATEST_DIARY_CONTEXT_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+    if (!chimIsLatestDiaryContextEnabledFor($safeNpcName, $profileData)) {
         return '';
     }
 
