@@ -1334,6 +1334,7 @@ class BookReader
             return;
         }
         $spokenCount = 0;
+        $stateChanged = false;
         while (!empty($state['queue']) && $this->wasSpoken($state['lines'][$state['queue'][0]]['utterance_id'] ?? '')) {
             $spokenIndex = array_shift($state['queue']);
             $state['lines'][$spokenIndex]['spoken'] = true;
@@ -1363,7 +1364,7 @@ class BookReader
                 $nextLineSpoilerText = "";
             }
 
-            if ($linesEnqueued - $linesSpoken <= 1 && $state['comment_instruction_sent'] == false) {
+            if ($linesEnqueued - $linesSpoken <= 1 && empty($state['comment_instruction_sent'])) {
 
                 if ($this->commenter == $this->narratorName) {
                     $this->db->insert(
@@ -1406,10 +1407,11 @@ class BookReader
                 ]);
 
                 $state['comment_instruction_sent'] = true;
+                $stateChanged = true;
             }
         }
 
-        if ($spokenCount > 0) {
+        if ($spokenCount > 0 || $stateChanged) {
             $this->saveState($state);
         }
     }
@@ -1660,6 +1662,7 @@ class BookReader
             'status' => 'reading',
             'lines_queued_in_batch' => 0,
             'animation_end_done' => false,
+            'comment_instruction_sent' => false,
             'resume_mode' => $this->resumeMode,
         ];
 
