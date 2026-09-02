@@ -1669,6 +1669,7 @@ if (!$isEmbed) {
                             <span class="voice-filter-spinner" aria-hidden="true"></span>
                         </button>
                     </div>
+                    <audio id="tts_filter_preview_audio" class="voice-filter-audio" controls preload="none" aria-label="Voice filter sample"></audio>
                     <span class="hint" id="tts_filter_preset_hint">Effect applied to everything The Narrator speaks. Presets are fixed and cannot be edited.</span>
                     <span class="hint voice-filter-desc" id="tts_filter_preset_desc" role="status" aria-live="polite"><?php echo htmlspecialchars($narratorTtsFilterPresetDesc); ?></span>
                     <span class="hint voice-filter-status" id="tts_filter_preview_status" role="status" aria-live="polite"></span>
@@ -1678,16 +1679,15 @@ if (!$isEmbed) {
                         const desc = document.getElementById('tts_filter_preset_desc');
                         const playBtn = document.getElementById('tts_filter_preview_btn');
                         const statusLine = document.getElementById('tts_filter_preview_status');
+                        const audio = document.getElementById('tts_filter_preview_audio');
                         const profileSelect = document.getElementById('profile_id');
                         const voiceInput = document.getElementById('voiceid');
-                        if (!select || !desc || !playBtn || !statusLine) return;
+                        if (!select || !desc || !playBtn || !statusLine || !audio) return;
                         if (select.dataset.voiceFilterBound === '1') return;
                         select.dataset.voiceFilterBound = '1';
 
                         const PREVIEW_ENDPOINT = <?php echo json_encode($webRoot . '/ui/api/npc_voice_filter_preview.php'); ?>;
                         let previewKey = '';
-                        let previewUrl = '';
-                        let audio = null;
                         let requestToken = 0;
                         let pending = false;
 
@@ -1722,9 +1722,10 @@ if (!$isEmbed) {
 
                         // A generated sample only matches the profile, Voice ID and filter it was made from.
                         function discardPreview() {
-                            if (audio) { audio.pause(); audio = null; }
+                            try { audio.pause(); } catch (err) {}
+                            audio.removeAttribute('src');
+                            audio.classList.remove('is-ready');
                             previewKey = '';
-                            previewUrl = '';
                             requestToken++;
                             setStatus('', false);
                         }
@@ -1737,13 +1738,9 @@ if (!$isEmbed) {
                         select.addEventListener('change', syncDescription);
                         syncDescription();
 
+                        // Reveal the player once there is a generated sample to start, pause and seek.
                         function playPreview() {
-                            if (!audio) {
-                                audio = new Audio(previewUrl);
-                                audio.addEventListener('error', function () {
-                                    setStatus('The sample audio could not be played.', true);
-                                });
-                            }
+                            audio.classList.add('is-ready');
                             try { audio.currentTime = 0; } catch (err) {}
                             const started = audio.play();
                             if (!started || typeof started.then !== 'function') {
@@ -1753,12 +1750,12 @@ if (!$isEmbed) {
                             started.then(function () {
                                 setStatus('Playing sample.', false);
                             }).catch(function () {
-                                if (audio && audio.error) {
+                                if (audio.error) {
                                     setStatus('The sample audio could not be played.', true);
                                     return;
                                 }
-                                // Autoplay was blocked: the sample is ready and replays on the next press.
-                                setStatus('Sample ready. Press play again to listen.', false);
+                                // Autoplay was blocked: the sample is loaded, so the player below can start it.
+                                setStatus('Sample ready. Use the player to listen.', false);
                             });
                         }
 
@@ -1773,7 +1770,7 @@ if (!$isEmbed) {
                                 setStatus('Enter a Voice ID before playing a sample.', true);
                                 return;
                             }
-                            if (previewUrl && previewKey === fieldsKey(fields)) {
+                            if (previewKey !== '' && previewKey === fieldsKey(fields) && audio.getAttribute('src')) {
                                 playPreview();
                                 return;
                             }
@@ -1799,20 +1796,25 @@ if (!$isEmbed) {
                                 .then(function (data) {
                                     if (token !== requestToken) return;
                                     previewKey = fieldsKey(fields);
-                                    previewUrl = String(data.audio_url);
-                                    audio = null;
+                                    audio.src = String(data.audio_url);
                                     playPreview();
                                 })
                                 .catch(function (err) {
                                     if (token !== requestToken) return;
                                     previewKey = '';
-                                    previewUrl = '';
-                                    audio = null;
+                                    audio.removeAttribute('src');
+                                    audio.classList.remove('is-ready');
                                     setStatus(err && err.message ? err.message : 'The sample could not be generated. Try again.', true);
                                 })
                                 .then(function () {
                                     setBusy(false);
                                 });
+                        });
+
+                        audio.addEventListener('error', function () {
+                            if (audio.getAttribute('src')) {
+                                setStatus('The sample audio could not be played.', true);
+                            }
                         });
                     })();
                     </script>

@@ -326,8 +326,30 @@ main.player-narration-settings .hint.voice-filter-status.is-error {
     color: #ff9c6e;
 }
 
+/* The sample player only takes up layout space once a sample has been generated. */
+main.player-narration-settings .voice-filter-audio {
+    display: none;
+    width: 100%;
+    max-width: 320px;
+    height: 34px;
+    margin-top: 8px;
+}
+
+main.player-narration-settings .voice-filter-audio.is-ready {
+    display: block;
+}
+
+main.player-narration-settings .voice-filter-audio:focus-visible {
+    outline: 2px solid var(--pn-accent);
+    outline-offset: 2px;
+}
+
 @media (max-width: 480px) {
     main.player-narration-settings .voice-filter-row select {
         flex-basis: 100%;
+    }
+
+    main.player-narration-settings .voice-filter-audio {
+        max-width: none;
     }
 }

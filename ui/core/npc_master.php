@@ -2005,6 +2005,11 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
     @media (prefers-reduced-motion: reduce) { .npc-voice-filter-spinner { animation-duration:2.4s; } }
     .form-item .hint.npc-voice-filter-status { color:#cfd9ea; }
     .form-item .hint.npc-voice-filter-status.is-error { color:#ff9c6e; }
+    /* The preview player only takes up layout space once a sample has been generated. */
+    .npc-voice-filter-audio { display:none; width:100%; max-width:320px; height:34px; margin-top:8px; }
+    .npc-voice-filter-audio.is-ready { display:block; }
+    .npc-voice-filter-audio:focus-visible { outline:2px solid rgb(242,124,17); outline-offset:2px; }
+    @media (max-width: 480px) { .npc-voice-filter-audio { max-width:none; } }
     </style>
     <?php if ($editItem): ?>
         <input type="hidden" name="id" value="<?= htmlspecialchars($editItem["id"]) ?>">
@@ -2980,6 +2985,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
                     <span class="npc-voice-filter-spinner" aria-hidden="true"></span>
                 </button>
             </div>
+            <audio id="tts_filter_preview_audio" class="npc-voice-filter-audio" controls preload="none" aria-label="Voice filter preview"></audio>
             <small class="hint" id="tts_filter_preset_hint">Audio effect applied to everything this NPC says. Presets are fixed and cannot be edited.</small>
             <small class="hint npc-voice-filter-desc" id="tts_filter_preset_desc" data-npc-voice-filter-desc role="status" aria-live="polite"><?= htmlspecialchars($ttsFilterSelectedDesc) ?></small>
             <small class="hint npc-voice-filter-status" id="tts_filter_preview_status" role="status" aria-live="polite"></small>
@@ -2999,13 +3005,12 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
 
             const playBtn = document.getElementById('tts_filter_preview_btn');
             const status = document.getElementById('tts_filter_preview_status');
+            const audio = document.getElementById('tts_filter_preview_audio');
             const profileSelect = document.getElementById('profile_id');
             const voiceInput = document.getElementById('voiceid');
-            if (!playBtn || !status) return;
+            if (!playBtn || !status || !audio) return;
 
             let previewKey = '';
-            let previewUrl = '';
-            let audio = null;
             let requestToken = 0;
             let pending = false;
 
@@ -3031,9 +3036,10 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
             }
             // A generated preview is only valid for the values it was generated from.
             function discardPreview(){
-                if (audio) { audio.pause(); audio = null; }
+                try { audio.pause(); } catch (err) {}
+                audio.removeAttribute('src');
+                audio.classList.remove('is-ready');
                 previewKey = '';
-                previewUrl = '';
                 requestToken++;
                 setStatus('', false);
             }
@@ -3043,13 +3049,9 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
                 field.addEventListener('input', discardPreview);
             });
 
+            // Reveal the player once there is a generated preview to start, pause and seek.
             function playPreview(){
-                if (!audio) {
-                    audio = new Audio(previewUrl);
-                    audio.addEventListener('error', function(){
-                        setStatus('The preview audio could not be played.', true);
-                    });
-                }
+                audio.classList.add('is-ready');
                 try { audio.currentTime = 0; } catch (err) {}
                 const started = audio.play();
                 if (!started || typeof started.then !== 'function') {
@@ -3059,12 +3061,12 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
                 started.then(function(){
                     setStatus('Playing preview.', false);
                 }).catch(function(){
-                    if (audio && audio.error) {
+                    if (audio.error) {
                         setStatus('The preview audio could not be played.', true);
                         return;
                     }
-                    // Autoplay blocked: the preview is generated and stays ready to replay.
-                    setStatus('Preview ready. Press Play again to listen.', false);
+                    // Autoplay blocked: the preview is loaded, so the player below can start it.
+                    setStatus('Preview ready. Use the player to listen.', false);
                 });
             }
 
@@ -3075,7 +3077,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
                     setStatus('Select a profile and enter a Voice ID before previewing.', true);
                     return;
                 }
-                if (previewUrl && previewKey === fieldsKey(fields)) {
+                if (previewKey !== '' && previewKey === fieldsKey(fields) && audio.getAttribute('src')) {
                     playPreview();
                     return;
                 }
@@ -3101,20 +3103,25 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
                     .then(function(data){
                         if (token !== requestToken) return;
                         previewKey = fieldsKey(fields);
-                        previewUrl = String(data.audio_url);
-                        audio = null;
+                        audio.src = String(data.audio_url);
                         playPreview();
                     })
                     .catch(function(err){
                         if (token !== requestToken) return;
                         previewKey = '';
-                        previewUrl = '';
-                        audio = null;
+                        audio.removeAttribute('src');
+                        audio.classList.remove('is-ready');
                         setStatus(err && err.message ? err.message : 'Preview failed. Try again.', true);
                     })
                     .then(function(){
                         setBusy(false);
                     });
+            });
+
+            audio.addEventListener('error', function(){
+                if (audio.getAttribute('src')) {
+                    setStatus('The preview audio could not be played.', true);
+                }
             });
         })();
         </script>
