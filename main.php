@@ -217,14 +217,8 @@ if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext
         )
     );
 
-    // Stop book reading if any
-    $row = $db->fetchOne("SELECT value FROM public.conf_opts WHERE id='book_reading_state' LIMIT 1");
-    $decoded = json_decode($row['value'], true);
-    $decoded["status"] = "paused";
-    $db->upsertRowOnConflict('conf_opts', [
-        'id' => 'book_reading_state',
-        'value' => json_encode($decoded),
-    ], 'id');
+    // Pause only initialized playback. Pending uploads must keep their bounded waiting state.
+    bookReadStatePauseForInput();
 
     // unset($db);
 }
