@@ -1899,7 +1899,10 @@ FROM restore
                     WHERE companions LIKE CONCAT('%', '$oldName', '%')
                 ");
 
-        $currentNpcData["core"] .= ".Formerly known as {$currentNpcDataAlt["npc_name"]}";
+        if ($currentNpcDataAlt["npc_name"] !== $currentNpcData["npc_name"]) {
+            $currentNpcData["core"] .= ".Formerly known as {$currentNpcDataAlt["npc_name"]}";
+        }
+        
         $this->updateByArray($currentNpcData);
     }
 

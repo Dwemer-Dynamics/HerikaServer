@@ -2,8 +2,49 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/../../lib/logger.php';
+Logger::setCustomLog(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'chim-player-presence-snapshot-test.log');
 require_once __DIR__ . '/../../lib/chat_helper_functions.php';
+require_once __DIR__ . '/../../lib/core/npc_master.class.php';
 require_once __DIR__ . '/../../lib/player_mood_prompts.php';
+
+// Minimal database facade for rechat audience and profile lookups.
+final class RechatActiveAgentTestDb
+{
+    public function fetchAll(string $query): array
+    {
+        if (!str_contains($query, 'FROM eventlog')) {
+            return [];
+        }
+
+        return [[
+            'rowid' => 1,
+            'type' => 'chat',
+            'data' => 'Roster Speaker: What do you think? (talking to Inactive Bystander)',
+            'people' => '|Roster Speaker|Roster Player|Inactive Bystander|Active Bystander|',
+        ]];
+    }
+
+    public function fetchOne(string $query): array
+    {
+        if (str_contains($query, "WHERE type='infonpc'")) {
+            return [];
+        }
+
+        foreach (['Roster Speaker', 'Inactive Bystander', 'Active Bystander'] as $profileName) {
+            if (str_contains($query, "npc_name = '{$profileName}'")) {
+                return ['npc_name' => $profileName];
+            }
+        }
+
+        return [];
+    }
+
+    public function escape($value): string
+    {
+        return str_replace("'", "''", (string)$value);
+    }
+}
 
 final class PlayerPresenceSnapshotTest extends TestCase
 {
@@ -22,6 +63,69 @@ final class PlayerPresenceSnapshotTest extends TestCase
         $this->assertFalse(chimExecutionModeAllowsRechatEvent('WHISPER', 'narration'));
         $this->assertTrue(chimExecutionModeAllowsRechatEvent('STANDARD', 'rechat'));
         $this->assertTrue(chimExecutionModeAllowsRechatEvent('STANDARD', 'narration'));
+    }
+
+    public function testRechatOnlySelectsActorsInTheClientActiveRoster(): void
+    {
+        $hadDb = array_key_exists('db', $GLOBALS);
+        $previousDb = $GLOBALS['db'] ?? null;
+        $hadPlayerName = array_key_exists('PLAYER_NAME', $GLOBALS);
+        $previousPlayerName = $GLOBALS['PLAYER_NAME'] ?? null;
+        $hadRechatMode = array_key_exists('RECHAT_MODE', $GLOBALS);
+        $previousRechatMode = $GLOBALS['RECHAT_MODE'] ?? null;
+
+        try {
+            $GLOBALS['db'] = new RechatActiveAgentTestDb();
+            $GLOBALS['PLAYER_NAME'] = 'Roster Player';
+            $GLOBALS['RECHAT_MODE'] = 'conversational';
+
+            $payload = chimParseServerSideRechatPayload(json_encode([
+                'speaker' => 'Roster Speaker',
+                'listener_hint' => 'Inactive Bystander',
+                'rechat_target_hint' => 'Inactive Bystander',
+                'origin_line' => 'What do you think?',
+                'chain_id' => 'active-agent-roster',
+                'active_agents' => ['Roster Speaker', 'Active Bystander', ''],
+            ], JSON_THROW_ON_ERROR));
+            $activeRosterResult = chimResolveServerSideRechatTarget($payload);
+            $speakerOnlyResult = chimResolveServerSideRechatTarget(array_merge(
+                $payload,
+                ['active_agents' => ['Roster Speaker']]
+            ));
+            $inactiveSpeakerResult = chimResolveServerSideRechatTarget(array_merge(
+                $payload,
+                ['active_agents' => ['Active Bystander']]
+            ));
+            $legacyResult = chimResolveServerSideRechatTarget([
+                'speaker' => 'Roster Speaker',
+                'listener_hint' => 'Inactive Bystander',
+                'rechat_target_hint' => 'Inactive Bystander',
+                'origin_line' => 'What do you think?',
+                'chain_id' => 'legacy-client',
+            ]);
+
+            $this->assertSame(['Roster Speaker', 'Active Bystander'], $payload['active_agents']);
+            $this->assertSame('Active Bystander', $activeRosterResult['selected']);
+            $this->assertSame('', $speakerOnlyResult['selected']);
+            $this->assertSame('', $inactiveSpeakerResult['selected']);
+            $this->assertSame('Inactive Bystander', $legacyResult['selected']);
+        } finally {
+            if ($hadDb) {
+                $GLOBALS['db'] = $previousDb;
+            } else {
+                unset($GLOBALS['db']);
+            }
+            if ($hadPlayerName) {
+                $GLOBALS['PLAYER_NAME'] = $previousPlayerName;
+            } else {
+                unset($GLOBALS['PLAYER_NAME']);
+            }
+            if ($hadRechatMode) {
+                $GLOBALS['RECHAT_MODE'] = $previousRechatMode;
+            } else {
+                unset($GLOBALS['RECHAT_MODE']);
+            }
+        }
     }
 
     public function testCloseGroupSnapshotSurvivesDirectedReplies(): void

@@ -61,6 +61,7 @@ require_once($path . "lib/core/npc_master.class.php");
 require_once($path . "lib/core/core_profiles.class.php");
 require_once($path . "lib/semaphore_manager.class.php");
 require_once($path . "lib/pipeline_status.php");
+require_once($path . "lib/core/book_read.class.php");
 
 // PARSE GET RESPONSE into $gameRequest
 $cooldownPeriod = 600;
@@ -215,6 +216,16 @@ if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext
             'party'=>''
         )
     );
+
+    // Stop book reading if any
+    $row = $db->fetchOne("SELECT value FROM public.conf_opts WHERE id='book_reading_state' LIMIT 1");
+    $decoded = json_decode($row['value'], true);
+    $decoded["status"] = "paused";
+    $db->upsertRowOnConflict('conf_opts', [
+        'id' => 'book_reading_state',
+        'value' => json_encode($decoded),
+    ], 'id');
+
     // unset($db);
 }
 
@@ -2439,6 +2450,15 @@ if ($currentHold) {
     $rumorsText = build_rumor_prompt_xml($rumors);
 }
 
+$bookReadingActorName = function_exists('chimGetPromptCharacterName')
+    ? chimGetPromptCharacterName()
+    : ($GLOBALS["HERIKA_NAME"] ?? '');
+$bookReadingTask=bookReadIsNpcReading($bookReadingActorName);
+if ($bookReadingTask) {
+    $bookReadingTaskText="\n<current_task>\n#{$bookReadingActorName} is reading book '{$bookReadingTask}'\n</current_task>";
+} else {
+    $bookReadingTaskText="";
+}
 // Narration-like requests should stay descriptive instead of drifting into
 // ordinary conversation turns.
 $isVisionRequest = $gameRequest[0] === "vision";
@@ -2583,7 +2603,8 @@ if ($isVisionRequest) {
         "\n</character>" . $knowledgeSection .
         "\n\n<general_instructions>\n" . $GLOBALS["COMMAND_PROMPT"] .
         "\n</general_instructions>" . $actionsList . $nearbySections . $promptBottomInjections . $paralinguisticTagsPrompt .
-        "\n" . $rumorsText . "\n";
+        "\n" . $rumorsText.
+        "\n" . $bookReadingTaskText . "\n";
 
     $promptCompositionSections = [
         'roleplay_instructions' => $GLOBALS["PROMPT_HEAD"] ?? '',
@@ -2596,6 +2617,7 @@ if ($isVisionRequest) {
         'plugin_injections' => $promptBottomInjections ?? '',
         'paralinguistic_tags' => $paralinguisticTagsPrompt ?? '',
         'rumors' => $rumorsText ?? '',
+        'book_reading_task' => $bookReadingTaskText ?? ''
     ];
 }
 

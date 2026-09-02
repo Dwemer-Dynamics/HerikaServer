@@ -3617,7 +3617,53 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
 
                 error_log("[ACTION POSTFILTER Toast] Executed server-side");
 
-            } else if ($actionCodeNameResolved=="EquipGear") {
+            } else if ($actionCodeNameResolved=="PatrolArea") {
+                
+                 $npcMaster = new Npcmaster();
+
+                $npc = $npcMaster->getByName($actionParts[0]);
+                $skyrimCmd = new SkyrimCommandBuilder();
+                if ($npc) {
+                    $skyrimCmd = new SkyrimCommandBuilder();
+
+                    // Player is Linked ref.
+                    $json = $skyrimCmd->ActorUtil->SetLinkedRef("0x{$npc["refid"]}", "0x14",true);
+                    $skyrimCmd->send(cmd: $json);
+
+                    // Set alerted
+                    $json = $skyrimCmd->Actor->SetAlert("0x{$npc["refid"]}", true);
+                    $skyrimCmd->send(cmd: $json);
+                    
+                    // Add package override. AIAganetgenericPatrol.
+                    $localPckgFormID="031ab1";
+                    $loadOrderESP = $skyrimCmd->getLoadOrderESP();
+                    $PckgFormID="0x{$loadOrderESP}$localPckgFormID";
+
+                    $json = $skyrimCmd->ActorUtil->AddPackageOverride("","0x{$npc["refid"]}", $PckgFormID, 100);
+                    $skyrimCmd->send(cmd: $json);
+
+                    // Evaluate package to start patrol
+                    $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+                    $futureTrigger=time()+15;
+                    $skyrimCmd->send(cmd: $json, localts:$futureTrigger);
+
+                    $cnName= $GLOBALS["db"]->escape($actionParts[0]) ?? $actionParts[0];
+                    $GLOBALS["db"]->insert(
+                        'responselog',
+                        [
+
+                            'localts' => time(),
+                            'sent' => 0,
+                            'actor' => "rolemaster",
+                            'text' => "",
+                            'action' => "rolecommand|DebugNotification@{$cnName} is guarding the area",
+                            'tag' => "",
+
+                        ]
+                    );
+                }
+            
+            }  else if ($actionCodeNameResolved=="EquipGear") {
                 
                 $rawParameter = implode("@", array_slice($actionParts2, 1));
                 $payload = decodeFunctionExecutionParameterPayload($rawParameter);
@@ -3658,7 +3704,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
 
                 error_log("[ACTION POSTFILTER EquipGear] Executed server-side EquipItem(\"0x{$npc["refid"]}\", \"{$itemRef}\", true)");
             
-            }  else if ($actionCodeNameResolved=="Surrender") {
+            } else if ($actionCodeNameResolved=="Surrender") {
                 
                 $npcMaster = new Npcmaster();
 
@@ -3682,6 +3728,114 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 //unset($actionsCopy[$n]);// Remove action from list, so client does not execute it
 
                 error_log("[ACTION POSTFILTER Surrender] Executed server-side StopCombat(\"0x{$npc["refid"]}\")");
+
+            } else if ($actionCodeNameResolved=="ReadBook") {
+                
+                $rawParameter = implode("@", array_slice($actionParts2, 1));
+                $payload = decodeFunctionExecutionParameterPayload($rawParameter);
+                if (!is_array($payload)) {
+                    $payload = [];
+                }
+
+                $playerName = trim(strval($GLOBALS["PLAYER_NAME"] ?? "Player"));
+                $bookIdentifier = trim(strval($payload["item"] ?? ""));
+                $bookLookupByQuery = false;
+
+                $rootPath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
+                require_once $rootPath.'lib/core/book_read.class.php';
+
+                if ($bookIdentifier === '') {
+                    $activeReading = bookReadStateGet();
+                    if (
+                        !empty($activeReading['title'])
+                        && in_array($activeReading['status'] ?? '', ['reading', 'paused', 'unpaused', 'resume_requested'], true)
+                    ) {
+                        $bookIdentifier = trim(strval($activeReading['title']));
+                        error_log("[ACTION POSTFILTER ReadBook] Reused active book title '{$bookIdentifier}' for an empty action item");
+                    } else {
+                        $inputRows = $GLOBALS["db"]->fetchAll("
+                            SELECT data
+                            FROM public.eventlog
+                            WHERE type IN ('inputtext', 'narrator_inputtext')
+                              AND COALESCE(data, '') <> ''
+                            ORDER BY gamets DESC, ts DESC
+                            LIMIT 1
+                        ");
+                        $bookIdentifier = trim(strval($inputRows[0]['data'] ?? ''));
+                        $bookIdentifier = preg_replace('/^[^:]+:\s*/u', '', $bookIdentifier) ?? $bookIdentifier;
+                        $bookIdentifier = preg_replace('/\s*\(Talking to .*$/iu', '', $bookIdentifier) ?? $bookIdentifier;
+                        $bookIdentifier = trim($bookIdentifier);
+                        $bookLookupByQuery = $bookIdentifier !== '';
+                    }
+                }
+
+                if ($bookIdentifier === '') {
+                    error_log("[ACTION POSTFILTER ReadBook] Missing book name and request text");
+                    unset($actionsCopy[$n]);
+                    continue;
+                }
+
+                $parsedBook = bookReadParseBookIdentifier($bookIdentifier);
+                $bookName = trim(strval($parsedBook['title'] ?? ''));
+                $bookFormId = $parsedBook['form_id'] ?? null;
+                if ($bookName === '') {
+                    error_log("[ACTION POSTFILTER ReadBook] Missing book title after identifier parsing");
+                    unset($actionsCopy[$n]);
+                    continue;
+                }
+
+                $cnBookName = $GLOBALS["db"]->escape($bookName) ?? $bookName;
+                $bookCandidate = $GLOBALS["db"]->fetchOne(
+                    "SELECT * FROM books WHERE LOWER(title)=LOWER('{$cnBookName}') AND content IS NOT NULL AND BTRIM(content) <> '' ORDER BY rowid DESC LIMIT 1"
+                );
+                $readerName = function_exists('chimGetPromptCharacterName')
+                    ? chimGetPromptCharacterName()
+                    : ($GLOBALS["HERIKA_NAME"] ?? '');
+
+                if ($bookCandidate) {
+                    error_log("[ACTION POSTFILTER ReadBook] Book found: '{$bookCandidate['title']}'");
+                    $result = bookReadStateHandleBookAction($bookCandidate, $readerName, $playerName);
+                    // $result is one of: 'resumed', 'replaced', 'started', 'ignored'
+                    unset($actionsCopy[$n]);
+                } else if ($bookFormId !== null) {
+                    try {
+                        $pendingState = bookReadStateRequestContent($bookName, $bookFormId, $readerName, $playerName);
+                        $GLOBALS["db"]->insert('responselog', [
+                            'localts' => time(),
+                            'sent' => 0,
+                            'actor' => 'rolemaster',
+                            'text' => '',
+                            'action' => "rolecommand|UploadBookContent@{$bookFormId}@{$pendingState['request_token']}",
+                            'tag' => '',
+                        ]);
+                        error_log("[ACTION POSTFILTER ReadBook] Requested CHIM upload for uncached book '{$bookName}' ({$bookFormId})");
+                    } catch (Throwable $error) {
+                        error_log("[ACTION POSTFILTER ReadBook] Could not request book content: " . $error->getMessage());
+                    }
+                    unset($actionsCopy[$n]);
+                } else {
+                    try {
+                        $pendingState = bookReadStateRequestContentByQuery($bookName, $readerName, $playerName);
+                        $commandPayload = json_encode([
+                            'reader_b64' => base64_encode($readerName),
+                            'title_b64' => base64_encode($bookName),
+                            'request_token' => $pendingState['request_token'],
+                        ], JSON_UNESCAPED_SLASHES);
+                        $GLOBALS["db"]->insert('responselog', [
+                            'localts' => time(),
+                            'sent' => 0,
+                            'actor' => 'rolemaster',
+                            'text' => '',
+                            'action' => "rolecommand|UploadBookContentByTitle@{$commandPayload}",
+                            'tag' => '',
+                        ]);
+                        $lookupKind = $bookLookupByQuery ? 'request text' : 'title words';
+                        error_log("[ACTION POSTFILTER ReadBook] Requested CHIM inventory lookup by {$lookupKind} for uncached book '{$bookName}'");
+                    } catch (Throwable $error) {
+                        error_log("[ACTION POSTFILTER ReadBook] Could not request book content by title: " . $error->getMessage());
+                    }
+                    unset($actionsCopy[$n]);
+                }
             }
         }
     }

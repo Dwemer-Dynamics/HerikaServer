@@ -87,7 +87,7 @@ $GLOBALS["TASKS"]["middleterm"]["fn"] = function () {
                             p.metadata->>'MIDDLE_TERM_MEMORY_ENABLED') = '1' ");
 
         foreach ($allEnabledMtNpc as $npc) {
-            echo "[MIDDLETERM] {$npc["npc_name"]} has middleterm memory enabled".PHP_EOL;
+            // echo "[MIDDLETERM] {$npc["npc_name"]} has middleterm memory enabled".PHP_EOL;
             $GLOBALS["SELECTED_NPC"] = $npc["npc_name"];
             $GLOBALS['SELECTED_NPC_ID'] = (int)$npc['id'];
             require("cmd" . DIRECTORY_SEPARATOR . "generate.php");
@@ -232,11 +232,17 @@ $GLOBALS["TASKS"]["middleterm"]["fn"] = function () {
         $npc = chimNpcEffectiveProfile($npc);
         $mwdata = json_decode($npc["extended_data"], true);
         $mustInstructBypassBgl=false;
+        $actorEscaped=$GLOBALS["db"]->escape($npc["npc_name"]);
         $npcIsNearToPlayer = $GLOBALS["db"]->fetchOne("SELECT max(gamets) as n from eventlog where 
             type='infonpc_close' and 
-            (data like '%/" . ($GLOBALS["db"]->escape($npc["npc_name"])) . "%/'
-                or data like '" . ($GLOBALS["db"]->escape($npc["npc_name"])) . "%/'
-                or data like '%/" . ($GLOBALS["db"]->escape($npc["npc_name"])) . "')
+            (
+                people like '%|$actorEscaped|%'
+                or people like '$actorEscaped'
+                or people like '%|$actorEscaped (busy)|%'
+                or people like '%|$actorEscaped (hostile)|%'
+                or people like '%|$actorEscaped (in combat)|%'
+                or people like '%|$actorEscaped (far away)|%'
+            )
             and gamets > $oneHourAgoGamets");
 
         if (isset($npcIsNearToPlayer) && $npcIsNearToPlayer["n"] > 0) {

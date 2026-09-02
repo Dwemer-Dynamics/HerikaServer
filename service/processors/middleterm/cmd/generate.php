@@ -54,7 +54,7 @@ $query="SELECT summary as content,gamets_truncated FROM memory_summary where sum
 
 $contextDataFull=$GLOBALS["db"]->fetchAll($query);
 
-error_log("[MIDDLETERM] Retrieved " . count($contextDataFull) . " memory entries for $selectedNpc since gamets $gametsfrom");
+// error_log("[MIDDLETERM] Retrieved " . count($contextDataFull) . " memory entries for $selectedNpc since gamets $gametsfrom");
 // $task=DataGetCurrentTask();
 $limit=10;
 

@@ -2596,12 +2596,16 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
      or people like '%|$actorEscaped (in combat)|%'
      or people like '%|$actorEscaped (restrained)|%'
      or type='info_timeforward'
+     
     )
     " : " ").
     //((false)?" and gamets>".($currentGameTs-(60*60*60*60)):"").
     " {$ext_sqlfilter2} 
+    or (type='ext_held_item_pickup' or type='ext_held_item_drop')
     ORDER BY gamets desc, ts desc, rowid desc LIMIT {$nRecordsLimit} OFFSET 0 ";
     
+    // Note: Analyce this part: or (type='ext_held_item_pickup' or type='ext_held_item_drop')
+
     // error_log("[BGL] $query");   
     // Keep generic far-away actors out of historic context. Shared narrator rows are flattened on write.
     $results = $db->fetchAll($query);
@@ -6718,6 +6722,7 @@ function GetAnimationHex($mood)
 {
     $mood = extractFirstEmoteMood($mood);
     if ($mood === '') {
+        error_log("[ANIMATION] No mood found in input, returning empty string");
         return "";
     }
 
@@ -6768,7 +6773,7 @@ function GetAnimationHex($mood)
     foreach ($animationsDb as $an) {
         $candidates=explode(",", $an["animations"]);
         if (is_array($candidates)) {
-            error_log("[ANIMATION] {$an["animations"]}");
+            error_log("[ANIMATION CUSTOM] {$an["animations"]}");
             return $candidates[array_rand($candidates)];
         }
 
@@ -6778,13 +6783,13 @@ function GetAnimationHex($mood)
     foreach ($animationsDb as $an) {
         $candidates=explode(",", $an["animations"]);
         if (is_array($candidates)) {
-            // error_log("[ANIMATION] {$an["animations"]}");
+            error_log("[ANIMATION] {$an["animations"]}");
             return $candidates[array_rand($candidates)];
         }
 
     }
 
-
+    error_log("[ANIMATION] Checking for mood: $mood");
     if ($mood=="sarcastic") {
         return array_rand(array_flip([$ANIMATIONS["SarcasticMove"],$ANIMATIONS["CleanSweat"],$ANIMATIONS["Agitated"],$ANIMATIONS["ApplauseSarcastic"]]), 1);
         
@@ -6817,7 +6822,7 @@ function GetAnimationHex($mood)
         
         
     } else if ($mood=="amused") {
-        return $ANIMATIONS["ArmsRaised"];
+        return $ANIMATIONS["HandOnChinGesture"];
         
     } else if ($mood=="smirking") {
         return $ANIMATIONS["Nervous"];
@@ -6851,9 +6856,15 @@ function GetAnimationHex($mood)
         // No animation :(
         $GLOBALS["TTS_FFMPEG_FILTERS"]["tempo"]='atempo=1.45';
         
+    } else if ($mood=="lovely") {
+        return array_rand(array_flip([$ANIMATIONS["Positive"]]), 1);
+        
+    } else if ($mood=="happy") {
+        return array_rand(array_flip([$ANIMATIONS["HappyDialogue"]]), 1);
+        
     } 
                       
-    
+    error_log("[ANIMATION] no result found for mood: $mood");
     //error_log("Getting animation for mood: $mood, no result found");
     return "";
 
