@@ -110,9 +110,7 @@ try {
     $GLOBALS['FEATURES'] = $GLOBALS['FEATURES'] ?? [];
     $GLOBALS['FEATURES']['MISC'] = $GLOBALS['FEATURES']['MISC'] ?? [];
     $GLOBALS['FEATURES']['MISC']['TTS_RANDOM_PITCH'] = false;
-    $GLOBALS['PATCH_DONT_STORE_SPEECH_ON_DB'] = true;
     $GLOBALS['PATCH_OVERRIDE_VOICE'] = $voiceId;
-    $GLOBALS['TRACK'] = ['FILES_GENERATED' => []];
     unset(
         $GLOBALS['PATCH_OVERRIDE_VOICE_ID'],
         $GLOBALS['PATCH_OVERRIDE_TTS_LANGUAGE'],
@@ -120,8 +118,8 @@ try {
     );
     setActiveTtsFilterPreset($requestedPreset);
 
-    returnLines([$sampleText], false);
-    $generated = strval($GLOBALS['TRACK']['FILES_GENERATED'][0] ?? '');
+    $previewHash = $sampleText . '|npc-voice-filter-preview|' . bin2hex(random_bytes(8));
+    $generated = strval(callConfiguredTts($sampleText, 'neutral', $previewHash));
     $filename = basename($generated);
     if ($generated === '' || $filename === '') {
         throw new RuntimeException('No audio file was generated.');
@@ -148,7 +146,6 @@ try {
 } finally {
     clearActiveTtsFilterPreset();
     unset(
-        $GLOBALS['PATCH_DONT_STORE_SPEECH_ON_DB'],
         $GLOBALS['PATCH_OVERRIDE_VOICE'],
         $GLOBALS['SCRIPTLINE_ANIMATION_SENT']
     );
