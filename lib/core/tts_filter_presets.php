@@ -1,6 +1,6 @@
 <?php
 
-const CHIM_TTS_FILTER_PRESET_VERSION = 1;
+const CHIM_TTS_FILTER_PRESET_VERSION = 2;
 
 /**
  * Return the server-owned NPC voice-filter catalog.
@@ -11,7 +11,7 @@ function ttsFilterPresetCatalog()
         'none' => [
             'id' => 'none',
             'label' => 'None (default)',
-            'description' => 'No NPC-specific filter. Dialogue uses the voice engine output.',
+            'description' => 'No additional filter. Speech uses the voice engine output.',
             'exposed' => true,
             'filters' => [],
         ],
@@ -125,21 +125,6 @@ function ttsFilterPresetCatalog()
                 'aresample=24000',
             ],
         ],
-        'arcane' => [
-            'id' => 'arcane',
-            'label' => 'Arcane',
-            'description' => 'Adds bright presence and a gentle layered shimmer.',
-            'exposed' => true,
-            'filters' => [
-                'highpass=f=110',
-                'lowpass=f=12500',
-                'equalizer=f=3600:t=q:w=1.0:g=1.5',
-                'chorus=in_gain=0.75:out_gain=0.75:delays=18|24:decays=0.18|0.12:speeds=0.35|0.50:depths=1.5|2.0',
-                'acompressor=threshold=-22dB:ratio=2:attack=12:release=160:makeup=1.5',
-                'loudnorm=I=-17:TP=-1.5:LRA=8',
-                'aresample=24000',
-            ],
-        ],
         'cavernous' => [
             'id' => 'cavernous',
             'label' => 'Cavernous',
@@ -170,19 +155,91 @@ function ttsFilterPresetCatalog()
                 'aresample=24000',
             ],
         ],
-        'warped' => [
-            'id' => 'warped',
-            'label' => 'Warped',
-            'description' => 'Adds uneasy pitch and volume movement with a faint short echo.',
+        'quick' => [
+            'id' => 'quick',
+            'label' => 'Quick',
+            'description' => 'Speeds up delivery slightly while preserving the original voice.',
             'exposed' => true,
             'filters' => [
-                'highpass=f=100',
-                'lowpass=f=10500',
-                'vibrato=f=4.5:d=0.12',
-                'tremolo=f=3.2:d=0.10',
-                'acompressor=threshold=-22dB:ratio=2.5:attack=10:release=150:makeup=1.5',
-                'aecho=1.0:0.92:55:0.07',
-                'loudnorm=I=-17:TP=-1.5:LRA=8',
+                'highpass=f=70',
+                'lowpass=f=15000',
+                'atempo=1.12',
+                'acompressor=threshold=-20dB:ratio=2:attack=8:release=100:makeup=1.5',
+                'loudnorm=I=-16:TP=-1.5:LRA=8',
+                'aresample=24000',
+            ],
+        ],
+        'drawling' => [
+            'id' => 'drawling',
+            'label' => 'Drawling',
+            'description' => 'Slows delivery slightly and adds a touch of warmth.',
+            'exposed' => true,
+            'filters' => [
+                'highpass=f=65',
+                'lowpass=f=14500',
+                'equalizer=f=140:t=q:w=0.9:g=1.0',
+                'atempo=0.88',
+                'acompressor=threshold=-20dB:ratio=2:attack=10:release=140:makeup=1.5',
+                'loudnorm=I=-16:TP=-1.5:LRA=8',
+                'aresample=24000',
+            ],
+        ],
+        'measured' => [
+            'id' => 'measured',
+            'label' => 'Measured',
+            'description' => 'Makes delivery a little slower, steadier, and more even.',
+            'exposed' => true,
+            'filters' => [
+                'highpass=f=75',
+                'lowpass=f=14500',
+                'equalizer=f=2800:t=q:w=1.0:g=0.8',
+                'atempo=0.95',
+                'acompressor=threshold=-21dB:ratio=2.4:attack=12:release=150:makeup=1.5',
+                'loudnorm=I=-16:TP=-1.5:LRA=7',
+                'aresample=24000',
+            ],
+        ],
+        'soft_spoken' => [
+            'id' => 'soft_spoken',
+            'label' => 'Soft-Spoken',
+            'description' => 'Softens harsh edges and lowers the voice slightly without changing its character.',
+            'exposed' => true,
+            'filters' => [
+                'highpass=f=85',
+                'lowpass=f=12000',
+                'equalizer=f=3200:t=q:w=1.0:g=-1.2',
+                'acompressor=threshold=-24dB:ratio=1.8:attack=18:release=180:makeup=1',
+                'loudnorm=I=-19:TP=-2:LRA=9',
+                'aresample=24000',
+            ],
+        ],
+        'crisp' => [
+            'id' => 'crisp',
+            'label' => 'Crisp',
+            'description' => 'Adds mild clarity and presence for cleaner everyday speech.',
+            'exposed' => true,
+            'filters' => [
+                'highpass=f=85',
+                'lowpass=f=15500',
+                'equalizer=f=300:t=q:w=1.0:g=-1.0',
+                'equalizer=f=3400:t=q:w=0.9:g=2.0',
+                'acompressor=threshold=-21dB:ratio=2:attack=8:release=110:makeup=1.2',
+                'loudnorm=I=-16:TP=-1.5:LRA=8',
+                'aresample=24000',
+            ],
+        ],
+        'commanding' => [
+            'id' => 'commanding',
+            'label' => 'Commanding',
+            'description' => 'Adds restrained weight and firmness while keeping the voice natural.',
+            'exposed' => true,
+            'filters' => [
+                'highpass=f=60',
+                'lowpass=f=13500',
+                'equalizer=f=120:t=q:w=0.8:g=1.8',
+                'equalizer=f=2600:t=q:w=1.0:g=1.0',
+                'acompressor=threshold=-22dB:ratio=3:attack=8:release=130:makeup=2',
+                'loudnorm=I=-16:TP=-1.5:LRA=6',
                 'aresample=24000',
             ],
         ],

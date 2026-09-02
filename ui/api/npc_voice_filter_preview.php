@@ -71,29 +71,32 @@ if (function_exists('requireFilesRecursively')) {
 require_once($enginePath . 'prompt.includes.php');
 
 $profileId = intval($_POST['profile_id'] ?? 0);
+$requestedConnectorId = intval($_POST['tts_connector_id'] ?? 0);
 $voiceId = trim(strval($_POST['voiceid'] ?? ''));
 $requestedPreset = strtolower(trim(strval($_POST['tts_filter_preset'] ?? 'none')));
 $voiceIdLength = function_exists('mb_strlen') ? mb_strlen($voiceId, 'UTF-8') : strlen($voiceId);
 $availablePresets = ttsFilterPresetOptions(true);
 
-if ($profileId <= 0 || $voiceId === '' || $voiceIdLength > 160) {
+if (($profileId <= 0 && $requestedConnectorId <= 0) || $voiceId === '' || $voiceIdLength > 160) {
     chimNpcVoiceFilterPreviewRespond([
         'ok' => false,
-        'error' => 'Choose a profile and enter a Voice ID before playing a preview.',
+        'error' => 'Choose a TTS source and enter a Voice ID before playing a preview.',
     ], 400);
 }
 if (!isset($availablePresets[$requestedPreset])) {
     chimNpcVoiceFilterPreviewRespond(['ok' => false, 'error' => 'That voice filter is not available.'], 400);
 }
 
-$profile = (new CoreProfile())->getById($profileId);
-if (!is_array($profile)) {
-    chimNpcVoiceFilterPreviewRespond(['ok' => false, 'error' => 'The selected profile could not be loaded.'], 404);
-}
-
-$connectorId = intval($profile['tts_connector_id'] ?? 0);
+$connectorId = $requestedConnectorId;
 if ($connectorId <= 0) {
-    chimNpcVoiceFilterPreviewRespond(['ok' => false, 'error' => 'The selected profile has no TTS connector.'], 400);
+    $profile = (new CoreProfile())->getById($profileId);
+    if (!is_array($profile)) {
+        chimNpcVoiceFilterPreviewRespond(['ok' => false, 'error' => 'The selected profile could not be loaded.'], 404);
+    }
+    $connectorId = intval($profile['tts_connector_id'] ?? 0);
+}
+if ($connectorId <= 0) {
+    chimNpcVoiceFilterPreviewRespond(['ok' => false, 'error' => 'The selected TTS source has no connector.'], 400);
 }
 
 $ttsConnector = new TTSConnector();

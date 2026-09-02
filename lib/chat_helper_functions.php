@@ -1123,6 +1123,7 @@ function loadNarratorVoiceSettings() {
     clearActiveTtsFilterPreset();
 
     $narrator = new Narrator();
+    setActiveTtsFilterPreset($narrator->get('tts_filter_preset') ?? 'none');
     $profileId = $narrator->getProfileId();
     if ($profileId) {
         $profileManager = new CoreProfile();
