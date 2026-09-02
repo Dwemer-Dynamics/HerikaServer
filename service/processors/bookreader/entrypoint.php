@@ -67,11 +67,13 @@ $GLOBALS["TASKS"]["bookreader"]["fn"] = function () {
     $linesPerBatch = max(1, intval($GLOBALS['BOOK_READ_LINES_PER_BATCH'] ?? 8));
     $bookReadingVoice = filter_var($GLOBALS['BOOK_READING_VOICE'] ?? true, FILTER_VALIDATE_BOOLEAN);
 
+    $mode = $GLOBALS['BOOK_READ_RESUME_MODE'] ?? 'auto'; // stop or auto
+
     require_once $enginePath . 'lib/core/book_read.class.php';
 
     // ─── Main entry point ─────────────────────────────────────────────────────────
 
-    $reader = new BookReader($db, $last_ts, $last_gamets, $defaultNarratorName, $defaultPlayerName, $commenter, $animationsEnabled, $linesPerBatch, $bookReadingVoice);
+    $reader = new BookReader($db, $last_ts, $last_gamets, $defaultNarratorName, $defaultPlayerName, $commenter, $animationsEnabled, $linesPerBatch, $bookReadingVoice,$mode);
     $reader->run([]);
 }
 // ─── Example external caller usage (commented out) ────────────────────────────

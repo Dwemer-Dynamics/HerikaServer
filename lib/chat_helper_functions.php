@@ -1648,7 +1648,7 @@ function returnLines($lines,$writeOutput=true)
                 pipeline_status_set('tts', true);
 
                 // Generate regular TTS (either full text if no narration, or just dialogue after narration)
-                $ttsOutput = callNpcTtsWithFallback($responseForSpeech, $mood, $responseForTTS); // Third parameter is used to calculate md5 hash, must be the same as the text sent as main response.
+                $ttsOutput = callNpcTtsWithFallback($responseForSpeech, $mood, $responseForSubtitles); // Third parameter is used to calculate md5 hash, must be the same as the text sent as main response.
                 if (!$ttsOutput) {
                     if (isset($GLOBALS["TTS_FALLBACK_FNCT"])) {
                         $activePresetId = getActiveTtsFilterPresetId();
@@ -1659,7 +1659,7 @@ function returnLines($lines,$writeOutput=true)
                         }
 
                         try {
-                            $ttsOutput = $GLOBALS["TTS_FALLBACK_FNCT"]($responseForSpeech, $mood, $responseForTTS);
+                            $ttsOutput = $GLOBALS["TTS_FALLBACK_FNCT"]($responseForSpeech, $mood, $responseForSubtitles);
                         } finally {
                             if ($activePresetId !== 'none') {
                                 if ($hadAvoidTtsCache) {
