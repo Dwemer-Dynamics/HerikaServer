@@ -19,6 +19,7 @@ require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "eventlog_helper.php");
 $GLOBALS["ENGINE_PATH"]=$enginePath;
 
 require_once("{$enginePath}/lib/core/npc_master.class.php");
+require_once("{$enginePath}/lib/core/tts_filter_presets.php");
 
 
 //function renderSelect($obj, $fieldName, $labelText, $selectedValue = "") 
@@ -575,12 +576,28 @@ if (!function_exists('chimResolveNpcIdAfterCreate')) {
     }
 }
 
+// Keep the preset ID in the existing metadata JSON while treating the dropdown as its only editor.
+if (!function_exists('chimMergeTtsFilterPresetIntoPostedMetadata')) {
+    function chimMergeTtsFilterPresetIntoPostedMetadata(): void
+    {
+        if (!array_key_exists('tts_filter_preset', $_POST)) {
+            return;
+        }
+
+        $_POST['metadata'] = mergeTtsFilterPresetIntoMetadata(
+            $_POST['metadata'] ?? '{}',
+            $_POST['tts_filter_preset']
+        );
+    }
+}
+
 // Handle Create
 if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["create"])) {
     if (chimUiAutoLockProfileEnabled()) {
         $_POST['lock_profile'] = 1;
     }
     chimMergeBackgroundLifeGoalsIntoPostedExtendedData();
+    chimMergeTtsFilterPresetIntoPostedMetadata();
     if (file_exists(__DIR__."/../../ext/relationship_system/npc_save_handler.php")) {
         include(__DIR__."/../../ext/relationship_system/npc_save_handler.php");
     }
@@ -607,6 +624,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["update"])) {
             $_POST['lock_profile'] = 1;
         }
         chimMergeBackgroundLifeGoalsIntoPostedExtendedData();
+        chimMergeTtsFilterPresetIntoPostedMetadata();
         if (file_exists(__DIR__."/../../ext/relationship_system/npc_save_handler.php")) {
             include(__DIR__."/../../ext/relationship_system/npc_save_handler.php");
         }
@@ -640,6 +658,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["inline_update_npc"]))
         $id = intval($_POST['id'] ?? 0);
         $relationshipLockId = chimAcquireNpcRelationshipLock($id);
         chimMergeBackgroundLifeGoalsIntoPostedExtendedData();
+        chimMergeTtsFilterPresetIntoPostedMetadata();
 
         // Server-side: extended_data already has feature toggles synced by JS, just ensure it's valid JSON
         // The client-side JS only includes values that differ from profile defaults
@@ -1969,6 +1988,9 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
     .label-with-toggle input[type="checkbox"] { accent-color:#176529; transform: scale(1.8); transform-origin:center; cursor:pointer; }
     .span-2 { grid-column: 1 / -1; margin-bottom:12px; }
     .checkbox-inline { display:flex; align-items:center; gap:8px; }
+    #tts_filter_preset:focus-visible { outline:2px solid rgb(242,124,17); outline-offset:2px; border-color:rgb(242,124,17); }
+    .form-item .hint.npc-voice-filter-desc { color:#cfd9ea; }
+    .form-item .hint.npc-voice-filter-desc:empty { display:none; }
     </style>
     <?php if ($editItem): ?>
         <input type="hidden" name="id" value="<?= htmlspecialchars($editItem["id"]) ?>">
@@ -2411,7 +2433,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
 <script>
 (function(){
     const fieldSections = {
-        general: new Set(['npc_name','profile_id','lock_profile','npc_favorite','gender','race','base','refid','oghma_knowledge_tags','worldknowledge_tags','world_knowledge_tags','voiceid','faction','dynamic_profile','middle_term_enabled','individual_memory_enabled','auto_diary_enabled','auto_diary_wait_enabled','salutation_after_a_while','prompt_head']),
+        general: new Set(['npc_name','profile_id','lock_profile','npc_favorite','gender','race','base','refid','oghma_knowledge_tags','worldknowledge_tags','world_knowledge_tags','voiceid','tts_filter_preset','faction','dynamic_profile','middle_term_enabled','individual_memory_enabled','auto_diary_enabled','auto_diary_wait_enabled','salutation_after_a_while','prompt_head']),
         bios: new Set(['core','npc_static_bio','appearance','personality','occupation','skills','speechstyle','goals']),
         relationships: new Set(['relationships','relationships_jsonb','middle_term_latest']),
         'background-life': new Set(['background_life_goals']),
@@ -2911,6 +2933,47 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
             <input type="text" id="voiceid" name="voiceid" placeholder="malenord" value="<?= htmlspecialchars($editItem["voiceid"] ?? "") ?>">
             <small class="hint">Voice ID for TTS.</small>
         </div>
+
+        <?php
+        $ttsFilterPresets = ttsFilterPresetOptions(true);
+        if (!is_array($ttsFilterPresets)) $ttsFilterPresets = [];
+        $ttsFilterMetadataValue = is_array($editItem) ? ($editItem['metadata'] ?? []) : [];
+        $ttsFilterMetadata = is_array($ttsFilterMetadataValue)
+            ? $ttsFilterMetadataValue
+            : json_decode((string)$ttsFilterMetadataValue, true);
+        $ttsFilterSelected = normalizeTtsFilterPresetId(is_array($ttsFilterMetadata) ? ($ttsFilterMetadata['tts_filter_preset'] ?? '') : '');
+        if (!isset($ttsFilterPresets[$ttsFilterSelected])) $ttsFilterSelected = 'none';
+        $ttsFilterSelectedDesc = (string)($ttsFilterPresets[$ttsFilterSelected]['description'] ?? '');
+        ?>
+        <div class="form-item">
+            <label for="tts_filter_preset">Voice Filter</label>
+            <select id="tts_filter_preset" name="tts_filter_preset" aria-describedby="tts_filter_preset_hint tts_filter_preset_desc">
+                <?php foreach ($ttsFilterPresets as $presetKey => $presetRow) {
+                    $presetId = (string)(is_array($presetRow) ? ($presetRow['id'] ?? $presetKey) : $presetKey);
+                    $presetLabel = (string)(is_array($presetRow) ? ($presetRow['label'] ?? '') : '');
+                    if ($presetLabel === '') $presetLabel = ($presetId === 'none') ? 'None (default)' : $presetId;
+                    $presetDesc = (string)(is_array($presetRow) ? ($presetRow['description'] ?? '') : '');
+                ?>
+                <option value="<?= htmlspecialchars($presetId) ?>" data-filter-desc="<?= htmlspecialchars($presetDesc) ?>"<?= $presetId === $ttsFilterSelected ? ' selected' : '' ?>><?= htmlspecialchars($presetLabel) ?></option>
+                <?php } ?>
+            </select>
+            <small class="hint" id="tts_filter_preset_hint">Audio effect applied to everything this NPC says. Presets are fixed and cannot be edited.</small>
+            <small class="hint npc-voice-filter-desc" id="tts_filter_preset_desc" data-npc-voice-filter-desc role="status" aria-live="polite"><?= htmlspecialchars($ttsFilterSelectedDesc) ?></small>
+        </div>
+        <script>
+        (function(){
+            const select = document.getElementById('tts_filter_preset');
+            const desc = document.getElementById('tts_filter_preset_desc');
+            if (!select || !desc || select.dataset.voiceFilterBound === '1') return;
+            select.dataset.voiceFilterBound = '1';
+            function syncVoiceFilterDesc(){
+                const option = select.options[select.selectedIndex];
+                desc.textContent = option ? (option.getAttribute('data-filter-desc') || '') : '';
+            }
+            select.addEventListener('change', syncVoiceFilterDesc);
+            syncVoiceFilterDesc();
+        })();
+        </script>
 
         <?php
         // Check profile-level settings for these features
@@ -3805,6 +3868,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
     <?php } ?>
 </form>
 <?php if (isset($_GET['partial']) && $_GET['partial']=='1') { ?>
+    <?php $managedMetadataKeys = ['tts_filter_preset']; ?>
     <?php include(__DIR__."/tmpl/metadata_json_editor.php"); ?>
     </div>
     <?php exit; } ?>
@@ -6634,6 +6698,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
  // Provides a JSON editor for metadata field and form consolidation function (only needed if metadata field is present)
  // Hide metadata editor in modal partial view
  if (!(isset($_GET['partial']) && $_GET['partial']=='1')) {
+     $managedMetadataKeys = ['tts_filter_preset'];
      include(__DIR__."/tmpl/metadata_json_editor.php");
  }
 // Provides Datatables

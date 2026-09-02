@@ -12,6 +12,7 @@ require_once(__DIR__."/pipeline_status.php");
 require_once(__DIR__."/emote_moods.php");
 require_once(__DIR__."/core/event_type.php");
 require_once(__DIR__."/tts_pronunciation.php");
+require_once(__DIR__."/core/tts_filter_presets.php");
 
 // Narrator-specific override for the latest diary entry toggle. It lives in
 // core_narrator so the assigned Core Profile, which NPCs can share, is never changed.
@@ -124,7 +125,27 @@ function callConfiguredTts($textString, $mood, $stringforhash)
         return false;
     }
 
-    return $GLOBALS["TTS_IN_USE"]($textString, $mood, $stringforhash);
+    $activePresetId = getActiveTtsFilterPresetId();
+    $hadAvoidTtsCache = array_key_exists('AVOID_TTS_CACHE', $GLOBALS);
+    $previousAvoidTtsCache = $GLOBALS['AVOID_TTS_CACHE'] ?? null;
+    if ($activePresetId !== 'none') {
+        // Connector cache keys are text-only, so a filtered NPC must not reuse another voice or preset.
+        $GLOBALS['AVOID_TTS_CACHE'] = true;
+    }
+
+    try {
+        $ttsOutput = $GLOBALS["TTS_IN_USE"]($textString, $mood, $stringforhash);
+    } finally {
+        if ($activePresetId !== 'none') {
+            if ($hadAvoidTtsCache) {
+                $GLOBALS['AVOID_TTS_CACHE'] = $previousAvoidTtsCache;
+            } else {
+                unset($GLOBALS['AVOID_TTS_CACHE']);
+            }
+        }
+    }
+
+    return applyActiveTtsFilterPresetToOutput($ttsOutput);
 }
 
 function getNpcTtsFallbackCandidates(): array
@@ -1063,6 +1084,8 @@ function saveCurrentVoiceSettings() {
         'patch_override_tts_language' => $GLOBALS['PATCH_OVERRIDE_TTS_LANGUAGE'] ?? null,
         'has_patch_override_tts_options' => array_key_exists('PATCH_OVERRIDE_TTS_OPTIONS', $GLOBALS),
         'patch_override_tts_options' => $GLOBALS['PATCH_OVERRIDE_TTS_OPTIONS'] ?? null,
+        'has_active_tts_filter_preset' => array_key_exists('CHIM_TTS_FILTER_PRESET_ID', $GLOBALS),
+        'active_tts_filter_preset' => $GLOBALS['CHIM_TTS_FILTER_PRESET_ID'] ?? null,
     ];
 }
 
@@ -1096,6 +1119,8 @@ function loadNarratorVoiceSettings() {
     require_once(__DIR__ . "/core/narrator.class.php");
     require_once(__DIR__ . "/core/core_profiles.class.php");
     require_once(__DIR__ . "/core/tts_connector.class.php");
+
+    clearActiveTtsFilterPreset();
 
     $narrator = new Narrator();
     $profileId = $narrator->getProfileId();
@@ -1182,6 +1207,12 @@ function restoreVoiceSettings($savedSettings) {
         $GLOBALS['PATCH_OVERRIDE_TTS_OPTIONS'] = $savedSettings['patch_override_tts_options'];
     } else {
         unset($GLOBALS['PATCH_OVERRIDE_TTS_OPTIONS']);
+    }
+
+    if (!empty($savedSettings['has_active_tts_filter_preset'])) {
+        setActiveTtsFilterPreset($savedSettings['active_tts_filter_preset'], true);
+    } else {
+        clearActiveTtsFilterPreset();
     }
 }
 
@@ -1618,8 +1649,27 @@ function returnLines($lines,$writeOutput=true)
                 // Generate regular TTS (either full text if no narration, or just dialogue after narration)
                 $ttsOutput = callNpcTtsWithFallback($responseForSpeech, $mood, $responseForTTS); // Third parameter is used to calculate md5 hash, must be the same as the text sent as main response.
                 if (!$ttsOutput) {
-                    if (isset($GLOBALS["TTS_FALLBACK_FNCT"]))
-                        $ttsOutput = $GLOBALS["TTS_FALLBACK_FNCT"]($responseForSpeech, $mood, $responseForTTS);
+                    if (isset($GLOBALS["TTS_FALLBACK_FNCT"])) {
+                        $activePresetId = getActiveTtsFilterPresetId();
+                        $hadAvoidTtsCache = array_key_exists('AVOID_TTS_CACHE', $GLOBALS);
+                        $previousAvoidTtsCache = $GLOBALS['AVOID_TTS_CACHE'] ?? null;
+                        if ($activePresetId !== 'none') {
+                            $GLOBALS['AVOID_TTS_CACHE'] = true;
+                        }
+
+                        try {
+                            $ttsOutput = $GLOBALS["TTS_FALLBACK_FNCT"]($responseForSpeech, $mood, $responseForTTS);
+                        } finally {
+                            if ($activePresetId !== 'none') {
+                                if ($hadAvoidTtsCache) {
+                                    $GLOBALS['AVOID_TTS_CACHE'] = $previousAvoidTtsCache;
+                                } else {
+                                    unset($GLOBALS['AVOID_TTS_CACHE']);
+                                }
+                            }
+                        }
+                        $ttsOutput = applyActiveTtsFilterPresetToOutput($ttsOutput);
+                    }
                 }
 
                 // Clear TTS processing status
