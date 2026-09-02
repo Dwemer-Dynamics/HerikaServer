@@ -959,7 +959,7 @@ class BookReader
         error_log("[book_read] Generated TTS for line: '{$lineText}'");
 
         $utteranceId = $GLOBALS["SCRIPTLINE_UTTERANCE_ID"] ?? chimGenerateUtteranceId();
-        $queuedText = "{$lineText}////{$phoneticText}/1/{$this->playerName}/{$utteranceId}";
+        $queuedText = "{$lineText}////{$phoneticText}/1/explicit_disable_rechat/{$utteranceId}";
 
         $this->db->insert('responselog', [
             'localts' => time(),
@@ -1211,7 +1211,7 @@ class BookReader
             $lineText = trim($output_parts_queue[0]);
             $phoneticText = trim($output_parts_queue[4]);
             $utteranceId = $GLOBALS["SCRIPTLINE_UTTERANCE_ID"] ?? chimGenerateUtteranceId();
-            $queuedText = "{$lineText}///IdleStop/{$phoneticText}/1/{$this->playerName}/{$utteranceId}";
+            $queuedText = "{$lineText}///IdleStop/{$phoneticText}/1/explicit_disable_rechat/{$utteranceId}";
 
             $this->db->insert('responselog', [
                 'localts' => time(),
