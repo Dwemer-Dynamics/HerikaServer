@@ -193,6 +193,10 @@ function bookReadStatePauseForInput()
     }
 
     $status = strval($state['status'] ?? '');
+    if ($status === 'waiting_for_content') {
+        return false;
+    }
+
     if ($status === 'paused' && !bookReadStateHasInitializedSession($state)) {
         $state['status'] = 'done';
         $state['animation_end_done'] = true;
