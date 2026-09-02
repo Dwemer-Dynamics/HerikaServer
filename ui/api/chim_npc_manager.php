@@ -967,6 +967,14 @@ try {
         if ($operation === 'action') {
             chimNpcManagerRespond(['success' => true, 'data' => chimNpcManagerAction($input)]);
         }
+        if ($operation === 'reference_group_save') {
+            chimNpcManagerRespond(['success' => true, 'data' => chimNpcSaveReferenceGroup($input)]);
+        }
+        if ($operation === 'reference_group_delete') {
+            chimNpcManagerRespond(['success' => true, 'data' => chimNpcDeleteReferenceGroup(
+                (string)($input['group_key'] ?? '')
+            )]);
+        }
         if ($operation !== 'save') {
             throw new InvalidArgumentException('Unsupported NPC manager operation');
         }
@@ -983,6 +991,9 @@ try {
     }
     if ($operation === 'history') {
         chimNpcManagerRespond(['success' => true, 'data' => chimNpcManagerHistory($_GET)]);
+    }
+    if ($operation === 'reference_groups') {
+        chimNpcManagerRespond(['success' => true, 'data' => chimNpcReferenceGroupCatalog()]);
     }
     throw new InvalidArgumentException('Unsupported NPC manager operation');
 } catch (InvalidArgumentException $error) {

@@ -20,24 +20,233 @@ const CHIM_NPC_PROFILE_METADATA_KEYS = [
     '_chim_profile_epoch', '_chim_auto_link_group', '_chim_auto_link_disabled',
 ];
 
-// Skyrim.esm ACHR (placed reference) IDs verified against the game records, not NPC_ base IDs.
-// Exclude flashbacks, summoned copies, the Emperor's decoy and DA05SindingGhost (Hircine).
-const CHIM_NPC_ALTERNATE_REFERENCES = [
-    'astrid' => ['0001BDE8', '0004D6D1'], // AstridRef, AstridEndRef
-    'cicero' => ['000550F1', '0001E64A', '0009BCB0'], // Road, sanctuary, Dawnstar
-    'erik' => ['000350B8', '000656E2'], // ErikRef, HirelingEriktheSlayerref
-    'ulfric' => ['0001B131', '000BE32B', '00053C66', '000EA584'], // Normal, battle, Sovngarde
-    'sinding' => ['0002ABBD', '0006C1B8'], // DA05SindingREF, DA05SindingHumanREF
-    'kodlak' => ['0001A68F', '000AD3A6', '000DCCC1', '00058300', '00098BD4'], // Living, dead, ghost, Sovngarde
-];
+function chimNpcReferenceGroupBool($value): bool
+{
+    if (is_bool($value)) { return $value; }
+    return in_array(strtolower(trim((string)$value)), ['1', 't', 'true', 'yes', 'on'], true);
+}
+
+function chimNpcNormalizeLocalFormIds(array $values): ?array
+{
+    $references = [];
+    foreach ($values as $value) {
+        $reference = strtoupper(trim((string)$value));
+        if (str_starts_with($reference, '0X')) { $reference = substr($reference, 2); }
+        if (!preg_match('/^[0-9A-F]{1,8}$/', $reference)) { return null; }
+        $references[] = str_pad($reference, 8, '0', STR_PAD_LEFT);
+    }
+    return array_values(array_unique($references));
+}
+
+// Read either protected defaults or user rows in the same normalized shape.
+function chimNpcReferenceGroupTableRows(string $table): array
+{
+    if (!in_array($table, ['npc_profile_reference_groups', 'npc_profile_reference_groups_custom',
+        'combined_npc_profile_reference_groups'], true)) {
+        throw new InvalidArgumentException('Unsupported reference group table');
+    }
+    $rows = $GLOBALS['db']->fetchAll("SELECT group_key, display_name, plugin_name,
+        array_to_json(local_formids)::text AS local_formids_json, enabled
+        FROM public.{$table} ORDER BY lower(display_name), group_key");
+    $groups = [];
+    foreach ((array)$rows as $row) {
+        $references = json_decode((string)($row['local_formids_json'] ?? '[]'), true);
+        if (!is_array($references)) { continue; }
+        $references = chimNpcNormalizeLocalFormIds($references);
+        if ($references === null) { continue; }
+        $key = strtolower(trim((string)($row['group_key'] ?? '')));
+        $displayName = trim((string)($row['display_name'] ?? ''));
+        $pluginName = trim((string)($row['plugin_name'] ?? ''));
+        if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $key) || $displayName === '' ||
+            count($references) < 2 || count($references) > 32 ||
+            !preg_match('/^[^\\\\\/:*?"<>|\x00-\x1F]{1,250}\.(esm|esp|esl)$/i', $pluginName)) {
+            continue;
+        }
+        $groups[] = [
+            'group_key' => $key,
+            'display_name' => $displayName,
+            'plugin_name' => $pluginName,
+            'local_formids' => $references,
+            'enabled' => chimNpcReferenceGroupBool($row['enabled'] ?? false),
+        ];
+    }
+    return $groups;
+}
+
+// Return both source tables so editors can distinguish shipped data from overrides.
+function chimNpcReferenceGroupCatalog(): array
+{
+    $defaults = chimNpcReferenceGroupTableRows('npc_profile_reference_groups');
+    $custom = chimNpcReferenceGroupTableRows('npc_profile_reference_groups_custom');
+    $defaultKeys = array_fill_keys(array_column($defaults, 'group_key'), true);
+    foreach ($custom as &$group) {
+        $group['overrides_default'] = isset($defaultKeys[$group['group_key']]);
+    }
+    unset($group);
+    return ['defaults' => $defaults, 'custom' => $custom];
+}
+
+// Load the effective catalog once per request; custom rows replace defaults by key.
+function chimNpcAlternateReferenceGroups(): array
+{
+    static $groups = null;
+    if ($groups !== null) { return $groups; }
+    $groups = [];
+    foreach (chimNpcReferenceGroupTableRows('combined_npc_profile_reference_groups') as $group) {
+        if ($group['enabled']) { $groups[$group['group_key']] = $group; }
+    }
+    return $groups;
+}
+
+function chimNpcReferenceGroupKey(string $name): string
+{
+    $key = strtolower(trim((string)preg_replace('/[^a-z0-9]+/i', '_', $name), '_'));
+    return substr($key, 0, 64);
+}
+
+// Validate one complete custom row before it can affect actor identity.
+function chimNpcNormalizeReferenceGroupInput(array $input): array
+{
+    $displayName = trim((string)($input['display_name'] ?? ''));
+    $pluginName = trim((string)($input['plugin_name'] ?? ''));
+    $references = $input['local_formids'] ?? [];
+    if (!is_array($references)) { throw new InvalidArgumentException('Reference IDs must be a list'); }
+    $references = chimNpcNormalizeLocalFormIds($references);
+    if ($references === null) {
+        throw new InvalidArgumentException('Local FormIDs must contain 1 to 8 hexadecimal characters');
+    }
+    if ($displayName === '' || strlen($displayName) > 128) {
+        throw new InvalidArgumentException('Enter a character name up to 128 characters');
+    }
+    if (!preg_match('/^[^\\\\\/:*?"<>|\x00-\x1F]{1,250}\.(esm|esp|esl)$/i', $pluginName)) {
+        throw new InvalidArgumentException('Enter a valid ESM, ESP, or ESL plugin filename');
+    }
+    if (count($references) < 2 || count($references) > 32) {
+        throw new InvalidArgumentException('Enter between 2 and 32 local FormIDs');
+    }
+    $key = strtolower(trim((string)($input['group_key'] ?? '')));
+    $generatedKey = $key === '';
+    if ($generatedKey) { $key = chimNpcReferenceGroupKey($displayName); }
+    if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $key)) {
+        throw new InvalidArgumentException('The character name must contain letters or numbers');
+    }
+    return [
+        'group_key' => $key,
+        'display_name' => $displayName,
+        'plugin_name' => $pluginName,
+        'local_formids' => $references,
+        'enabled' => chimNpcReferenceGroupBool($input['enabled'] ?? true),
+        'generated_key' => $generatedKey,
+    ];
+}
+
+// Keep one stable plugin reference from activating two different character groups.
+function chimNpcAssertReferenceGroupsUnique(array $effective): void
+{
+    $seen = [];
+    foreach ($effective as $group) {
+        if (!$group['enabled']) { continue; }
+        foreach ($group['local_formids'] as $reference) {
+            $stableKey = strtolower($group['plugin_name'] . '|' . $reference);
+            if (isset($seen[$stableKey]) && $seen[$stableKey] !== $group['group_key']) {
+                throw new InvalidArgumentException("{$group['plugin_name']} {$reference} already belongs to another enabled group");
+            }
+            $seen[$stableKey] = $group['group_key'];
+        }
+    }
+}
+
+// Save an override atomically while keeping every enabled reference in one group only.
+function chimNpcSaveReferenceGroup(array $input): array
+{
+    $candidate = chimNpcNormalizeReferenceGroupInput($input);
+    $db = $GLOBALS['db'];
+    if ($db->execQuery('BEGIN') === false) { throw new RuntimeException('Cannot begin reference group update'); }
+    try {
+        if ($db->execQuery('LOCK TABLE public.npc_profile_reference_groups,
+            public.npc_profile_reference_groups_custom IN SHARE ROW EXCLUSIVE MODE') === false) {
+            throw new RuntimeException('Cannot lock reference groups');
+        }
+        $catalog = chimNpcReferenceGroupCatalog();
+        $defaults = array_column($catalog['defaults'], null, 'group_key');
+        $custom = array_column($catalog['custom'], null, 'group_key');
+        $key = $candidate['group_key'];
+        if ($candidate['generated_key'] && (isset($defaults[$key]) || isset($custom[$key]))) {
+            throw new InvalidArgumentException('A group with that character name already exists');
+        }
+        if (!isset($custom[$key]) && count($custom) >= 200) {
+            throw new InvalidArgumentException('The custom group limit of 200 has been reached');
+        }
+        unset($candidate['generated_key']);
+        $custom[$key] = $candidate;
+        $effective = array_replace($defaults, $custom);
+        chimNpcAssertReferenceGroupsUnique($effective);
+        $keySql = $db->escape($candidate['group_key']);
+        $nameSql = $db->escape($candidate['display_name']);
+        $pluginSql = $db->escape($candidate['plugin_name']);
+        $referenceSql = implode(',', array_map(
+            static fn($reference) => "'{$reference}'", $candidate['local_formids']
+        ));
+        $enabledSql = $candidate['enabled'] ? 'TRUE' : 'FALSE';
+        if ($db->execQuery("INSERT INTO public.npc_profile_reference_groups_custom
+            (group_key, display_name, plugin_name, local_formids, enabled, updated_at)
+            VALUES ('{$keySql}', '{$nameSql}', '{$pluginSql}', ARRAY[{$referenceSql}], {$enabledSql}, CURRENT_TIMESTAMP)
+            ON CONFLICT (group_key) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                plugin_name = EXCLUDED.plugin_name,
+                local_formids = EXCLUDED.local_formids,
+                enabled = EXCLUDED.enabled,
+                updated_at = CURRENT_TIMESTAMP") === false || $db->execQuery('COMMIT') === false) {
+            throw new RuntimeException('Cannot save reference group');
+        }
+    } catch (Throwable $error) {
+        $db->execQuery('ROLLBACK');
+        throw $error;
+    }
+    return chimNpcReferenceGroupCatalog();
+}
+
+// Delete only user data; removing an override reveals its shipped default again.
+function chimNpcDeleteReferenceGroup(string $key): array
+{
+    $key = strtolower(trim($key));
+    if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $key)) {
+        throw new InvalidArgumentException('Invalid reference group');
+    }
+    $db = $GLOBALS['db'];
+    if ($db->execQuery('BEGIN') === false) { throw new RuntimeException('Cannot begin reference group reset'); }
+    try {
+        if ($db->execQuery('LOCK TABLE public.npc_profile_reference_groups,
+            public.npc_profile_reference_groups_custom IN SHARE ROW EXCLUSIVE MODE') === false) {
+            throw new RuntimeException('Cannot lock reference groups');
+        }
+        $catalog = chimNpcReferenceGroupCatalog();
+        $defaults = array_column($catalog['defaults'], null, 'group_key');
+        $custom = array_column($catalog['custom'], null, 'group_key');
+        unset($custom[$key]);
+        chimNpcAssertReferenceGroupsUnique(array_replace($defaults, $custom));
+        $keySql = $db->escape($key);
+        if ($db->execQuery("DELETE FROM public.npc_profile_reference_groups_custom
+            WHERE group_key = '{$keySql}'") === false || $db->execQuery('COMMIT') === false) {
+            throw new RuntimeException('Cannot delete reference group');
+        }
+    } catch (Throwable $error) {
+        $db->execQuery('ROLLBACK');
+        throw $error;
+    }
+    return chimNpcReferenceGroupCatalog();
+}
 
 // Names can differ (Erik the Slayer, translations); only exact originating references establish equivalence.
 function chimNpcAlternateGroup(array $row): ?string
 {
     $source = chimParseNpcReferenceSource(chimNpcProfileJson($row['metadata'] ?? null)['refid_source'] ?? '');
-    if (!$source || strcasecmp($source['plugin_name'], 'Skyrim.esm') !== 0) { return null; }
-    foreach (CHIM_NPC_ALTERNATE_REFERENCES as $group => $references) {
-        if (in_array($source['local_formid'], $references, true)) { return $group; }
+    if (!$source) { return null; }
+    foreach (chimNpcAlternateReferenceGroups() as $group => $definition) {
+        if (strcasecmp($source['plugin_name'], $definition['plugin_name']) === 0 &&
+            in_array($source['local_formid'], $definition['local_formids'], true)) {
+            return $group;
+        }
     }
     return null;
 }
@@ -48,8 +257,11 @@ function chimNpcAutoLinkProfile(array $actor): bool
     $group = chimNpcAlternateGroup($actor);
     if ($group === null || (int)$actor['id'] <= 1) { return false; }
     $db = $GLOBALS['db'];
+    $definition = chimNpcAlternateReferenceGroups()[$group] ?? null;
+    if (!$definition) { return false; }
     $sources = implode(',', array_map(
-        static fn($ref) => "'skyrim.esm|" . strtolower($ref) . "'", CHIM_NPC_ALTERNATE_REFERENCES[$group]
+        static fn($ref) => "'" . $GLOBALS['db']->escape(strtolower($definition['plugin_name'] . '|' . $ref)) . "'",
+        $definition['local_formids']
     ));
     $query = "SELECT * FROM core_npc_master WHERE lower(metadata->>'refid_source') IN ({$sources}) ORDER BY id";
     // Repeated registrations need no write lock, snapshots or epoch change once the group is settled.
@@ -290,7 +502,9 @@ function chimNpcUnlinkProfiles(int $id, string $revision): void
         $epoch = bin2hex(random_bytes(16));
         // Opt out the whole known group, including alternate versions not encountered yet.
         $disableIds = implode(',', array_map(static fn($row) => (int)$row['id'],
-            array_filter($members, static fn($row) => chimNpcAlternateGroup($row) !== null))) ?: '0';
+            array_filter($members, static fn($row) =>
+                !empty(chimNpcProfileJson($row['metadata'] ?? null)['_chim_auto_link_group']) ||
+                chimNpcAlternateGroup($row) !== null))) ?: '0';
         if ($db->execQuery("UPDATE core_npc_master SET profile_owner_npc_id = NULL,
             metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb) - '_chim_auto_link_group',
                 '{_chim_profile_epoch}', '\"{$epoch}\"'::jsonb)
