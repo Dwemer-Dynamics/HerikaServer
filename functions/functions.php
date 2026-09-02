@@ -3663,7 +3663,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     );
                 }
             
-            }  else if ($actionCodeNameResolved=="EquipGear") {
+            } else if ($actionCodeNameResolved=="EquipGear") {
                 
                 $rawParameter = implode("@", array_slice($actionParts2, 1));
                 $payload = decodeFunctionExecutionParameterPayload($rawParameter);
