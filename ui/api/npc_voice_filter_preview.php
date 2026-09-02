@@ -2,6 +2,9 @@
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type');
 
 // Return a consistent preview response without exposing connector configuration.
 function chimNpcVoiceFilterPreviewRespond(array $payload, int $status = 200): void
@@ -11,7 +14,12 @@ function chimNpcVoiceFilterPreviewRespond(array $payload, int $status = 200): vo
     exit;
 }
 
-if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+$requestMethod = strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+if ($requestMethod === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+if ($requestMethod !== 'POST') {
     chimNpcVoiceFilterPreviewRespond(['ok' => false, 'error' => 'Use POST to generate a voice preview.'], 405);
 }
 
