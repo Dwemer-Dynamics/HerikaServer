@@ -45,6 +45,10 @@ $typeFilter = chimBuildVisibleEventLogWhereClause($db, $selectedEventType, $save
 $includeRelationships = ($selectedEventType === '' || $selectedEventType === 'relationship')
     && !in_array('relationship', $savedHiddenTypes, true);
 
+if (empty($GLOBALS['RELATIONSHIP_SYSTEM_ENABLED'])) {
+    $includeRelationships=false;
+}
+
 // If specific event types are requested (for MCM conversation history panel)
 if (isset($_GET["event_types"]) && !empty($_GET["event_types"])) {
     $allowedTypes = explode(',', $_GET["event_types"]);
