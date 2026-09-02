@@ -155,9 +155,53 @@ function bookReadStateForBook(array $bookCandidate, $narratorName, $playerName, 
 }
 
 /**
+ * Confirm that a reading state contains the generated playback data required by active statuses.
+ */
+function bookReadStateHasInitializedSession($state)
+{
+    return is_array($state)
+        && intval($state['rowid'] ?? 0) > 0
+        && isset($state['chunks'])
+        && is_array($state['chunks'])
+        && isset($state['lines'])
+        && is_array($state['lines']);
+}
+
+/**
+ * Pause initialized playback for a new user turn without changing pending content requests.
+ */
+function bookReadStatePauseForInput()
+{
+    $state = bookReadStateGet();
+    if (!is_array($state)) {
+        return false;
+    }
+
+    $status = strval($state['status'] ?? '');
+    if ($status === 'paused' && !bookReadStateHasInitializedSession($state)) {
+        $state['status'] = 'done';
+        $state['animation_end_done'] = true;
+        bookReadStateSet($state);
+        error_log("[book_read] Cleared malformed paused state without initialized book content.");
+        return false;
+    }
+
+    if (
+        bookReadStateHasInitializedSession($state)
+        && in_array($status, ['reading', 'unpaused', 'resume_requested'], true)
+    ) {
+        $state['status'] = 'paused';
+        bookReadStateSet($state);
+        return true;
+    }
+
+    return false;
+}
+
+/**
  * Build the shared waiting state for an uncached Skyrim book upload.
  *
- * @return array The saved waiting state, including its correlation token.
+ * @return array The saved waiting state, including its correlation token and a transient creation flag.
  */
 function bookReadStateCreateContentRequest($bookTitle, $formId, $narratorName, $playerName, $commenter = null, $allowTitleLookup = false, $titleIsQuery = false)
 {
@@ -167,12 +211,31 @@ function bookReadStateCreateContentRequest($bookTitle, $formId, $narratorName, $
     }
 
     $requestedAt = time();
+    $normalizedTitle = bookReadNormalizeTitle($bookTitle);
+    $resolvedCommenter = $commenter ?: $narratorName;
+    $requestedTitleQuery = $titleIsQuery ? $normalizedTitle : '';
+    $currentState = bookReadStateGet();
+    if (
+        is_array($currentState)
+        && ($currentState['status'] ?? '') === 'waiting_for_content'
+        && intval($currentState['expires_at'] ?? 0) >= $requestedAt
+        && bookReadNormalizeTitle($currentState['title'] ?? '') === $normalizedTitle
+        && bookReadNormalizeFormId($currentState['requested_form_id'] ?? '') === $normalizedFormId
+        && trim(strval($currentState['requested_title_query'] ?? '')) === $requestedTitleQuery
+        && strval($currentState['narrator'] ?? '') === strval($narratorName)
+        && strval($currentState['player'] ?? '') === strval($playerName)
+        && strval($currentState['commenter'] ?? ($currentState['narrator'] ?? '')) === strval($resolvedCommenter)
+    ) {
+        $currentState['_request_created'] = false;
+        return $currentState;
+    }
+
     $state = [
-        'title' => bookReadNormalizeTitle($bookTitle),
+        'title' => $normalizedTitle,
         'rowid' => null,
         'narrator' => $narratorName,
         'player' => $playerName,
-        'commenter' => $commenter ?: $narratorName,
+        'commenter' => $resolvedCommenter,
         'status' => 'waiting_for_content',
         'requested_form_id' => $normalizedFormId,
         'request_token' => bin2hex(random_bytes(16)),
@@ -184,6 +247,7 @@ function bookReadStateCreateContentRequest($bookTitle, $formId, $narratorName, $
     }
 
     bookReadStateSet($state);
+    $state['_request_created'] = true;
     return $state;
 }
 
@@ -268,7 +332,10 @@ function bookReadStateAcceptUploadedContent(array $bookCandidate, $formId, $requ
         if (!bookReadTitleMatchesQuery($bookCandidate['title'] ?? '', $requestedTitleQuery)) {
             return false;
         }
-    } else if (bookReadNormalizeTitle($bookCandidate['title'] ?? '') !== bookReadNormalizeTitle($state['title'] ?? '')) {
+    } else if (
+        $expectedFormId === null
+        && bookReadNormalizeTitle($bookCandidate['title'] ?? '') !== bookReadNormalizeTitle($state['title'] ?? '')
+    ) {
         return false;
     }
 
@@ -339,7 +406,7 @@ function bookReadIsNpcReading($npcName)
     }
 
     $activeStatuses = ['reading', 'paused', 'unpaused', 'resume_requested'];
-    if (!in_array($state['status'], $activeStatuses, true)) {
+    if (!in_array($state['status'], $activeStatuses, true) || !bookReadStateHasInitializedSession($state)) {
         return false;
     }
 
@@ -423,6 +490,12 @@ class BookReader
 
         // ── 3. Load persisted state and decide if we are resuming ─────────────
         $state = $this->loadState();
+        if (($state['status'] ?? '') === 'paused' && !bookReadStateHasInitializedSession($state)) {
+            $state['status'] = 'done';
+            $state['animation_end_done'] = true;
+            $this->saveState($state);
+            error_log("[book_read] Cleared malformed paused state without initialized book content.");
+        }
         if (($state['status'] ?? '') === 'waiting_for_content') {
             $this->handleWaitingForContent($state);
         }

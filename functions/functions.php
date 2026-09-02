@@ -3800,15 +3800,19 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 } else if ($bookFormId !== null) {
                     try {
                         $pendingState = bookReadStateRequestContent($bookName, $bookFormId, $readerName, $playerName);
-                        $GLOBALS["db"]->insert('responselog', [
-                            'localts' => time(),
-                            'sent' => 0,
-                            'actor' => 'rolemaster',
-                            'text' => '',
-                            'action' => "rolecommand|UploadBookContent@{$bookFormId}@{$pendingState['request_token']}",
-                            'tag' => '',
-                        ]);
-                        error_log("[ACTION POSTFILTER ReadBook] Requested CHIM upload for uncached book '{$bookName}' ({$bookFormId})");
+                        if (!empty($pendingState['_request_created'])) {
+                            $GLOBALS["db"]->insert('responselog', [
+                                'localts' => time(),
+                                'sent' => 0,
+                                'actor' => 'rolemaster',
+                                'text' => '',
+                                'action' => "rolecommand|UploadBookContent@{$bookFormId}@{$pendingState['request_token']}",
+                                'tag' => '',
+                            ]);
+                            error_log("[ACTION POSTFILTER ReadBook] Requested CHIM upload for uncached book '{$bookName}' ({$bookFormId})");
+                        } else {
+                            error_log("[ACTION POSTFILTER ReadBook] Reused pending CHIM upload request for '{$bookName}' ({$bookFormId})");
+                        }
                     } catch (Throwable $error) {
                         error_log("[ACTION POSTFILTER ReadBook] Could not request book content: " . $error->getMessage());
                     }
@@ -3816,21 +3820,25 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 } else {
                     try {
                         $pendingState = bookReadStateRequestContentByQuery($bookName, $readerName, $playerName);
-                        $commandPayload = json_encode([
-                            'reader_b64' => base64_encode($readerName),
-                            'title_b64' => base64_encode($bookName),
-                            'request_token' => $pendingState['request_token'],
-                        ], JSON_UNESCAPED_SLASHES);
-                        $GLOBALS["db"]->insert('responselog', [
-                            'localts' => time(),
-                            'sent' => 0,
-                            'actor' => 'rolemaster',
-                            'text' => '',
-                            'action' => "rolecommand|UploadBookContentByTitle@{$commandPayload}",
-                            'tag' => '',
-                        ]);
-                        $lookupKind = $bookLookupByQuery ? 'request text' : 'title words';
-                        error_log("[ACTION POSTFILTER ReadBook] Requested CHIM inventory lookup by {$lookupKind} for uncached book '{$bookName}'");
+                        if (!empty($pendingState['_request_created'])) {
+                            $commandPayload = json_encode([
+                                'reader_b64' => base64_encode($readerName),
+                                'title_b64' => base64_encode($bookName),
+                                'request_token' => $pendingState['request_token'],
+                            ], JSON_UNESCAPED_SLASHES);
+                            $GLOBALS["db"]->insert('responselog', [
+                                'localts' => time(),
+                                'sent' => 0,
+                                'actor' => 'rolemaster',
+                                'text' => '',
+                                'action' => "rolecommand|UploadBookContentByTitle@{$commandPayload}",
+                                'tag' => '',
+                            ]);
+                            $lookupKind = $bookLookupByQuery ? 'request text' : 'title words';
+                            error_log("[ACTION POSTFILTER ReadBook] Requested CHIM inventory lookup by {$lookupKind} for uncached book '{$bookName}'");
+                        } else {
+                            error_log("[ACTION POSTFILTER ReadBook] Reused pending CHIM inventory lookup for '{$bookName}'");
+                        }
                     } catch (Throwable $error) {
                         error_log("[ACTION POSTFILTER ReadBook] Could not request book content by title: " . $error->getMessage());
                     }
