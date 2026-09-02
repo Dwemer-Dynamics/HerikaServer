@@ -1991,6 +1991,20 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
     #tts_filter_preset:focus-visible { outline:2px solid rgb(242,124,17); outline-offset:2px; border-color:rgb(242,124,17); }
     .form-item .hint.npc-voice-filter-desc { color:#cfd9ea; }
     .form-item .hint.npc-voice-filter-desc:empty { display:none; }
+    .npc-voice-filter-row { display:flex; align-items:center; gap:8px; }
+    .npc-voice-filter-row select { flex:1 1 auto; min-width:0; }
+    .npc-voice-filter-play { flex:0 0 auto; align-self:stretch; display:inline-flex; align-items:center; justify-content:center; width:34px; min-height:34px; padding:0; border:1px solid #4a4a4a; border-radius:6px; background:#242424; color:#cfd9ea; cursor:pointer; }
+    .npc-voice-filter-play:hover:not(:disabled) { border-color:rgb(242,124,17); color:rgb(242,124,17); }
+    .npc-voice-filter-play:focus-visible { outline:2px solid rgb(242,124,17); outline-offset:2px; border-color:rgb(242,124,17); }
+    .npc-voice-filter-play:disabled { opacity:.65; cursor:default; }
+    .npc-voice-filter-play svg { display:block; fill:currentColor; }
+    .npc-voice-filter-spinner { display:none; width:13px; height:13px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:npcVoiceFilterSpin .7s linear infinite; }
+    .npc-voice-filter-play.is-loading svg { display:none; }
+    .npc-voice-filter-play.is-loading .npc-voice-filter-spinner { display:block; }
+    @keyframes npcVoiceFilterSpin { to { transform:rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .npc-voice-filter-spinner { animation-duration:2.4s; } }
+    .form-item .hint.npc-voice-filter-status { color:#cfd9ea; }
+    .form-item .hint.npc-voice-filter-status.is-error { color:#ff9c6e; }
     </style>
     <?php if ($editItem): ?>
         <input type="hidden" name="id" value="<?= htmlspecialchars($editItem["id"]) ?>">
@@ -2947,18 +2961,28 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
         ?>
         <div class="form-item">
             <label for="tts_filter_preset">Voice Filter</label>
-            <select id="tts_filter_preset" name="tts_filter_preset" aria-describedby="tts_filter_preset_hint tts_filter_preset_desc">
-                <?php foreach ($ttsFilterPresets as $presetKey => $presetRow) {
-                    $presetId = (string)(is_array($presetRow) ? ($presetRow['id'] ?? $presetKey) : $presetKey);
-                    $presetLabel = (string)(is_array($presetRow) ? ($presetRow['label'] ?? '') : '');
-                    if ($presetLabel === '') $presetLabel = ($presetId === 'none') ? 'None (default)' : $presetId;
-                    $presetDesc = (string)(is_array($presetRow) ? ($presetRow['description'] ?? '') : '');
-                ?>
-                <option value="<?= htmlspecialchars($presetId) ?>" data-filter-desc="<?= htmlspecialchars($presetDesc) ?>"<?= $presetId === $ttsFilterSelected ? ' selected' : '' ?>><?= htmlspecialchars($presetLabel) ?></option>
-                <?php } ?>
-            </select>
+            <div class="npc-voice-filter-row">
+                <select id="tts_filter_preset" name="tts_filter_preset" aria-describedby="tts_filter_preset_hint tts_filter_preset_desc">
+                    <?php foreach ($ttsFilterPresets as $presetKey => $presetRow) {
+                        $presetId = (string)(is_array($presetRow) ? ($presetRow['id'] ?? $presetKey) : $presetKey);
+                        $presetLabel = (string)(is_array($presetRow) ? ($presetRow['label'] ?? '') : '');
+                        if ($presetLabel === '') $presetLabel = ($presetId === 'none') ? 'None (default)' : $presetId;
+                        $presetDesc = (string)(is_array($presetRow) ? ($presetRow['description'] ?? '') : '');
+                    ?>
+                    <option value="<?= htmlspecialchars($presetId) ?>" data-filter-desc="<?= htmlspecialchars($presetDesc) ?>"<?= $presetId === $ttsFilterSelected ? ' selected' : '' ?>><?= htmlspecialchars($presetLabel) ?></option>
+                    <?php } ?>
+                </select>
+                <button type="button" id="tts_filter_preview_btn" class="npc-voice-filter-play" title="Play sample with this voice filter" aria-label="Play sample with this voice filter" aria-describedby="tts_filter_preview_status">
+                    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+                        <path d="M8.52 2.18 4.93 5.05H2.32a.8.8 0 0 0-.8.8v4.3c0 .44.36.8.8.8h2.61l3.59 2.87a.6.6 0 0 0 .98-.47V2.65a.6.6 0 0 0-.98-.47z"/>
+                        <path d="M11.66 5.36a.7.7 0 0 0-.9 1.07 2.03 2.03 0 0 1 0 3.14.7.7 0 0 0 .9 1.07 3.43 3.43 0 0 0 0-5.28z"/>
+                    </svg>
+                    <span class="npc-voice-filter-spinner" aria-hidden="true"></span>
+                </button>
+            </div>
             <small class="hint" id="tts_filter_preset_hint">Audio effect applied to everything this NPC says. Presets are fixed and cannot be edited.</small>
             <small class="hint npc-voice-filter-desc" id="tts_filter_preset_desc" data-npc-voice-filter-desc role="status" aria-live="polite"><?= htmlspecialchars($ttsFilterSelectedDesc) ?></small>
+            <small class="hint npc-voice-filter-status" id="tts_filter_preview_status" role="status" aria-live="polite"></small>
         </div>
         <script>
         (function(){
@@ -2972,6 +2996,126 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
             }
             select.addEventListener('change', syncVoiceFilterDesc);
             syncVoiceFilterDesc();
+
+            const playBtn = document.getElementById('tts_filter_preview_btn');
+            const status = document.getElementById('tts_filter_preview_status');
+            const profileSelect = document.getElementById('profile_id');
+            const voiceInput = document.getElementById('voiceid');
+            if (!playBtn || !status) return;
+
+            let previewKey = '';
+            let previewUrl = '';
+            let audio = null;
+            let requestToken = 0;
+            let pending = false;
+
+            function currentFields(){
+                return {
+                    profile_id: profileSelect ? String(profileSelect.value || '') : '',
+                    voiceid: voiceInput ? String(voiceInput.value || '').trim() : '',
+                    tts_filter_preset: String(select.value || '')
+                };
+            }
+            function fieldsKey(fields){
+                return JSON.stringify([fields.profile_id, fields.voiceid, fields.tts_filter_preset]);
+            }
+            function setStatus(message, isError){
+                status.textContent = message;
+                status.classList.toggle('is-error', !!isError);
+            }
+            function setBusy(busy){
+                pending = busy;
+                playBtn.disabled = busy;
+                playBtn.classList.toggle('is-loading', busy);
+                playBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
+            }
+            // A generated preview is only valid for the values it was generated from.
+            function discardPreview(){
+                if (audio) { audio.pause(); audio = null; }
+                previewKey = '';
+                previewUrl = '';
+                requestToken++;
+                setStatus('', false);
+            }
+            [profileSelect, voiceInput, select].forEach(function(field){
+                if (!field) return;
+                field.addEventListener('change', discardPreview);
+                field.addEventListener('input', discardPreview);
+            });
+
+            function playPreview(){
+                if (!audio) {
+                    audio = new Audio(previewUrl);
+                    audio.addEventListener('error', function(){
+                        setStatus('The preview audio could not be played.', true);
+                    });
+                }
+                try { audio.currentTime = 0; } catch (err) {}
+                const started = audio.play();
+                if (!started || typeof started.then !== 'function') {
+                    setStatus('Playing preview.', false);
+                    return;
+                }
+                started.then(function(){
+                    setStatus('Playing preview.', false);
+                }).catch(function(){
+                    if (audio && audio.error) {
+                        setStatus('The preview audio could not be played.', true);
+                        return;
+                    }
+                    // Autoplay blocked: the preview is generated and stays ready to replay.
+                    setStatus('Preview ready. Press Play again to listen.', false);
+                });
+            }
+
+            playBtn.addEventListener('click', function(){
+                if (pending) return;
+                const fields = currentFields();
+                if (fields.profile_id === '' || fields.voiceid === '') {
+                    setStatus('Select a profile and enter a Voice ID before previewing.', true);
+                    return;
+                }
+                if (previewUrl && previewKey === fieldsKey(fields)) {
+                    playPreview();
+                    return;
+                }
+                discardPreview();
+                const token = ++requestToken;
+                setBusy(true);
+                setStatus('Generating preview…', false);
+                const body = new FormData();
+                body.append('profile_id', fields.profile_id);
+                body.append('voiceid', fields.voiceid);
+                body.append('tts_filter_preset', fields.tts_filter_preset);
+                fetch('../api/npc_voice_filter_preview.php', { method: 'POST', body: body, credentials: 'same-origin' })
+                    .then(function(response){
+                        return response.json().catch(function(){
+                            throw new Error('Preview failed. Try again.');
+                        }).then(function(data){
+                            if (!response.ok || !data || data.ok !== true || !data.audio_url) {
+                                throw new Error((data && data.error) ? String(data.error) : 'Preview failed. Try again.');
+                            }
+                            return data;
+                        });
+                    })
+                    .then(function(data){
+                        if (token !== requestToken) return;
+                        previewKey = fieldsKey(fields);
+                        previewUrl = String(data.audio_url);
+                        audio = null;
+                        playPreview();
+                    })
+                    .catch(function(err){
+                        if (token !== requestToken) return;
+                        previewKey = '';
+                        previewUrl = '';
+                        audio = null;
+                        setStatus(err && err.message ? err.message : 'Preview failed. Try again.', true);
+                    })
+                    .then(function(){
+                        setBusy(false);
+                    });
+            });
         })();
         </script>
 
