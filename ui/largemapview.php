@@ -2490,7 +2490,7 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl/head.html");
                                         <li><strong>Last Position Timestamp:</strong>
                                             (<?php echo $marker['last_pos_ts']; ?>)</li>
                                         <li><strong>Last Reported:</strong>
-                                            <span title="<?php echo htmlentities($marker['last_letter']); ?>">
+                                            <span title="<?php echo htmlentities($marker['last_letter']??''); ?>">
                                                 (<?php echo $marker['last_report']; ?>)
                                                 <?php if (isset($marker['last_letter']))
                                                     echo "<span style='cursor:help'>📜</span>"; ?>
@@ -2621,14 +2621,14 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl/head.html");
                         echo '</div>';
                         echo '<div class="location-marker-label">';
                         echo '<div class="location-name">' . htmlspecialchars($location['name']) . '</div>';
-                        echo '<div class="location-desc">' . htmlspecialchars($location['description']) . '</div>';
-                        echo '<div class="location-tags">' . htmlspecialchars($location['tags']) . '</div>';
+                        echo '<div class="location-desc">' . htmlspecialchars($location['description']??'') . '</div>';
+                        echo '<div class="location-tags">' . htmlspecialchars($location['tags']??'') . '</div>';
                         echo '<div class="location-coords">';
-                        echo 'Type: ' . htmlspecialchars($location['type']) . '<br/>';
-                        echo 'Coords: ' . $location['ingame_x'] . ', ' . $location['ingame_y'] . '<br/>';
-                        echo 'FormID: ' . htmlspecialchars($location['formID']) . '<br/>';
-                        echo 'Tags: ' . htmlspecialchars($location['tags']) . '<br/>';
-                        echo '' . htmlspecialchars($location['symbol']) . '<br/>';
+                        echo 'Type: ' . htmlspecialchars($location['type']??'') . '<br/>';
+                        echo 'Coords: ' . ($location['ingame_x']??'') . ', ' . ($location['ingame_y']??'') . '<br/>';
+                        echo 'FormID: ' . htmlspecialchars($location['formID']??'') . '<br/>';
+                        echo 'Tags: ' . htmlspecialchars($location['tags']??'') . '<br/>';
+                        echo '' . htmlspecialchars($location['symbol']??'') . '<br/>';
                         echo '</div>';
                         echo '</div>';
                         echo '</div>' . PHP_EOL;
