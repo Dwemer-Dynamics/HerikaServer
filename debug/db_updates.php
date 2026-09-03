@@ -7035,7 +7035,7 @@ INSERT INTO public.core_action_custom (
         'Reads or resumes a book aloud for #PLAYER_NAME#. The server supplies the exact book text on a later turn, so reply with one short acknowledgement and nothing more. Never invent, summarize, or quote book content.',
         '#HERIKA_NAME# starts reading book.',
         TRUE, TRUE, TRUE, TRUE,
-        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from the <inventory> tag when the book is listed (e.g., 0x0001AFD5:The Real Barenziah). Otherwise send title words only, as close to the real title as #PLAYER_NAME#''s request allows, and the server will look it up in inventory."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Pick only a readable book, note, letter, or journal. Use its exact BaseID:BookTitle if it appears in <inventory>; otherwise use only the closest title words from #PLAYER_NAME#''s request. Never substitute armor, food, another item, or the first inventory entry."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
         '{}'::jsonb,
         TRUE, 0, '{}'::jsonb
     )
@@ -7070,6 +7070,27 @@ SQL
         Logger::info("Applied patch core_action 20260901002");
     } else {
         Logger::error("Failed to apply patch core_action 20260901002");
+    }
+}
+
+if ($checkVersion("core_action") < 20260902001) {
+    Logger::debug("Applying core_action 20260902001 - prevent invalid ReadBook item substitution");
+
+    $migrationOk = $db->execQuery(<<<'SQL'
+UPDATE public.core_action_custom
+   SET parameters_json = '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Pick only a readable book, note, letter, or journal. Use its exact BaseID:BookTitle if it appears in <inventory>; otherwise use only the closest title words from #PLAYER_NAME#''s request. Never substitute armor, food, another item, or the first inventory entry."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+       updated_at = NOW()
+ WHERE code_name = 'ReadBook'
+   AND description = 'Reads or resumes a book aloud for #PLAYER_NAME#. The server supplies the exact book text on a later turn, so reply with one short acknowledgement and nothing more. Never invent, summarize, or quote book content.'
+   AND parameters_json = '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from the <inventory> tag when the book is listed (e.g., 0x0001AFD5:The Real Barenziah). Otherwise send title words only, as close to the real title as #PLAYER_NAME#''s request allows, and the server will look it up in inventory."},"target":{"type":"string","description":"leave empty"}}}'::jsonb
+SQL
+    ) !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20260902001);
+        Logger::info("Applied patch core_action 20260902001");
+    } else {
+        Logger::error("Failed to apply patch core_action 20260902001");
     }
 }
 
