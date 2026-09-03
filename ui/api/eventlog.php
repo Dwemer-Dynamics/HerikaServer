@@ -46,7 +46,7 @@ $includeRelationships = ($selectedEventType === '' || $selectedEventType === 're
     && !in_array('relationship', $savedHiddenTypes, true);
 
 if (empty($GLOBALS['RELATIONSHIP_SYSTEM_ENABLED'])) {
-    $includeRelationships=false;    
+    $includeRelationships=false;
 }
 
 // If specific event types are requested (for MCM conversation history panel)
