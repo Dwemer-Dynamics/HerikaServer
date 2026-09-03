@@ -1888,7 +1888,7 @@ function returnLines($lines,$writeOutput=true)
             $originalRequest[0]="prechat";
             $originalRequest[1]++;
             $originalRequest[2]++;
-            if ($GLOBALS["SCRIPTLINE_LISTENER"]) {
+            if ($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]) {
                 // Check if speaking from distance (shouting)
                 if (!defined('SHOUTING_DISTANCE_THRESHOLD')) {
                     define('SHOUTING_DISTANCE_THRESHOLD', 800);
@@ -1896,9 +1896,9 @@ function returnLines($lines,$writeOutput=true)
                 $distance = isset($GLOBALS["LAST_SPEECH_DISTANCE"]) ? $GLOBALS["LAST_SPEECH_DISTANCE"] : 0.0;
                 $incomingSpatialVolume = isset($GLOBALS["LAST_SPEECH_VOLUME"]) ? floatval($GLOBALS["LAST_SPEECH_VOLUME"]) : null;
                 if (($incomingSpatialVolume !== null && $incomingSpatialVolume < 0.35) || $distance > SHOUTING_DISTANCE_THRESHOLD) {
-                    $addonlistener = buildDialogueTargetSuffix($GLOBALS["SCRIPTLINE_LISTENER"], true);
+                    $addonlistener = buildDialogueTargetSuffix($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"], true);
                 } else {
-                    $addonlistener = buildDialogueTargetSuffix($GLOBALS["SCRIPTLINE_LISTENER"], false);
+                    $addonlistener = buildDialogueTargetSuffix($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"], false);
                 }
             } else {
                 $addonlistener="";
@@ -1915,16 +1915,16 @@ function returnLines($lines,$writeOutput=true)
             $originalRequest[0]="chat";
             $originalRequest[1]++;
             $originalRequest[2]++;
-            if ($GLOBALS["SCRIPTLINE_LISTENER"]) {
+            if ($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]) {
                 // Check if speaking from distance (shouting)
                 if (!defined('SHOUTING_DISTANCE_THRESHOLD')) {
                     define('SHOUTING_DISTANCE_THRESHOLD', 800);
                 }
                 $distance = isset($GLOBALS["LAST_SPEECH_DISTANCE"]) ? $GLOBALS["LAST_SPEECH_DISTANCE"] : 0.0;
                 if ($distance > SHOUTING_DISTANCE_THRESHOLD) {
-                    $addonlistener = buildDialogueTargetSuffix($GLOBALS["SCRIPTLINE_LISTENER"], true);
+                    $addonlistener = buildDialogueTargetSuffix($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"], true);
                 } else {
-                    $addonlistener = buildDialogueTargetSuffix($GLOBALS["SCRIPTLINE_LISTENER"], false);
+                    $addonlistener = buildDialogueTargetSuffix($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"], false);
                 }
             } else {
                 $addonlistener="";
