@@ -2275,6 +2275,10 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
 .npc-relationship-history-header p { margin:3px 0 0; color:#aaa; font-size:0.82rem; }
 .npc-relationship-history-list { display:grid; gap:6px; margin:0; padding:0; list-style:none; }
 .npc-relationship-history-item {
+    display:grid;
+    grid-template-columns:minmax(0, 1fr) auto;
+    gap:6px 12px;
+    align-items:start;
     padding:7px 10px;
     border-left:3px solid rgb(242,124,17);
     border-radius:0 4px 4px 0;
@@ -2284,6 +2288,25 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
     font-size:0.8rem;
     font-weight:700;
 }
+.npc-relationship-history-item-main { min-width:0; }
+.npc-relationship-undo-btn {
+    min-height:32px;
+    padding:5px 12px;
+    border:1px solid #4a4a4a;
+    border-radius:6px;
+    background:#2a2a2a;
+    color:#e9efff;
+    font-size:0.78rem;
+    font-weight:600;
+    white-space:nowrap;
+    cursor:pointer;
+}
+.npc-relationship-undo-btn:hover:not(:disabled) { border-color:#f27c11; color:#f2bd7f; }
+.npc-relationship-undo-btn:focus-visible { outline:2px solid #f2bd7f; outline-offset:2px; }
+.npc-relationship-undo-btn:disabled { opacity:0.6; cursor:default; }
+/* Shared status line under the header; header p sets #aaa, so scope tighter here. */
+.npc-relationship-history-header .npc-relationship-history-status { margin:6px 0 0; font-size:0.82rem; color:#9fd49f; }
+.npc-relationship-history-header .npc-relationship-history-status.is-error { color:#ff8a80; }
 /* Relationship history rows: compact per-change presentation.
    Same palette and density as the CHIM home dashboard widget. */
 .relationship-change-cell {
@@ -2399,6 +2422,8 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
         justify-self:start;
     }
     .relationship-change-entry { gap:8px; }
+    .npc-relationship-history-item { grid-template-columns:minmax(0, 1fr); }
+    .npc-relationship-undo-btn { justify-self:start; }
 }
 @media (max-width:850px) {
     .npc-editor-action-card { grid-template-columns:minmax(0, 1fr); }
@@ -3190,7 +3215,8 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
         <section id="relationship-change-history" class="form-item span-2 npc-relationship-history" aria-labelledby="relationship-change-history-title">
             <div class="npc-relationship-history-header">
                 <h3 id="relationship-change-history-title">Recent Relationship Changes</h3>
-                <p>Read-only history for this NPC. The current relationships above remain editable.</p>
+                <p>Undo a change to restore the relationship state recorded before it, starting with the newest change. The current relationships above remain editable.</p>
+                <p id="relationship-change-history-status" class="npc-relationship-history-status" role="status" aria-live="polite" hidden></p>
             </div>
             <?php if (empty($npcRelationshipChanges)): ?>
                 <p class="npc-relationship-history-empty">No relationship changes recorded for this NPC yet.</p>
@@ -3210,24 +3236,98 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
                         $timeLabel = implode(' · ', $timeParts);
                         ?>
                         <li class="npc-relationship-history-item">
-                            <?php
-                            // The shared event-log renderer owns badge, stored reason, target and tier,
-                            // including snapshots that moved several relationships at once. The prose
-                            // summary is only the fallback for older rows with no structured detail.
-                            echo chimRenderRelationshipChangeCellHtml(
-                                $relationshipChange['changes'] ?? [],
-                                $relationshipChange['data'] ?? ''
-                            );
-                            ?>
-                            <?php if ($timeLabel !== ''): ?>
-                                <?php /* The page is already scoped to this NPC, so the row only adds its time. */ ?>
-                                <time class="npc-relationship-history-time" datetime="<?= $localTimestamp > 0 ? htmlspecialchars(gmdate('c', $localTimestamp), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($timeLabel, ENT_QUOTES, 'UTF-8') ?></time>
+                            <div class="npc-relationship-history-item-main">
+                                <?php
+                                // The shared event-log renderer owns badge, stored reason, target and tier,
+                                // including snapshots that moved several relationships at once. The prose
+                                // summary is only the fallback for older rows with no structured detail.
+                                echo chimRenderRelationshipChangeCellHtml(
+                                    $relationshipChange['changes'] ?? [],
+                                    $relationshipChange['data'] ?? ''
+                                );
+                                ?>
+                                <?php if ($timeLabel !== ''): ?>
+                                    <?php /* The page is already scoped to this NPC, so the row only adds its time. */ ?>
+                                    <time class="npc-relationship-history-time" datetime="<?= $localTimestamp > 0 ? htmlspecialchars(gmdate('c', $localTimestamp), ENT_QUOTES, 'UTF-8') : '' ?>"><?= htmlspecialchars($timeLabel, ENT_QUOTES, 'UTF-8') ?></time>
+                                <?php endif; ?>
+                            </div>
+                            <?php $relationshipRowId = (string)($relationshipChange['rowid'] ?? ''); ?>
+                            <?php if ($relationshipRowId !== ''): ?>
+                                <button type="button"
+                                        class="npc-relationship-undo-btn"
+                                        data-relationship-rowid="<?= htmlspecialchars($relationshipRowId, ENT_QUOTES, 'UTF-8') ?>"
+                                        aria-label="Undo relationship change<?= $timeLabel !== '' ? ' from ' . htmlspecialchars($timeLabel, ENT_QUOTES, 'UTF-8') : '' ?>"
+                                        title="Restore the relationship state recorded before this change">Undo</button>
                             <?php endif; ?>
                         </li>
                     <?php endforeach; ?>
                 </ol>
             <?php endif; ?>
         </section>
+        <script>
+        (function(){
+            const section = document.getElementById('relationship-change-history');
+            if (!section) return;
+            const statusEl = document.getElementById('relationship-change-history-status');
+            const undoButtons = Array.prototype.slice.call(section.querySelectorAll('.npc-relationship-undo-btn'));
+            if (!undoButtons.length) return;
+            let undoInFlight = false;
+
+            function setStatus(message, isError){
+                if (!statusEl) return;
+                statusEl.textContent = message || '';
+                statusEl.hidden = !message;
+                statusEl.classList.toggle('is-error', !!isError);
+            }
+
+            undoButtons.forEach(function(button){
+                button.addEventListener('click', async function(){
+                    if (undoInFlight) return;
+                    const rowId = String(button.getAttribute('data-relationship-rowid') || '');
+                    if (!rowId) return;
+                    if (!window.confirm('Undo this relationship change? This restores the relationship state recorded before it. The NPC editor then reloads, so unsaved edits in this form are lost.')) {
+                        return;
+                    }
+                    undoInFlight = true;
+                    const originalLabel = button.textContent;
+                    undoButtons.forEach(function(other){ other.disabled = true; });
+                    button.setAttribute('aria-busy', 'true');
+                    button.textContent = 'Undoing…';
+                    setStatus('Undoing relationship change…', false);
+                    try {
+                        const response = await fetch('../cmd/action_delete_event.php', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                            body: new URLSearchParams({ rowid: rowId }).toString()
+                        });
+                        let result = null;
+                        try { result = await response.json(); } catch (_e) { result = null; }
+                        if (!response.ok || !result || !result.ok) {
+                            throw new Error((result && result.message) || 'Relationship change could not be undone.');
+                        }
+                        // Keep every Undo control disabled until the reload lands so a
+                        // second click cannot race the refreshed relationship state.
+                        const relationshipUndoCount = Number(result.relationship_undo_count || 0);
+                        let resultMessage = String(result.message || '').trim();
+                        if (!resultMessage) {
+                            resultMessage = relationshipUndoCount > 0
+                                ? 'Relationship change undone.'
+                                : 'Relationship change is no longer available.';
+                        }
+                        setStatus(resultMessage + ' Reloading the editor…', false);
+                        window.location.reload();
+                    } catch (error) {
+                        setStatus(error && error.message ? error.message : 'Relationship change could not be undone.', true);
+                        undoInFlight = false;
+                        undoButtons.forEach(function(other){ other.disabled = false; });
+                        button.removeAttribute('aria-busy');
+                        button.textContent = originalLabel;
+                        button.focus();
+                    }
+                });
+            });
+        })();
+        </script>
 <div class="form-item">
             <label for="occupation">Occupation</label>
             <textarea id="occupation" name="occupation" placeholder="Role, job, affiliations."><?= htmlspecialchars($editItem["occupation"] ?? "") ?></textarea>
