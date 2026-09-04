@@ -27,23 +27,23 @@ $distroDatabaseManagerUrl = rtrim($distroDashboardRoot, '/') . '/database_manage
 
 // Prefer the shared Dwemer Dashboard data manager when it is installed alongside this server.
 $distroDataManagerFile = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'Dwemer-Dashboard' . DIRECTORY_SEPARATOR . 'data_manager.php';
-$distroDataManagerAvailable = is_file($distroDataManagerFile);
+$distroDataManagerAvailable = is_file($distroDataManagerFile) && is_file(dirname($distroDataManagerFile) . '/lib/storage_fragment.php');
 $distroDataManagerUrl = rtrim($distroDashboardRoot, '/') . '/data_manager.php?mod=chim&view=';
-$playthroughTabLabel = $distroDataManagerAvailable ? 'Playthroughs' : 'Playthrough Manager';
-$playthroughEmbedUrl = $distroDataManagerAvailable
-    ? $distroDataManagerUrl . 'playthroughs'
+// One entry point: snapshots, storage and database tools now share a single page.
+$storageTabLabel = 'Storage & Cleanup';
+$storageEmbedUrl = $distroDataManagerAvailable
+    ? $distroDataManagerUrl . 'manage'
     : $webRoot . '/ui/playthrough_manager.php?embed=1';
-$playthroughEmbedTitle = $distroDataManagerAvailable
-    ? 'CHIM snapshots in the shared Playthroughs page'
+$storageEmbedTitle = $distroDataManagerAvailable
+    ? 'CHIM snapshots, storage and database tools'
     : 'CHIM Playthrough Manager';
-$dbmgrTabLabel = $distroDataManagerAvailable ? 'Storage & Cleanup' : 'Database Manager';
-$dbmgrEmbedUrl = $distroDataManagerAvailable ? $distroDataManagerUrl . 'storage' : $distroDatabaseManagerUrl;
-if (!$distroDataManagerAvailable && !is_file(dirname($distroDataManagerFile) . DIRECTORY_SEPARATOR . 'database_manager.php')) {
-    $dbmgrEmbedUrl = $webRoot . '/ui/import_db.php?embed=1';
+// Without the shared page installed, the legacy database tools keep their own tab.
+$legacyDbmgrEmbedUrl = null;
+if (!$distroDataManagerAvailable) {
+    $legacyDbmgrEmbedUrl = is_file(dirname($distroDataManagerFile) . DIRECTORY_SEPARATOR . 'database_manager.php')
+        ? $distroDatabaseManagerUrl
+        : $webRoot . '/ui/import_db.php?embed=1';
 }
-$dbmgrEmbedTitle = $distroDataManagerAvailable
-    ? 'CHIM storage usage and cleanup tools'
-    : 'CHIM Database Manager';
 
 $TITLE = "Control Panel";
 $BODY_CLASS = 'hub-page';
@@ -174,8 +174,10 @@ main { padding-top: 80px; padding-left: 10px; padding-right: 10px; }
                 <div class="tab-group-label">Data &amp; Tools</div>
                 <div class="tab-buttons" role="tablist" aria-label="Data and tools pages">
                     <button class="tab-button" data-tab="cache"><span class="tab-icon" aria-hidden="true">&#x1F3BC;</span><span class="tab-label">Audio &amp; Image Cache</span></button>
-                    <button class="tab-button" data-tab="playthrough"><span class="tab-icon" aria-hidden="true">&#x1F3AE;</span><span class="tab-label"><?php echo htmlspecialchars($playthroughTabLabel, ENT_QUOTES, 'UTF-8'); ?></span></button>
-                    <button class="tab-button" data-tab="dbmgr"><span class="tab-icon" aria-hidden="true">&#x1F5C4;&#xFE0F;</span><span class="tab-label"><?php echo htmlspecialchars($dbmgrTabLabel, ENT_QUOTES, 'UTF-8'); ?></span></button>
+                    <button class="tab-button" data-tab="storage"><span class="tab-icon" aria-hidden="true">&#x1F5C4;&#xFE0F;</span><span class="tab-label"><?php echo htmlspecialchars($storageTabLabel, ENT_QUOTES, 'UTF-8'); ?></span></button>
+<?php if ($legacyDbmgrEmbedUrl !== null): ?>
+                    <button class="tab-button" data-tab="dbmgr"><span class="tab-icon" aria-hidden="true">&#x1F5C3;&#xFE0F;</span><span class="tab-label">Database Manager</span></button>
+<?php endif; ?>
                 </div>
             </section>
         </div>
@@ -216,16 +218,18 @@ main { padding-top: 80px; padding-left: 10px; padding-right: 10px; }
             <iframe class="embed" loading="lazy" src="about:blank" data-src="<?php echo $webRoot; ?>/ui/relationship_logs.php?embed=1"></iframe>
         </div>
     </div>
-    <div id="playthrough" class="tab-content">
+    <div id="storage" class="tab-content">
         <div class="embed-wrap">
-            <iframe class="embed" loading="lazy" src="about:blank" title="<?php echo htmlspecialchars($playthroughEmbedTitle, ENT_QUOTES, 'UTF-8'); ?>" data-src="<?php echo htmlspecialchars($playthroughEmbedUrl, ENT_QUOTES, 'UTF-8'); ?>"></iframe>
+            <iframe class="embed" loading="lazy" src="about:blank" title="<?php echo htmlspecialchars($storageEmbedTitle, ENT_QUOTES, 'UTF-8'); ?>" data-src="<?php echo htmlspecialchars($storageEmbedUrl, ENT_QUOTES, 'UTF-8'); ?>"></iframe>
         </div>
     </div>
+<?php if ($legacyDbmgrEmbedUrl !== null): ?>
     <div id="dbmgr" class="tab-content">
         <div class="embed-wrap">
-            <iframe class="embed" loading="lazy" src="about:blank" title="<?php echo htmlspecialchars($dbmgrEmbedTitle, ENT_QUOTES, 'UTF-8'); ?>" data-src="<?php echo htmlspecialchars($dbmgrEmbedUrl, ENT_QUOTES, 'UTF-8'); ?>"></iframe>
+            <iframe class="embed" loading="lazy" src="about:blank" title="CHIM Database Manager" data-src="<?php echo htmlspecialchars($legacyDbmgrEmbedUrl, ENT_QUOTES, 'UTF-8'); ?>"></iframe>
         </div>
     </div>
+<?php endif; ?>
 </main>
 
 <script>
@@ -253,8 +257,11 @@ main { padding-top: 80px; padding-left: 10px; padding-right: 10px; }
         window.history.replaceState({}, '', url);
     }
     buttons.forEach(b=> b.addEventListener('click', ()=> activate(b.dataset.tab)));
+    // Retired tab ids stay valid as deep links.
+    const TAB_ALIASES = {playthrough: 'storage', dbmgr: 'storage'};
     const qp = new URL(window.location).searchParams.get('tab');
-    if (qp && document.getElementById(qp)) activate(qp);
+    const target = (qp && !document.getElementById(qp)) ? TAB_ALIASES[qp] : qp;
+    if (target && document.getElementById(target)) activate(target);
 })();
 </script>
 
@@ -266,5 +273,4 @@ $title = $TITLE;
 $buffer = preg_replace('/(<title>)(.*?)(<\/title>)/i', '$1' . $title . '$3', $buffer);
 echo $buffer;
 ?>
-
 

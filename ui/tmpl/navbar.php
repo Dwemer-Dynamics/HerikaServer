@@ -390,8 +390,18 @@ $serverLogoFile = $isDevBuild ? 'serverlogodev.png' : 'serverlogo.png';
                     </li>
                     <li><hr class="dropdown-divider"></li>
                     <li><h6 class="dropdown-header">Database Controls</h6></li> <li>
-                    <a class="dropdown-item" href="<?php echo $webRoot; ?>/ui/import_db.php" title="Complete database management - backup, restore, maintenance, and pgAdmin access.">
-                        Database Manager
+                    <?php
+                    // One entry point for snapshots, storage and database tools.
+                    $navStorageDashboardFile = dirname(__DIR__, 3) . DIRECTORY_SEPARATOR . 'Dwemer-Dashboard'
+                        . DIRECTORY_SEPARATOR . 'data_manager.php';
+                    $navStorageAvailable = is_file($navStorageDashboardFile) && is_file(dirname($navStorageDashboardFile) . '/lib/storage_fragment.php');
+                    $navStorageUrl = $navStorageAvailable
+                        ? preg_replace('#/HerikaServer$#', '/Dwemer-Dashboard', $webRoot) . '/data_manager.php?mod=chim&view=manage'
+                        : $webRoot . '/ui/import_db.php';
+                    $navStorageLabel = $navStorageAvailable ? 'Storage &amp; Cleanup' : 'Database Manager';
+                    ?>
+                    <a class="dropdown-item" href="<?php echo htmlspecialchars((string)$navStorageUrl, ENT_QUOTES, 'UTF-8'); ?>" title="Playthrough snapshots, storage cleanup, backups, restore and maintenance.">
+                        <?php echo $navStorageLabel; ?>
                     </a>
                     </li>
                                          <li><hr class="dropdown-divider"></li>

@@ -1,5 +1,29 @@
 <?php
 
+// Shared "Storage & Cleanup" fragment mode. The Dwemer Dashboard includes this
+// page in-process and renders its controls inside the shared shell, so only the
+// document chrome and asset URLs adapt while server-owned operations stay here.
+$ptmFragment = defined('DWEMER_STORAGE_FRAGMENT') && DWEMER_STORAGE_FRAGMENT === true;
+$ptmSharedRoute = null;
+if (!$ptmFragment) {
+    // Shared compatibility policy lives in one place: redirect a bookmarked view,
+    // refuse stale writes, and stay standalone when the Dashboard is absent.
+    $ptmRouteHelper = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'lib'
+        . DIRECTORY_SEPARATOR . 'storage_manager_route.php';
+    if (is_file($ptmRouteHelper)) {
+        require_once $ptmRouteHelper;
+        dwemerStorageRedirect('chim', 'manage');
+    }
+    $ptmDashboardFile = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'Dwemer-Dashboard'
+        . DIRECTORY_SEPARATOR . 'data_manager.php';
+    if (is_file($ptmDashboardFile)) {
+        $ptmScript = str_replace(DIRECTORY_SEPARATOR, '/', (string)($_SERVER['SCRIPT_NAME'] ?? ''));
+        $ptmServerPos = strpos($ptmScript, '/HerikaServer/ui/');
+        $ptmPrefix = $ptmServerPos !== false ? substr($ptmScript, 0, $ptmServerPos) : '';
+        $ptmSharedRoute = $ptmPrefix . '/Dwemer-Dashboard/data_manager.php';
+    }
+}
+
 $enginePath = dirname(__DIR__) . DIRECTORY_SEPARATOR;
 
 require_once(__DIR__.DIRECTORY_SEPARATOR."profile_loader.php");
@@ -31,18 +55,48 @@ if ($webRoot == '/') $webRoot = '';
 $webRoot = rtrim($webRoot, '/');
 
 $TITLE = "🎮 CHIM - Playthrough Manager";
-ob_start();
-include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
+$debugPaneLink = false;
+if ($ptmFragment) {
+    // The shared page lives under a different path, so every asset and endpoint
+    // URL is rebuilt against this server's own web root.
+    $webRoot = DWEMER_STORAGE_FRAGMENT_WEBROOT;
+    $isEmbed = true;
+    foreach ([
+        $webRoot . '/ui/lib/ui/bootstrap/bootstrap.min.css',
+        $webRoot . '/ui/css/style_new.css',
+        $webRoot . '/ui/css/chim-theme.css',
+        $webRoot . '/ui/css/main.css',
+    ] as $ptmStyleHref) {
+        if (function_exists('dwemer_storage_fragment_style')) {
+            dwemer_storage_fragment_style($ptmStyleHref);
+        } else {
+            echo '<link rel="stylesheet" href="' . htmlspecialchars($ptmStyleHref, ENT_QUOTES, 'UTF-8') . '">';
+        }
+    }
+} else {
+    ob_start();
+    include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
 ?>
 
 <link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/main.css">
 
 <?php
-// Embed mode and navbar (match Oghma style)
-$isEmbed = (isset($_GET['embed']) && $_GET['embed'] == '1');
-$debugPaneLink = false;
-if (!$isEmbed) {
-    include(__DIR__.DIRECTORY_SEPARATOR."tmpl/navbar.php");
+    // Embed mode and navbar (match Oghma style)
+    $isEmbed = (isset($_GET['embed']) && $_GET['embed'] == '1');
+    if (!$isEmbed) {
+        include(__DIR__.DIRECTORY_SEPARATOR."tmpl/navbar.php");
+    }
+}
+
+// Where the combined backup/maintenance tools live for this install.
+$ptmDatabaseToolsUrl = $webRoot . '/ui/import_db.php';
+$ptmDatabaseToolsLabel = 'Database Manager';
+if ($ptmFragment) {
+    $ptmDatabaseToolsUrl = 'data_manager.php?mod=shared&view=databases';
+    $ptmDatabaseToolsLabel = 'Shared databases';
+} elseif ($ptmSharedRoute !== null) {
+    $ptmDatabaseToolsUrl = $ptmSharedRoute . '?mod=shared&view=databases';
+    $ptmDatabaseToolsLabel = 'Shared databases';
 }
 
 // DB connection details (aligned with import_db.php)
@@ -717,12 +771,12 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     </div>
 
     <div class="page-header">
-        <h1>Playthrough Manager</h1>
-        <div style="font-size: 0.95em; color: #ccc; margin-bottom: 15px;">Create, restore, and manage snapshots of your playthrough.</div>
+        <?php if ($ptmFragment): ?><h2>Snapshots and cleanup</h2><?php else: ?><h1>Playthrough Manager</h1><?php endif; ?>
+        <div style="font-size: 0.95em; color: #ccc; margin-bottom: 10px;">Save or restore server snapshots. Restoring first saves your current progress over the loaded snapshot.</div>
 
+        <details class="storage-help"><summary>How snapshots work</summary>
         <div style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; border: 1px solid #444; margin-top: 15px; text-align: left;">
             <div style="font-size: 0.9em; color: #e0e0e0; line-height: 1.6;">
-                <strong style="color: #4ade80;">How it works:</strong><br>
                 • <strong>Active playthrough</strong> = the live data CHIM is reading and writing right now.<br>
                 • <strong>Saved snapshots</strong> = stored copies of a playthrough. They are not in use.<br>
                 • <strong>Restore</strong> = saves your current progress over the loaded snapshot first, then loads the selected snapshot as the active playthrough. If the currently loaded snapshot cannot be determined, the restore is blocked so nothing is overwritten.<br>
@@ -730,6 +784,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                 <span class="help-text">Technical note: the active playthrough lives in the PostgreSQL <code>public</code> schema; snapshots are cloned schemas in the same database.</span>
             </div>
         </div>
+        </details>
     </div>
 
     <?php if (!empty($message)) { echo '<div class="content-section" style="margin-bottom: 30px;">'.$message.'</div>'; } ?>
@@ -899,7 +954,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         <div id="storage-overview">Loading storage overview…</div>
         <div class="help-text" style="margin-top: 12px;">
             For backups, exports, and maintenance, use the
-            <a href="<?php echo $webRoot; ?>/ui/import_db.php"<?php echo $isEmbed ? ' target="_top"' : ''; ?> style="color:#ffb862;">Database Manager</a>.
+            <a href="<?php echo htmlspecialchars($ptmDatabaseToolsUrl, ENT_QUOTES, 'UTF-8'); ?>"<?php echo ($isEmbed && !$ptmFragment) ? ' target="_top"' : ''; ?> style="color:#ffb862;"><?php echo htmlspecialchars($ptmDatabaseToolsLabel, ENT_QUOTES, 'UTF-8'); ?></a>.
             Optional cleanup of old debug logs and old automatic snapshots is set up in the <a href="#retention-section" style="color:#ffb862;">Storage cleanup</a> panel below.
         </div>
     </div>
@@ -1041,11 +1096,13 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
 </main>
 
 <?php
-$buffer = ob_get_contents();
-ob_end_clean();
-$title = $TITLE;
-$buffer = preg_replace('/(<title>)(.*?)(<\/title>)/i', '$1' . $title . '$3', $buffer);
-echo $buffer;
+if (!$ptmFragment) {
+    $buffer = ob_get_contents();
+    ob_end_clean();
+    $title = $TITLE;
+    $buffer = preg_replace('/(<title>)(.*?)(<\/title>)/i', '$1' . $title . '$3', $buffer);
+    echo $buffer;
+}
 ?>
 
 <script>
