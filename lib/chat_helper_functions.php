@@ -1690,76 +1690,206 @@ function returnLines($lines,$writeOutput=true)
                 }
 
 
-                $listenerFix=explode(" and ",$GLOBALS["SCRIPTLINE_LISTENER"]);
-                // Don't touch original one
-                $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]=$GLOBALS["SCRIPTLINE_LISTENER"];
-                $GLOBALS["SCRIPTLINE_RECHAT_TARGET"]=$GLOBALS["SCRIPTLINE_LISTENER"];
+                $fOldRoute=false;
+                // 
+                if ($fOldRoute) {
+                    $listenerFix=explode(" and ",$GLOBALS["SCRIPTLINE_LISTENER"]);
+                    // Don't touch original one
+                    $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]=$GLOBALS["SCRIPTLINE_LISTENER"];
+                    $GLOBALS["SCRIPTLINE_RECHAT_TARGET"]=$GLOBALS["SCRIPTLINE_LISTENER"];
 
-                if (is_array($listenerFix) && (sizeof($listenerFix)>1)) {
-                    $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]=trim($listenerFix[0]);
-                }
-                
-                $listenerFix2=parseDialogueListenerNames($GLOBALS["SCRIPTLINE_LISTENER"]);
-                if (!is_array($listenerFix2)) {
-                    $listenerFix2 = [];
-                }
-                $listenerFix2 = array_values(array_unique(array_filter(array_map('normalizeDialogueListenerName', $listenerFix2))));
+                    if (is_array($listenerFix) && (sizeof($listenerFix)>1)) {
+                        $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]=trim($listenerFix[0]);
+                    }
+                    
+                    $listenerFix2=parseDialogueListenerNames($GLOBALS["SCRIPTLINE_LISTENER"]);
+                    if (!is_array($listenerFix2)) {
+                        $listenerFix2 = [];
+                    }
+                    $listenerFix2 = array_values(array_unique(array_filter(array_map('normalizeDialogueListenerName', $listenerFix2))));
 
-                if (is_array($listenerFix2) && (sizeof($listenerFix2)>1)) {
-                    if (!isset($GLOBALS["SCRIPTLINE_LISTENER_CYCLE"])) {
-                        $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]=0;
-                    } else
-                        $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]++;
+                    if (is_array($listenerFix2) && (sizeof($listenerFix2)>1)) {
+                        if (!isset($GLOBALS["SCRIPTLINE_LISTENER_CYCLE"])) {
+                            $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]=0;
+                        } else
+                            $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]++;
 
-                    if ($GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]>(sizeof($listenerFix2)-1))
-                        $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]=sizeof($listenerFix2)-1;
+                        if ($GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]>(sizeof($listenerFix2)-1))
+                            $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]=sizeof($listenerFix2)-1;
 
-                    // Code to fix multiple listener issues
-                    // Arrays to store positions of found names
-                    $positions = [];           // For determining the first mentioned name
-                    $positionsWithIndex = [];  // For determining the last mentioned name and its index
+                        // Code to fix multiple listener issues
+                        // Arrays to store positions of found names
+                        $positions = [];           // For determining the first mentioned name
+                        $positionsWithIndex = [];  // For determining the last mentioned name and its index
 
-                    // Search for each name in the subtitle sentence
-                    //$listenerFix2[]="Dragonborn";
+                        // Search for each name in the subtitle sentence
+                        //$listenerFix2[]="Dragonborn";
 
-                    foreach ($listenerFix2 as $index => $name) {
-                        $pos = stripos($responseForSubtitles, trim($name)); // Case-insensitive search
-                        if ($pos !== false) {
-                            $positions[$name] = $pos;           // Save position for first-mention check
-                            $positionsWithIndex[$index] = $pos; // Save index and position for last-mention check
+                        foreach ($listenerFix2 as $index => $name) {
+                            $pos = stripos($responseForSubtitles, trim($name)); // Case-insensitive search
+                            if ($pos !== false) {
+                                $positions[$name] = $pos;           // Save position for first-mention check
+                                $positionsWithIndex[$index] = $pos; // Save index and position for last-mention check
+                            }
                         }
+
+                        if (!empty($positions)) {
+                            // Sort positions to find the first mentioned name
+                            asort($positions); // Ascending order by position
+                            $listener = array_key_first($positions); // Get the name of the first mentioned
+                            $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]=trim($listener);
+                            // Sort positions to find the last mentioned index
+                            arsort($positionsWithIndex); // Descending order by position
+                            $nextListener = array_key_first($positionsWithIndex); // Get the index of the last mentioned name
+                            if ($nextListener>0)
+                                $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]=$nextListener-1;  // Next round will use this speaker if no refernce found.
+                            else
+                                $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]=$nextListener;
+                            // Test
+                            $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]=$nextListener;
+                            // Output results
+                            Logger::info("Applying smarter listenerFix2: $listener {$listenerFix2["$nextListener"]} {$GLOBALS["SCRIPTLINE_LISTENER"]} {$GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]} {$GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]}");
+
+                        } else {
+                            $listener=$listenerFix2[$GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]];
+                            $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]=trim($listener);
+                        }
+
+                        $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]=normalizeDialogueListenerName($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]);
+                        //$GLOBALS["SCRIPTLINE_LISTENER"]=trim($listenerFix2[ $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]]);
+                        // $GLOBALS["SCRIPTLINE_LISTENER"] = trim($listenerFix2[array_rand($listenerFix2)]); // Random
+                        
+
+                    }
+                    else {
+                        $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] = normalizeDialogueListenerName($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]);
                     }
 
-                    if (!empty($positions)) {
-                        // Sort positions to find the first mentioned name
-                        asort($positions); // Ascending order by position
-                        $listener = array_key_first($positions); // Get the name of the first mentioned
-                        $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]=trim($listener);
-                        // Sort positions to find the last mentioned index
-                        arsort($positionsWithIndex); // Descending order by position
-                        $nextListener = array_key_first($positionsWithIndex); // Get the index of the last mentioned name
-                        if ($nextListener>0)
-                            $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]=$nextListener-1;  // Next round will use this speaker if no refernce found.
-                        else
-                            $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]=$nextListener;
-                        // Test
-                        $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]=$nextListener;
-                        // Output results
-                        Logger::info("Applying smarter listenerFix2: $listener {$listenerFix2["$nextListener"]} {$GLOBALS["SCRIPTLINE_LISTENER"]} {$GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]} {$GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]}");
+                } else {
+                    /*
+                    Rule 1: Single Listener Default
+                            If the dialogue is directed at only one listener, SCRIPTLINE_LISTENER_ATOMIC is simply set to that listener's name.
+                    Rule 2: Multi-Listener Rotation
+                            If there are two or more listeners, the system defaults to a round-robin rotation. The first sentence is directed to the first listener, the second sentence to the next listener, and so on, cycling through the list.
+                    Rule 3: Explicit Name Override
+                            If a specific actor's name is explicitly mentioned in the text fragment (the dialogue message), SCRIPTLINE_LISTENER_ATOMIC must immediately override the rotation and be set to that specific actor for that sentence.
+                    Rule 4: Nickname/Alias Resolution
+                            The system must support an alias mapping array (e.g., "my love" => "Varek"). If a nickname or indirect reference appears in the text, the system must recognize it, map it to the actual listener's name, and apply Rule 3 (treating it as an explicit mention), provided that mapped listener is part of the current active listener group.
+                    */
+                    // 1. Initialize base listener variables
+                    $listenerFix = explode(" and ", $GLOBALS["SCRIPTLINE_LISTENER"]);
+                    $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] = $GLOBALS["SCRIPTLINE_LISTENER"];
+                    $GLOBALS["SCRIPTLINE_RECHAT_TARGET"] = $GLOBALS["SCRIPTLINE_LISTENER"];
+
+                    if (is_array($listenerFix) && count($listenerFix) > 1) {
+                        $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] = trim($listenerFix[0]);
+                    }
+
+                    // 2. Parse and normalize the list of listeners
+                    $listenerFix2 = parseDialogueListenerNames($GLOBALS["SCRIPTLINE_LISTENER"]);
+                    if (!is_array($listenerFix2)) {
+                        $listenerFix2 = [];
+                    }
+                    $listenerFix2 = array_values(array_unique(array_filter(array_map('normalizeDialogueListenerName', $listenerFix2))));
+
+                    // 3. Handle multiple listeners
+                    if (is_array($listenerFix2) && count($listenerFix2) > 1) {
+                        // Manage the rotation cycle for listeners (Rule 2)
+                        if (!isset($GLOBALS["SCRIPTLINE_LISTENER_CYCLE"])) {
+                            $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"] = 0;
+                        } else {
+                            $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]++;
+                        }
+                        
+                        // Ensure cycle wraps around properly (fixes original capping bug)
+                        $listenerCount = count($listenerFix2);
+                        $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"] = $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"] % $listenerCount;
+
+                        // Arrays to store positions of found names in the text
+                        $positions = [];           // For determining the first mentioned name
+                        $positionsWithIndex = [];  // For determining the last mentioned name and its index
+
+                        // Define an array of possible nicknames mapping to actual listener names (Rule 4)
+                        // This allows the system to recognize aliases in the dialogue text
+                        $listenerNicknames = [
+                            'my love'      => 'Varek',
+                            'honey'        => 'Varek',
+                            'darling'      => 'Varek',
+                            'sweetheart'   => 'Varek',
+                            // Add more aliases as needed, e.g., 'Dragonborn' => $GLOBALS["PLAYER_NAME"]
+                        ];
+
+                        // 3a. Search for nicknames in the subtitle sentence first
+                        foreach ($listenerNicknames as $nickname => $targetListener) {
+                            $normalizedTarget = normalizeDialogueListenerName(trim($targetListener));
+                            
+                            // Only proceed if the mapped target is a valid listener in our current context
+                            if (in_array($normalizedTarget, $listenerFix2, true)) {
+                                $pos = stripos($responseForSubtitles, $nickname);
+                                if ($pos !== false) {
+                                    $index = array_search($normalizedTarget, $listenerFix2, true);
+                                    if ($index !== false) {
+                                        // Record the earliest position for the target listener
+                                        if (!isset($positions[$normalizedTarget]) || $pos < $positions[$normalizedTarget]) {
+                                            $positions[$normalizedTarget] = $pos;
+                                        }
+                                        if (!isset($positionsWithIndex[$index]) || $pos < $positionsWithIndex[$index]) {
+                                            $positionsWithIndex[$index] = $pos;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3b. Search for actual listener names in the subtitle sentence (Rule 3)
+                        foreach ($listenerFix2 as $index => $name) {
+                            $pos = stripos($responseForSubtitles, trim($name)); // Case-insensitive search
+                            if ($pos !== false) {
+                                if (!isset($positions[$name]) || $pos < $positions[$name]) {
+                                    $positions[$name] = $pos;
+                                }
+                                if (!isset($positionsWithIndex[$index]) || $pos < $positionsWithIndex[$index]) {
+                                    $positionsWithIndex[$index] = $pos;
+                                }
+                            }
+                        }
+
+                        // 4. Determine the active listener based on text mentions
+                        if (!empty($positions)) {
+                            // Sort positions to find the first mentioned name
+                            asort($positions); // Ascending order by position
+                            $firstMentionedListener = array_key_first($positions);
+                            $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] = trim($firstMentionedListener);
+                            
+                            // Sort positions to find the last mentioned index for cycling
+                            arsort($positionsWithIndex); // Descending order by position
+                            $lastMentionedIndex = array_key_first($positionsWithIndex);
+                            
+                            // Update cycle to point to the next listener for the following sentence
+                            $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"] = $lastMentionedIndex;
+                            
+                            Logger::info(
+                                "Applying smarter listenerFix2: " . 
+                                "First: {$firstMentionedListener}, " .
+                                "NextCycleIndex: {$lastMentionedIndex}, " .
+                                "NextListener: {$listenerFix2[$lastMentionedIndex]}, " .
+                                "Original: {$GLOBALS["SCRIPTLINE_LISTENER"]}, " .
+                                "Atomic: {$GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]}, " .
+                                "Cycle: {$GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]}"
+                            );
+                        } else {
+                            // Fallback to rotation if no names are explicitly mentioned in the text (Rule 2)
+                            $fallbackListener = $listenerFix2[$GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]];
+                            $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] = trim($fallbackListener);
+                        }
+
+                        // Final normalization of the chosen atomic listener
+                        $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] = normalizeDialogueListenerName($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]);
 
                     } else {
-                        $listener=$listenerFix2[$GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]];
-                        $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]=trim($listener);
+                        // Rule 1: If only one listener, it goes to that listener
+                        $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] = normalizeDialogueListenerName($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]);
                     }
-
-                    $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]=normalizeDialogueListenerName($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]);
-                    //$GLOBALS["SCRIPTLINE_LISTENER"]=trim($listenerFix2[ $GLOBALS["SCRIPTLINE_LISTENER_CYCLE"]]);
-                    // $GLOBALS["SCRIPTLINE_LISTENER"] = trim($listenerFix2[array_rand($listenerFix2)]); // Random
-                    
-
-                }
-                else {
-                    $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] = normalizeDialogueListenerName($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]);
                 }
 
                 $speakerName = normalizeDialogueListenerName($outBuffer["actor"] ?? "");
