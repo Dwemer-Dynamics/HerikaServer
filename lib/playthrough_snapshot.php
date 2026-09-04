@@ -4,6 +4,7 @@ require_once(__DIR__ . DIRECTORY_SEPARATOR . 'utils_game_timestamp.php');
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'logger.php');
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'playthrough_storage.php');
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'playthrough_schema.php');
+require_once(__DIR__ . DIRECTORY_SEPARATOR . 'playthrough_retention.php');
 
 /**
  * Dragon Break autosnapshot helper.
@@ -55,6 +56,7 @@ function dragon_break_ensure_meta_schema($adminConn) {
 	
 	// Ensure schema cloning functions exist
 	pts_ensure_functions($adminConn);
+	ptr_ensure_schema($adminConn);
 }
 
 /**
@@ -69,12 +71,16 @@ function dragon_break_create_snapshot($name, $notes) {
 	$password = 'dwemer';
 	$schema = 'public';
 
-	$adminConn = @pg_connect("host={$host} port={$port} dbname={$dbname} user={$username} password={$password}");
+	$adminConn = @pg_connect("host={$host} port={$port} dbname={$dbname} user={$username} password={$password}", PGSQL_CONNECT_FORCE_NEW);
 	if (!$adminConn) {
 		Logger::error("DragonBreak: Failed to connect to database for snapshot: " . @pg_last_error());
 		return 0;
 	}
 
+	// Wait for bounded cleanup to finish: skipping this capture could lose the
+	// pre-rollback recovery point. Maintenance itself always uses a try-lock.
+	ptr_query($adminConn, "SELECT pg_advisory_lock(hashtext('chim_playthrough_retention'))");
+	try {
 	dragon_break_ensure_meta_schema($adminConn);
 
 	// Ensure unique name (table enforces UNIQUE(name)); append timestamp if collision
@@ -129,7 +135,7 @@ function dragon_break_create_snapshot($name, $notes) {
 	@pg_query($adminConn, 'BEGIN');
 	$q1 = @pg_query_params(
 		$adminConn,
-		"INSERT INTO chim_meta.playthrough_profiles (name, size_bytes, storage_type, notes, is_active, player_name, game, eventlog_count, oghma_count, last_gamets, schema_name) VALUES ($1,$2,$3,$4,false,$5,$6,$7,$8,$9,$10) RETURNING id",
+		"INSERT INTO chim_meta.playthrough_profiles (name, size_bytes, storage_type, notes, is_active, player_name, game, eventlog_count, oghma_count, last_gamets, schema_name, retention_kind) VALUES ($1,$2,$3,$4,false,$5,$6,$7,$8,$9,$10,'dragon_break') RETURNING id",
 		[$finalName, (string)$size, 'schema', $notes, $playerName, $gameName, (string)$eventlogCount, (string)$oghmaCount, (string)$lastGamets, $schemaName]
 	);
 	if ($q1) {
@@ -143,6 +149,10 @@ function dragon_break_create_snapshot($name, $notes) {
 	@pg_query($adminConn, 'ROLLBACK');
 	Logger::error("DragonBreak: Failed to insert profile record");
 	return 0;
+	} finally {
+		ptr_unlock($adminConn);
+		pg_close($adminConn);
+	}
 }
 
 /**

@@ -8,6 +8,7 @@ require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "logger.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "utils_game_timestamp.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "playthrough_storage.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "playthrough_schema.php");
+require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "playthrough_retention.php");
 
 // Session must be active before any output; the CSRF token lives in it.
 if (session_status() === PHP_SESSION_NONE) {
@@ -105,8 +106,10 @@ function ptm_run_setup_migrations($adminConn): void {
     $initSQL[] = "ALTER TABLE chim_meta.playthrough_profiles ADD COLUMN IF NOT EXISTS schema_name TEXT";
     $initSQL[] = "ALTER TABLE chim_meta.playthrough_profiles ADD COLUMN IF NOT EXISTS storage_type TEXT DEFAULT 'dump'";
     foreach ($initSQL as $qs) {
-        @pg_query($adminConn, $qs);
+        ptr_query($adminConn, $qs);
     }
+    ptr_ensure_schema($adminConn);
+    ptm_ensure_lob_schema($adminConn);
 
     // Ensure schema cloning functions exist
     pts_ensure_functions($adminConn);
@@ -147,11 +150,11 @@ function ptm_create_default_snapshot($adminConn, string $schema): array {
     // Guard against partial states: skip if any profile (or a 'default' row) already exists.
     $cntRes = @pg_query($adminConn, "SELECT COUNT(*) AS c FROM chim_meta.playthrough_profiles");
     if ($cntRes && ($c = pg_fetch_assoc($cntRes)) && intval($c['c']) > 0) {
-        return ['success' => true];
+        return ['success' => true, 'existing' => true];
     }
     $existsRes = @pg_query_params($adminConn, "SELECT 1 FROM chim_meta.playthrough_profiles WHERE name=$1 LIMIT 1", ['default']);
     if ($existsRes && pg_fetch_assoc($existsRes)) {
-        return ['success' => true];
+        return ['success' => true, 'existing' => true];
     }
 
     $meta = ptm_collect_live_metadata($adminConn, $schema);
@@ -182,7 +185,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message .= '<p><strong>Error:</strong> Security check failed (missing or expired form token). No changes were made. Please reload the page and try again.</p>';
     } elseif (!$adminConn) {
         // Connection error message already queued above.
+    } elseif (!ptr_lock($adminConn)) {
+        $message .= '<p><strong>Error:</strong> Another snapshot operation or cleanup is running. Try again shortly.</p>';
     } else {
+        try {
         // Initialization/migrations run only after a CSRF-validated POST.
         ptm_run_setup_migrations($adminConn);
         $action = $_POST['action'] ?? '';
@@ -190,7 +196,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'setup') {
         $res = ptm_create_default_snapshot($adminConn, $schema);
         if ($res['success']) {
-            $message .= '<p><strong>✅ Playthrough management is set up.</strong> Your current data was captured as the <strong>default</strong> snapshot and is now the active playthrough.</p>';
+            $message .= !empty($res['existing'])
+                ? '<p>Playthrough management is already set up. Existing snapshots were preserved.</p>'
+                : '<p><strong>✅ Playthrough management is set up.</strong> Your current data was captured as the <strong>default</strong> snapshot and is now the active playthrough.</p>';
         } else {
             $message .= '<p><strong>Error:</strong> Setup failed. Please check the server logs and try again.</p>';
         }
@@ -265,6 +273,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // 1) Auto-save current active profile BEFORE switching
             $curRes = pg_query($adminConn, "SELECT id, name, storage_type, schema_name FROM chim_meta.playthrough_profiles WHERE is_active = true LIMIT 1");
             $curRow = $curRes ? pg_fetch_assoc($curRes) : null;
+            if (!$curRow) {
+                $message .= '<p><strong>Error:</strong> No loaded snapshot is recorded. Restore was cancelled to preserve your current playthrough.</p>';
+                goto SWITCH_ABORT;
+            }
             if ($curRow) {
                 $curProfileId = intval($curRow['id']);
                 $curStorageType = $curRow['storage_type'] ?? 'dump';
@@ -355,7 +367,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $message .= '<li>Restart CHIM Server</li>';
                     $message .= '<li>Restart Skyrim and load into the save you want to continue from</li>';
                     $message .= '</ol>';
-                    $message .= '<p style="margin:8px 0 0 0; font-size:0.9em; color:#ccc;">Database connections were terminated during the schema switch.</p>';
                     $message .= '</div>';
                 } else {
                     @pg_query($adminConn, 'ROLLBACK');
@@ -402,7 +413,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $message .= '<li>Any background services connected to the database</li>';
                             $message .= '<li>The Skyrim mod will automatically reconnect</li>';
                             $message .= '</ol>';
-                            $message .= '<p style="margin:8px 0 0 0; font-size:0.9em; color:#ccc;">Database connections were terminated during the schema switch.</p>';
                             $message .= '</div>';
                         } else {
                             pg_query($adminConn, 'ROLLBACK');
@@ -430,27 +440,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else if (strtolower((string)$row['name']) === 'default') {
                 $message .= '<p><strong>Error:</strong> Cannot delete the default snapshot.</p>';
             } else {
-                $storageType = $row['storage_type'] ?? 'dump';
-                $schemaName = $row['schema_name'] ?? '';
-
-                // If schema-based, drop the schema first
-                if ($storageType === 'schema' && !empty($schemaName)) {
-                    $dropResult = pts_drop_schema($adminConn, $schemaName);
-                    if (!$dropResult['success']) {
-                        $message .= '<p><strong>Warning:</strong> Failed to drop schema: '.h($dropResult['error']).'</p>';
-                    }
-                }
-
-                // Delete profile record (CASCADE will handle blobs for dump-based)
-                $ok = pg_query_params($adminConn, 'DELETE FROM chim_meta.playthrough_profiles WHERE id=$1', [$profileId]);
-                if ($ok) {
-                    $message .= '<p><strong>✅ Deleted:</strong> '.h($row['name']).'</p>';
-                } else {
-                    $message .= '<p><strong>Error:</strong> Failed to delete snapshot.</p>';
-                }
+                ptr_query($adminConn, 'BEGIN');
+                ptr_query($adminConn, "SET LOCAL lock_timeout='2s'");
+                ptr_delete_snapshot($adminConn, $profileId);
+                ptr_query($adminConn, 'COMMIT');
+                $message .= '<p><strong>✅ Deleted:</strong> '.h($row['name']).'</p>';
             }
         }
     }
+        } catch (Throwable $e) {
+            @pg_query($adminConn, 'ROLLBACK');
+            Logger::error('Playthrough Manager: ' . $e->getMessage());
+            $message .= '<p><strong>Error:</strong> The operation could not finish. Protected snapshots cannot be deleted. Check the server log for details.</p>';
+        } finally {
+            ptr_unlock($adminConn);
+        }
     }
 }
 
@@ -460,7 +464,7 @@ $ptmInitialized = $adminConn ? ptm_meta_table_exists($adminConn) : false;
 // Fetch profiles
 $profiles = [];
 if ($ptmInitialized) {
-    $profiles = $db->fetchAll("SELECT id, name, created_at, size_bytes, storage_format, storage_type, schema_name, notes, is_active, player_name, game, eventlog_count, oghma_count, last_gamets FROM chim_meta.playthrough_profiles ORDER BY COALESCE(last_gamets,0) DESC, created_at DESC");
+    $profiles = $db->fetchAll("SELECT p.* FROM chim_meta.playthrough_profiles p ORDER BY COALESCE((to_jsonb(p)->>'last_gamets')::bigint,0) DESC, created_at DESC");
     if (!is_array($profiles)) { $profiles = []; }
 }
 $ptmNeedsSetup = (!$ptmInitialized || count($profiles) === 0);
@@ -587,7 +591,8 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     .timeline-title { text-align:center; color:#e0e0e0; font-size: 13px; margin-bottom: 12px; }
     .timeline-track { position: relative; height: 4px; background: linear-gradient(90deg, rgba(138,155,182,0.5), rgba(242,124,17,0.6)); border-radius: 2px; }
     .timeline-nodes { position: relative; height: 0; }
-    .timeline-node { position: absolute; top: -8px; width: 16px; height: 16px; padding: 0; border-radius: 50%; background: #ffb862; border: 2px solid #1a1a1a; box-shadow: 0 0 0 2px rgba(255,255,255,0.08); transform: translateX(-50%); cursor: pointer; }
+    /* Explicit resets so timeline nodes never inherit global button min-width/padding */
+    .timeline-node { position: absolute; top: -8px; width: 16px; height: 16px; min-width: 0; min-height: 0; padding: 0; margin: 0; line-height: 0; box-sizing: border-box; appearance: none; -webkit-appearance: none; border-radius: 50%; background: #ffb862; border: 2px solid #1a1a1a; box-shadow: 0 0 0 2px rgba(255,255,255,0.08); transform: translateX(-50%); cursor: pointer; }
     .timeline-node.active { background: #2ea8ff; box-shadow: 0 0 0 2px rgba(46,168,255,0.25), 0 0 12px rgba(46,168,255,0.35); }
     .timeline-tooltip { position: absolute; display: none; max-width: 280px; background: #111; border: 1px solid rgba(138,155,182,0.4); color: #e0e0e0; padding: 8px 10px; border-radius: 6px; font-size: 12px; z-index: 20; pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
     .timeline-tooltip .name { color: #ffb862; font-weight: bold; }
@@ -647,6 +652,44 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     .storage-legend { list-style: none; margin: 10px 0 0 0; padding: 0; display:flex; gap: 6px 18px; flex-wrap: wrap; font-size: 13px; color:#ccc; }
     .storage-legend .swatch { display:inline-block; width: 14px; height: 14px; border-radius: 3px; border:1px solid #444; vertical-align: -2px; margin-right: 4px; }
     .help-text { font-size: 0.9em; color: #9fb1c9; }
+    /* Data retention panel */
+    .retention-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 12px 0; }
+    .retention-fieldset { border: 1px solid #3a3a3a; border-radius: 8px; padding: 10px 12px; margin: 0; background: rgba(0,0,0,0.25); min-width: 0; }
+    .retention-fieldset legend { color: #ffb862; font-size: 13px; font-weight: bold; padding: 0 6px; }
+    .retention-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; font-size: 13px; color: #e0e0e0; }
+    .retention-row label { margin: 0; width: auto; display: inline; cursor: pointer; }
+    .retention-row input[type="number"] { width: 90px; min-width: 0; background: #111; color: #e0e0e0; border: 1px solid #555; border-radius: 4px; padding: 4px 6px; }
+    .retention-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: #f27c11; flex: 0 0 auto; }
+    .retention-note { font-size: 12px; color: #9fb1c9; margin: 6px 0 0 0; line-height: 1.5; }
+    .retention-blocked { font-size: 12px; color: #fbbf24; background: rgba(74,30,13,0.5); border: 1px solid rgba(220,38,38,0.5); border-radius: 6px; padding: 6px 8px; margin-top: 8px; line-height: 1.5; }
+    .retention-status { font-size: 13px; margin: 10px 0 0 0; padding: 6px 10px; border-radius: 6px; border: 1px solid transparent; }
+    .retention-status:empty { display: none; }
+    .retention-status.is-busy { color: #9fb1c9; border-color: #444; background: rgba(0,0,0,0.3); }
+    .retention-status.is-error { color: #fca5a5; border-color: rgba(220,38,38,0.6); background: rgba(74,30,13,0.4); }
+    .retention-status.is-success { color: #4ade80; border-color: rgba(74,222,128,0.4); background: rgba(20,60,35,0.35); }
+    .retention-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+    .retention-actions .button { padding: 6px 14px; min-width: 0; }
+    .retention-actions .button[disabled] { opacity: 0.55; cursor: not-allowed; transform: none; }
+    .retention-preview-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; }
+    .retention-preview-table th, .retention-preview-table td { border: 1px solid #333; padding: 4px 8px; text-align: left; color: #e0e0e0; }
+    .retention-preview-table th { background: #222; color: #ffb862; }
+    .retention-preview-table td.num, .retention-preview-table th.num { text-align: right; }
+    .retention-preview-box { border: 1px solid #3a3a3a; border-radius: 8px; background: rgba(0,0,0,0.25); padding: 10px 12px; margin-top: 12px; }
+    .retention-preview-box h3 { font-size: 14px; color: #ffb862; margin: 0 0 6px 0; }
+    .retention-snap-list { list-style: none; margin: 8px 0 0 0; padding: 0; border: 1px solid #333; border-radius: 8px; background: #1a1a1a; }
+    .retention-snap-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #2c2c2c; flex-wrap: wrap; font-size: 13px; color: #e0e0e0; }
+    .retention-snap-list li:last-child { border-bottom: none; }
+    .retention-badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 4px; margin-left: 6px; border: 1px solid #444; color: #ccc; white-space: nowrap; }
+    .retention-badge.b-active { background: #14532d; color: #bbf7d0; border-color: #166534; }
+    .retention-badge.b-default { background: #1e3a5f; color: #bfdbfe; border-color: #1d4ed8; }
+    .retention-badge.b-auto { background: #3b2f14; color: #fde68a; border-color: #a16207; }
+    .retention-badge.b-pinned { background: #312e81; color: #c7d2fe; border-color: #4338ca; }
+    .btn-pin { padding: 4px 10px; font-size: 12px; min-width: 0; }
+    #retention-section details { margin-top: 12px; font-size: 13px; color: #ccc; }
+    #retention-section details ul { margin: 8px 0 4px 0; padding-left: 20px; line-height: 1.6; }
+    #retention-section summary { cursor: pointer; color: #ffb862; }
+    #retention-section summary:focus-visible { outline: 2px solid #ffb862; outline-offset: 2px; }
+    @media (max-width: 700px) { .retention-actions .button { width: 100%; text-align: center; } }
     /* Accessibility helpers */
     .visually-hidden { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; clip:rect(0 0 0 0); clip-path: inset(50%); overflow:hidden; white-space:nowrap; }
     main button:focus-visible, main a:focus-visible, main input:focus-visible, .ptm-dialog button:focus-visible { outline: 2px solid #ffb862; outline-offset: 2px; }
@@ -682,7 +725,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                 <strong style="color: #4ade80;">How it works:</strong><br>
                 • <strong>Active playthrough</strong> = the live data CHIM is reading and writing right now.<br>
                 • <strong>Saved snapshots</strong> = stored copies of a playthrough. They are not in use.<br>
-                • <strong>Restore</strong> = saves your current progress over the loaded snapshot first, then loads the selected snapshot as the active playthrough.<br>
+                • <strong>Restore</strong> = saves your current progress over the loaded snapshot first, then loads the selected snapshot as the active playthrough. If the currently loaded snapshot cannot be determined, the restore is blocked so nothing is overwritten.<br>
                 • <strong>Dragon Breaks</strong> = automatic snapshots taken when you load a save 3+ days behind.<br>
                 <span class="help-text">Technical note: the active playthrough lives in the PostgreSQL <code>public</code> schema; snapshots are cloned schemas in the same database.</span>
             </div>
@@ -732,8 +775,8 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                     <strong style="color:#f8f9fa;">Player:</strong> <span id="live-player"><?php echo h($livePlayerName); ?></span>
                 </div>
                 <div><strong style="color:#f8f9fa;">Game:</strong> <span id="live-game"><?php echo h($liveGameName); ?></span></div>
-                <div><strong style="color:#f8f9fa;">Events at last save:</strong> <span id="live-eventlog" title="Refreshed with an approximate live estimate when database statistics are available"><?php echo intval($liveEventlogCount); ?></span></div>
-                <div><strong style="color:#f8f9fa;">Knowledge entries at last save:</strong> <span id="live-oghma" title="Refreshed with an approximate live estimate when database statistics are available"><?php echo intval($liveOghmaCount); ?></span></div>
+                <div><strong style="color:#f8f9fa;" id="live-eventlog-label">Events (at last snapshot save):</strong> <span id="live-eventlog" title="Refreshed with an approximate live estimate when database statistics are available"><?php echo intval($liveEventlogCount); ?></span></div>
+                <div><strong style="color:#f8f9fa;" id="live-oghma-label">Knowledge entries (at last snapshot save):</strong> <span id="live-oghma" title="Refreshed with an approximate live estimate when database statistics are available"><?php echo intval($liveOghmaCount); ?></span></div>
                 <div><strong style="color:#f8f9fa;">Last in-game date:</strong> <span id="live-last"><?php echo h($liveSkyrimDate !== '' ? $liveSkyrimDate : 'n/a'); ?></span></div>
             </div>
         </div>
@@ -794,22 +837,6 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                                             <span class="badge-loaded">✓ LOADED</span>
                                         <?php } ?>
                                         <?php echo h($p['name']); ?>
-                                        <?php
-                                            $lg = isset($p['last_gamets']) ? intval($p['last_gamets']) : 0;
-                                            if ($liveLastGamets > 0 && $lg > 0) {
-                                                if ($lg === $liveLastGamets) {
-                                                    echo '<span style="color:#9fb1c9; margin-left:6px;">| Current Time</span>';
-                                                } elseif ($lg < $liveLastGamets) {
-                                                    $d = gamets2days_between($lg, $liveLastGamets);
-                                                    $txt = $d.' '.($d===1?'day':'days').' behind';
-                                                    echo '<span style="color:#dc2626; margin-left:6px;">| '.h($txt).'</span>';
-                                                } else {
-                                                    $d = gamets2days_between($liveLastGamets, $lg);
-                                                    $txt = $d.' '.($d===1?'day':'days').' ahead';
-                                                    echo '<span style="color:#16a34a; margin-left:6px;">| '.h($txt).'</span>';
-                                                }
-                                            }
-                                        ?>
                                     </div>
                                     <div style="font-size: 12px; color:#ccc; display:flex; gap:10px; flex-wrap:wrap;">
                                         <span><?php echo h($p['created_at']); ?></span>
@@ -873,10 +900,134 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         <div class="help-text" style="margin-top: 12px;">
             For backups, exports, and maintenance, use the
             <a href="<?php echo $webRoot; ?>/ui/import_db.php"<?php echo $isEmbed ? ' target="_top"' : ''; ?> style="color:#ffb862;">Database Manager</a>.
-            Cleanup controls (trimming diagnostics logs, pruning old snapshots) are a planned follow-up and are not part of this page.
+            Cleanup policies (diagnostics logs, automatic snapshot pruning) are managed in the <a href="#retention-section" style="color:#ffb862;">Data retention</a> panel below.
         </div>
     </div>
 
+    <div class="content-section full-width-section" id="retention-section" style="margin-top: 30px;">
+        <h2>🧹 Data retention</h2>
+        <div class="help-text" style="margin-bottom: 10px;">
+            Choose what CHIM keeps. Cleanup is <strong>off by default</strong>.
+            Policies apply server-wide, including after switching playthroughs.
+        </div>
+        <div class="retention-note" style="margin-bottom: 4px;">
+            Live memories, relationships, diaries, quests and files are preserved.
+            Removing a snapshot deletes its entire saved copy.
+        </div>
+
+        <div id="retention-status" role="status" aria-live="polite" class="retention-status"></div>
+
+        <form id="retention-form" novalidate data-api="<?php echo htmlspecialchars($webRoot . '/ui/api/playthrough_retention.php', ENT_QUOTES); ?>" data-csrf="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES); ?>">
+            <div class="retention-grid">
+                <fieldset class="retention-fieldset">
+                    <legend>Automatic cleanup</legend>
+                    <div class="retention-row">
+                        <input type="checkbox" id="ret-automatic" name="automatic" disabled>
+                        <label for="ret-automatic">Run enabled policies automatically</label>
+                    </div>
+                    <p class="retention-note" id="ret-automatic-help">
+                        When on, the CHIM background processor runs one bounded cleanup batch per hour. Off by default.
+                    </p>
+                    <p class="retention-note">Last run: <span id="ret-lastrun">—</span></p>
+                </fieldset>
+
+                <fieldset class="retention-fieldset">
+                    <legend>Diagnostics logs</legend>
+                    <div class="retention-row">
+                        <input type="checkbox" id="ret-diag-enabled" name="diagnostics_enabled" disabled>
+                        <label for="ret-diag-enabled">Trim diagnostics logs</label>
+                    </div>
+                    <div class="retention-row">
+                        <label for="ret-diag-days">Keep the last</label>
+                        <input type="number" id="ret-diag-days" name="diagnostic_days" inputmode="numeric" min="1" max="3650" step="1" value="7" disabled aria-describedby="ret-diag-help">
+                        <span>real-world days (1–3650)</span>
+                    </div>
+                    <div class="retention-row">
+                        <label for="ret-diag-maxmb">Size target per table</label>
+                        <input type="number" id="ret-diag-maxmb" name="diagnostic_max_mb" inputmode="numeric" min="0" max="102400" step="1" value="500" disabled aria-describedby="ret-diag-help">
+                        <span>MB (0 = no size target)</span>
+                    </div>
+                    <p class="retention-note" id="ret-diag-help">
+                        Always keeps the last 24 hours and unsent responses. Size is a soft target per table, not a disk-space limit.
+                    </p>
+                </fieldset>
+
+                <fieldset class="retention-fieldset">
+                    <legend>Automatic snapshots (Dragon Breaks)</legend>
+                    <div class="retention-row">
+                        <input type="checkbox" id="ret-snap-enabled" name="snapshots_enabled" disabled>
+                        <label for="ret-snap-enabled">Prune old automatic snapshots</label>
+                    </div>
+                    <div class="retention-row">
+                        <label for="ret-snap-keep">Keep the newest</label>
+                        <input type="number" id="ret-snap-keep" name="snapshot_keep" inputmode="numeric" min="1" max="100" step="1" value="5" disabled aria-describedby="ret-snap-help">
+                        <span>automatic snapshots (1–100)</span>
+                    </div>
+                    <p class="retention-note" id="ret-snap-help">
+                        Always keeps active, default, protected, manual and older unclassified snapshots.
+                    </p>
+                </fieldset>
+
+                <fieldset class="retention-fieldset">
+                    <legend>Event log (preview only)</legend>
+                    <div class="retention-row">
+                        <label for="ret-event-days">Preview events older than</label>
+                        <input type="number" id="ret-event-days" name="event_days" inputmode="numeric" min="0" max="3650" step="1" value="0" disabled aria-describedby="ret-event-blocked ret-event-help">
+                        <span>in-game days (0 = no preview)</span>
+                    </div>
+                    <div class="retention-blocked" id="ret-event-blocked">
+                        <strong>Preview only. Events are never deleted:</strong> CHIM cannot yet verify that memory processing has finished.
+                    </div>
+                    <p class="retention-note" id="ret-event-help">Measured from the latest recorded game time in the active data.</p>
+                </fieldset>
+            </div>
+
+            <div class="retention-actions">
+                <button type="submit" class="button" id="ret-save" style="background-color: rgb(1 53 166 / 90%); color:#fff;" disabled>💾 Save settings</button>
+                <button type="button" class="button" id="ret-preview" style="background-color:#333; color:#e0e0e0;" disabled>🔍 Preview cleanup (saved settings)</button>
+                <button type="button" class="button" id="ret-run" style="background-color: rgba(166, 53, 63, 0.9); color:#fff;" disabled aria-disabled="true">🗑️ Run cleanup now</button>
+            </div>
+            <p class="retention-note" id="ret-run-hint">
+                Saving never runs a cleanup. Preview always uses the last <em>saved</em> settings.
+                "Run cleanup now" unlocks only after a preview and asks for confirmation first; a preview expires after 5 minutes and is invalidated by any settings or protection change.
+            </p>
+        </form>
+
+        <div id="ret-preview-out" style="margin-top: 4px;"></div>
+
+        <div style="margin-top: 16px;">
+            <strong style="color:#ffb862; font-size: 14px;">Snapshot protection</strong>
+            <p class="retention-note">
+                Protected snapshots cannot be deleted until you unprotect them. Manual and unclassified snapshots are never pruned automatically.
+            </p>
+            <ul class="retention-snap-list" id="ret-snap-list">
+                <li><span>Loading snapshot list…</span></li>
+            </ul>
+        </div>
+
+        <details>
+            <summary>How data retention works (details)</summary>
+            <ul>
+                <li>Settings are stored server-wide and apply to the active playthrough. <strong>Saving settings does not run cleanup itself.</strong></li>
+                <li>Diagnostics cleanup trims log, audit_request, and delivered responselog rows by real-world age or estimated logical size. Rows younger than 24 hours and unsent responses are always kept.</li>
+                <li>Cleanup runs only when you press "Run cleanup now" after a preview and confirm, or about once an hour when automatic cleanup is on and the CHIM background processor is running.</li>
+                <li>A preview always uses the last <em>saved</em> settings. It shows the exact candidate rows for the next bounded cleanup batch and the names of candidate snapshots, and it expires after 5 minutes.</li>
+                <li>Each batch removes at most 1,000 diagnostic rows per table and three automatic snapshots. Byte figures are estimated logical size: that space becomes reusable inside the database, it is not immediately freed on disk.</li>
+                <li id="ret-event-status">Event log deletion is blocked by design and the event-days setting is preview-only — it never deletes anything.</li>
+                <li>Live NPC memories, relationships, diaries and quest data are never trimmed. Removing a snapshot removes its entire saved copy, including those records. Audio and temporary files are preserved pending reference validation.</li>
+                <li>Automatic snapshot pruning considers only snapshots explicitly marked as automatic Dragon Breaks when created. Snapshots made before this feature count as manual/unclassified and are never removed automatically.</li>
+            </ul>
+        </details>
+    </div>
+
+    <dialog id="ret-confirm-dialog" class="ptm-dialog" aria-labelledby="ret-confirm-title" aria-describedby="ret-confirm-body">
+        <h3 id="ret-confirm-title">Run cleanup now?</h3>
+        <p id="ret-confirm-body" style="white-space:pre-line;"></p>
+        <form method="dialog" class="ptm-dialog-buttons">
+            <button class="button" value="cancel" autofocus>Cancel</button>
+            <button class="button" value="run" style="background:#a6353f;color:#fff;">Delete this batch</button>
+        </form>
+    </dialog>
     <dialog id="ptm-dialog" class="ptm-dialog" role="alertdialog" aria-labelledby="ptm-dialog-title" aria-describedby="ptm-dialog-body">
         <h3 id="ptm-dialog-title"></h3>
         <div id="ptm-dialog-body"></div>
@@ -928,7 +1079,7 @@ echo $buffer;
         frag.appendChild(p1);
         frag.appendChild(el('p', activeName
             ? 'Before restoring, your current live progress is saved over the currently loaded snapshot "' + activeName + '" — its stored copy is replaced with the current live state.'
-            : 'Before restoring, your current live progress is saved over the currently loaded snapshot — its stored copy is replaced with the current live state.'));
+            : 'Before restoring, the server saves your current live progress over the currently loaded snapshot. If the loaded snapshot cannot be determined, the restore is blocked and nothing is changed.'));
         frag.appendChild(el('p', 'Then "' + name + '" replaces the active playthrough.'));
         frag.appendChild(el('p', 'After the restore completes you must:'));
         const ol = el('ol');
@@ -955,7 +1106,7 @@ echo $buffer;
     function plainTextConfirm(kind, name, size, activeName){
         if (kind === 'restore') {
             return 'Restore snapshot "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\n' +
-                '1. Your current progress is saved over the loaded snapshot' + (activeName ? ' "' + activeName + '"' : '') + '.\n' +
+                '1. Your current progress is saved over the loaded snapshot' + (activeName ? ' "' + activeName + '"' : ' (if it cannot be determined, the restore is blocked)') + '.\n' +
                 '2. "' + name + '" then replaces the active playthrough.\n' +
                 '3. Afterwards: shut down Skyrim, restart the CHIM server, then restart Skyrim.\n\nContinue?';
         }
@@ -973,6 +1124,7 @@ echo $buffer;
         } else {
             // Fallback path bypasses the submit event, so show the overlay here.
             if (f.classList.contains('switch-form')) { if (overlayTitle) overlayTitle.textContent = 'Restoring snapshot…'; showOverlay(); }
+            if (f.getAttribute('data-confirm') === 'delete') { if (overlayTitle) overlayTitle.textContent = 'Deleting snapshot…'; showOverlay(); }
             f.submit();
         }
     }
@@ -1044,7 +1196,19 @@ echo $buffer;
             if (overlayTitle) overlayTitle.textContent = 'Setting up…';
             showOverlay();
         }
+        if (form.getAttribute && form.getAttribute('data-confirm') === 'delete') {
+            if (overlayTitle) overlayTitle.textContent = 'Deleting snapshot…';
+            showOverlay();
+        }
     }, true);
+
+    // Reset transient UI when the page is restored from the back/forward cache,
+    // otherwise a stale overlay or confirmed flag would stick after navigating back.
+    window.addEventListener('pageshow', function(){
+        if (overlay) overlay.style.display = 'none';
+        document.querySelectorAll('form[data-confirm]').forEach(function(f){ delete f.dataset.confirmed; });
+        if (dlg && dlg.open) dlg.close('cancel');
+    });
 
     // ----- Timeline -----
     (function(){
@@ -1200,6 +1364,12 @@ echo $buffer;
             legend.appendChild(li);
         });
         host.appendChild(legend);
+        if (s.snapshot_note) {
+            const note = document.createElement('p');
+            note.className = 'retention-note';
+            note.textContent = s.snapshot_note;
+            host.appendChild(note);
+        }
     }
 
     try {
@@ -1214,15 +1384,20 @@ echo $buffer;
                 renderStorage(j.storage || null);
                 // Counts are planner estimates and can lag or reset; only replace the
                 // metadata-based value with a positive estimate, never with zero.
+                // The label stays "(at last snapshot save)" unless the live estimate applies.
                 const ev = document.getElementById('live-eventlog');
+                const evLabel = document.getElementById('live-eventlog-label');
                 if (ev && typeof j.eventlog_estimate === 'number' && j.eventlog_estimate > 0) {
                     ev.textContent = '~' + j.eventlog_estimate.toLocaleString();
                     ev.title = 'Approximate (from database statistics)';
+                    if (evLabel) evLabel.textContent = 'Events (approx. live):';
                 }
                 const og = document.getElementById('live-oghma');
+                const ogLabel = document.getElementById('live-oghma-label');
                 if (og && typeof j.oghma_estimate === 'number' && j.oghma_estimate > 0) {
                     og.textContent = '~' + j.oghma_estimate.toLocaleString();
                     og.title = 'Approximate (from database statistics)';
+                    if (ogLabel) ogLabel.textContent = 'Knowledge entries (approx. live):';
                 }
                 const la = document.getElementById('live-last');
                 if (la && typeof j.last_skyrim_date === 'string' && j.last_skyrim_date) {
@@ -1236,3 +1411,5 @@ echo $buffer;
     } catch (_e) {}
 })();
 </script>
+
+<script src="<?php echo $webRoot; ?>/ui/js/playthrough_retention.js"></script>

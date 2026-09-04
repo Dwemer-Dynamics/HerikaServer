@@ -90,6 +90,11 @@ if ($totRes && ($tr = @pg_fetch_assoc($totRes)) && isset($tr['b']) && $tr['b'] !
         $snapBytes = max(0, (int)$sr['b']);
         $snapSchemas = (int)($sr['s'] ?? 0);
     }
+    // Inline legacy dumps are also snapshot storage. Large-object dumps share
+    // PostgreSQL's system storage and remain in Other; disclose that distinction.
+    $blobRes = @pg_query($adminConn, "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)),0)::bigint AS bytes FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='chim_meta' AND c.relname='playthrough_blobs' AND c.relkind='r'");
+    $blobRow = $blobRes ? pg_fetch_assoc($blobRes) : null;
+    if ($snapBytes !== null && $blobRow) $snapBytes += (int)$blobRow['bytes'];
 
     if ($publicBytes !== null && $diagBytes !== null && $snapBytes !== null) {
         $playthroughBytes = max(0, $publicBytes - $diagBytes);
@@ -101,6 +106,7 @@ if ($totRes && ($tr = @pg_fetch_assoc($totRes)) && isset($tr['b']) && $tr['b'] !
             'snapshots_bytes' => $snapBytes,
             'other_bytes' => $otherBytes,
             'snapshot_schemas' => $snapSchemas,
+            'snapshot_note' => 'Snapshot sizes include schema copies and inline legacy dumps. Legacy large-object dumps are included in Other.',
         ];
     }
 }
