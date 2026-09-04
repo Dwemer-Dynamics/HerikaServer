@@ -1006,10 +1006,12 @@ function getTimeColor($time) {
             $prevPage = max(1, $page - 1);
             $nextPage = $page + 1;
             
-            // Get total count for pagination
-            $countQuery = "SELECT COUNT(*) as total FROM eventlog WHERE $eventLogVisibleWhereClause";
-            $countResult = $db->fetchAll($countQuery);
-            $totalRecords = intval($countResult[0]['total'] ?? 0);
+            // Get total count for pagination from the per-type counts already
+            // fetched for the filter dropdown, avoiding another eventlog scan.
+            $totalRecords = 0;
+            foreach ($eventLogTypeOptions as $eventLogTypeOption) {
+                $totalRecords += intval($eventLogTypeOption['total'] ?? 0);
+            }
             $totalPages = ceil($totalRecords / $limit);
             
             echo "<div class='pagination-buttons' style='margin: 6px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;'>";
@@ -1805,7 +1807,9 @@ function getTimeColor($time) {
 
         
         <!-- Memory Summaries Tab -->
-        <div id="memory-tab" class="tab-content <?php echo $activeTab === 'memory' ? 'active' : ''; ?>">
+        <?php // Inactive tabs skip their queries and markup on event log loads; switchTab() visits them via href instead. ?>
+        <div id="memory-tab" class="tab-content <?php echo $activeTab === 'memory' ? 'active' : ''; ?>"<?php echo $activeTab === 'eventlog' ? ' data-deferred="true"' : ''; ?>>
+            <?php if ($activeTab !== 'eventlog'): ?>
             <?php
             // Show success/delete messages
             if (isset($_GET['updated'])) {
@@ -2073,10 +2077,12 @@ function getTimeColor($time) {
                 }
             }
             </script>
+            <?php endif; ?>
         </div>
 
         <!-- Active Quests Tab -->
-        <div id="quests-tab" class="tab-content <?php echo $activeTab === 'quests' ? 'active' : ''; ?>">
+        <div id="quests-tab" class="tab-content <?php echo $activeTab === 'quests' ? 'active' : ''; ?>"<?php echo $activeTab === 'eventlog' ? ' data-deferred="true"' : ''; ?>>
+            <?php if ($activeTab !== 'eventlog'): ?>
             <?php
             $results = $db->fetchAll("SELECT name, id_quest, briefing, briefing2, data from quests");
             
@@ -2110,10 +2116,12 @@ function getTimeColor($time) {
                 echo "</div>";
             }
             ?>
+            <?php endif; ?>
         </div>
 
         <!-- Book Log Tab -->
-        <div id="books-tab" class="tab-content <?php echo $activeTab === 'books' ? 'active' : ''; ?>">
+        <div id="books-tab" class="tab-content <?php echo $activeTab === 'books' ? 'active' : ''; ?>"<?php echo $activeTab === 'eventlog' ? ' data-deferred="true"' : ''; ?>>
+            <?php if ($activeTab !== 'eventlog'): ?>
             <?php
             $results = $db->fetchAll("SELECT title, content, gamets, localts, ts, ROWID FROM books A ORDER BY gamets DESC, rowid DESC LIMIT 150 OFFSET 0");
             
@@ -2162,6 +2170,7 @@ function getTimeColor($time) {
                 echo "</div>";
             }
             ?>
+            <?php endif; ?>
         </div>
 
         <div id="adventure-tab" class="tab-content embed-tab <?php echo $activeTab === 'adventure' ? 'active' : ''; ?>">
@@ -2288,6 +2297,12 @@ function switchTab(tabName, updateHistory = true) {
     const target = document.getElementById(tabName + '-tab');
     const clickedButton = document.querySelector('.events-memories-navigation .tab-button[data-tab="' + tabName + '"]');
     if (!target || !clickedButton) return;
+
+    // Deferred tabs carry no server-rendered content on this load, so visit them directly.
+    if (target.dataset.deferred) {
+        window.location.href = clickedButton.href;
+        return;
+    }
 
     // Hide all tab contents
     const tabContents = document.querySelectorAll('.tab-content');
