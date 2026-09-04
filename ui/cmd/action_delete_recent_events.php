@@ -37,7 +37,7 @@ if (!in_array($deleteCount, [5, 10, 20, 50, 100], true)) {
 
 try {
     $db = $GLOBALS["db"];
-    $result = chimDeleteLatestVisibleEventLogRows($db, $deleteCount);
+    $result = chimDeleteLatestVisibleTimelineRows($db, $deleteCount);
     if (empty($result['ok'])) {
         http_response_code(400);
     }

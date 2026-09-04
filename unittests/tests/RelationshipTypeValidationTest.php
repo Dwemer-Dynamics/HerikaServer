@@ -307,4 +307,98 @@ final class RelationshipTypeValidationTest extends TestCase
             }
         }
     }
+
+    public function testTimelineRowIdentifiersPreserveRelationshipHistoryIds(): void
+    {
+        $this->assertSame(
+            ['source' => 'relationship_history', 'id' => 50, 'rowid' => 'relationship:50'],
+            chimParseTimelineRowIdentifier('relationship:00050')
+        );
+        $this->assertSame(
+            ['source' => 'eventlog', 'id' => 21220, 'rowid' => '21220'],
+            chimParseTimelineRowIdentifier('21220')
+        );
+        $this->assertNull(chimParseTimelineRowIdentifier('relationship:nope'));
+        $this->assertNull(chimParseTimelineRowIdentifier('0'));
+    }
+
+    public function testRelationshipUndoRestoresOnlyRelationshipStateAndPreservesCustomInfo(): void
+    {
+        $current = [
+            'relationships' => [
+                'Player' => ['aff' => 15, 'type' => 'hostile', 'custom_info' => 'Player note'],
+                'Lydia' => ['aff' => 5, 'type' => 'neutral', 'custom_info' => 'Lydia note'],
+            ],
+            'relationships_analyzed' => true,
+            'relationships_model' => 'current-model',
+            'unrelated' => ['keep' => true],
+        ];
+        $previous = [
+            'relationships' => [
+                'Player' => ['aff' => 2, 'type' => 'neutral'],
+            ],
+            'relationships_analyzed' => false,
+            'relationships_model' => 'old-model',
+            'unrelated' => ['keep' => false],
+        ];
+
+        $restored = chimBuildRelationshipUndoExtendedData(
+            json_encode($current),
+            json_encode($previous)
+        );
+
+        $this->assertSame(2, $restored['relationships']['Player']['aff']);
+        $this->assertSame('neutral', $restored['relationships']['Player']['type']);
+        $this->assertSame('Player note', $restored['relationships']['Player']['custom_info']);
+        $this->assertSame(0, $restored['relationships']['Lydia']['aff']);
+        $this->assertSame('neutral', $restored['relationships']['Lydia']['type']);
+        $this->assertSame('Lydia note', $restored['relationships']['Lydia']['custom_info']);
+        $this->assertTrue($restored['relationships_analyzed']);
+        $this->assertSame('current-model', $restored['relationships_model']);
+        $this->assertSame(['keep' => true], $restored['unrelated']);
+    }
+
+    public function testRelationshipUndoCanRemoveTheFirstRelationshipChange(): void
+    {
+        $restored = chimBuildRelationshipUndoExtendedData(
+            json_encode([
+                'relationships' => [
+                    'Player' => ['aff' => -10, 'type' => 'enemy', 'custom_info' => 'Keep me'],
+                ],
+                'unrelated' => 'preserved',
+            ]),
+            null
+        );
+
+        $this->assertSame([
+            'Player' => ['aff' => 0, 'type' => 'neutral', 'custom_info' => 'Keep me'],
+        ], $restored['relationships']);
+        $this->assertSame('preserved', $restored['unrelated']);
+    }
+
+    public function testRelationshipUndoComparisonIgnoresCustomInfoOnly(): void
+    {
+        $left = [
+            'relationships' => [
+                'Player' => ['aff' => 7, 'type' => 'platonic', 'custom_info' => 'First note'],
+            ],
+            'unrelated' => 'left',
+        ];
+        $right = [
+            'relationships' => [
+                'Player' => ['aff' => 7, 'type' => 'platonic', 'custom_info' => 'Second note'],
+            ],
+            'unrelated' => 'right',
+        ];
+
+        $this->assertSame(
+            chimRelationshipUndoComparableState(json_encode($left)),
+            chimRelationshipUndoComparableState(json_encode($right))
+        );
+        $right['relationships']['Player']['aff'] = 8;
+        $this->assertNotSame(
+            chimRelationshipUndoComparableState(json_encode($left)),
+            chimRelationshipUndoComparableState(json_encode($right))
+        );
+    }
 }

@@ -25,26 +25,26 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
     exit;
 }
 
-$rowId = intval($_POST['rowid'] ?? 0);
-if ($rowId <= 0) {
+$rowId = trim((string)($_POST['rowid'] ?? ''));
+if (chimParseTimelineRowIdentifier($rowId) === null) {
     http_response_code(400);
     echo json_encode([
         'ok' => false,
-        'message' => 'Invalid event row.',
+        'message' => 'Invalid timeline row.',
     ]);
     exit;
 }
 
 try {
-    $result = chimDeleteEventLogRow($GLOBALS['db'], $rowId);
+    $result = chimDeleteTimelineRow($GLOBALS['db'], $rowId);
     if (empty($result['ok'])) {
-        http_response_code(500);
+        http_response_code(409);
     }
     echo json_encode($result);
 } catch (Throwable $e) {
     http_response_code(500);
     echo json_encode([
         'ok' => false,
-        'message' => 'Failed to delete event.',
+        'message' => 'Failed to delete timeline event.',
     ]);
 }

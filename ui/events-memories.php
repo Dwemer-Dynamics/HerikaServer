@@ -720,7 +720,7 @@ $db = new sql();
 
 $eventLogLimit = isset($_GET["limit"]) ? intval($_GET["limit"]) : 100;
 $eventLogPage = isset($_GET["page"]) ? max(1, intval($_GET["page"])) : 1;
-$eventLogAutoRefresh = isset($_GET["autorefresh"]) && $_GET["autorefresh"];
+$eventLogAutoRefresh = $eventLogPage === 1 && isset($_GET["autorefresh"]) && $_GET["autorefresh"];
 $eventLogHiddenTypes = chimGetPersistedEventLogHiddenTypes($db);
 
 if (isset($_GET['hide_event_type'])) {
@@ -810,10 +810,15 @@ if (isset($_GET["cleanlog"]) && $_GET["cleanlog"]) {
 if (isset($_GET['delete_last'])) {
     $delCount = (int)$_GET['delete_last'];
     if (in_array($delCount, [5, 10, 20, 50, 100], true)) {
-        $deleteResult = chimDeleteLatestVisibleEventLogRows($db, $delCount, '', $eventLogHiddenTypes);
+        $deleteResult = chimDeleteLatestVisibleTimelineRows($db, $delCount, '', $eventLogHiddenTypes);
         $deletedCount = intval($deleteResult['deleted_count'] ?? 0);
         $redirectParams = $eventLogCurrentPageParams;
-        $redirectParams['deleted'] = $deletedCount;
+        if (!empty($deleteResult['ok'])) {
+            $redirectParams['deleted'] = $deletedCount;
+            $redirectParams['relationships_undone'] = intval($deleteResult['relationship_undo_count'] ?? 0);
+        } else {
+            $redirectParams['timeline_error'] = (string)($deleteResult['message'] ?? 'Failed to delete timeline events.');
+        }
         header("Location: events-memories.php?" . http_build_query($redirectParams));
         exit;
     }
@@ -827,47 +832,16 @@ if (isset($_POST['delete_selected']) && !empty($_POST['rowids'])) {
     $rowids = $_POST['rowids'];
     if (is_array($rowids)) {
         Logger::info("Rowids received as array: " . json_encode($rowids));
-        
-        // Sanitize and validate row IDs
-        $sanitizedRowids = array_map('intval', $rowids);
-        $sanitizedRowids = array_filter($sanitizedRowids, function($id) { return $id > 0; });
-        
-        Logger::info("Sanitized rowids: " . json_encode($sanitizedRowids));
-        
-        if (count($sanitizedRowids) > 0) {
-            $rowidsStr = implode(',', $sanitizedRowids);
-            $existingRows = $db->fetchAll("SELECT rowid FROM eventlog WHERE rowid IN ($rowidsStr)");
-            $existingRowids = [];
-            foreach ($existingRows as $existingRow) {
-                $existingRowid = intval($existingRow['rowid'] ?? 0);
-                if ($existingRowid > 0) {
-                    $existingRowids[] = $existingRowid;
-                }
-            }
-
-            Logger::info("Existing rowids before delete: " . json_encode($existingRowids));
-
-            if (count($existingRowids) > 0) {
-                $existingRowidsStr = implode(',', $existingRowids);
-                $query = "DELETE FROM eventlog WHERE rowid IN ($existingRowidsStr)";
-                Logger::info("Executing delete query: $query");
-                $db->query($query);
-            }
-
-            $deletedCount = count($existingRowids);
-            Logger::info("Bulk delete executed: $deletedCount events deleted.");
-            
-            $redirectParams = $eventLogCurrentPageParams;
-            $redirectParams['deleted'] = $deletedCount;
-            header("Location: events-memories.php?" . http_build_query($redirectParams));
-            exit;
+        $deleteResult = chimDeleteTimelineRows($db, $rowids);
+        $redirectParams = $eventLogCurrentPageParams;
+        if (!empty($deleteResult['ok'])) {
+            $redirectParams['deleted'] = intval($deleteResult['deleted_count'] ?? 0);
+            $redirectParams['relationships_undone'] = intval($deleteResult['relationship_undo_count'] ?? 0);
         } else {
-            Logger::warn("Bulk delete attempted but no valid rowids after sanitization");
-            $redirectParams = $eventLogCurrentPageParams;
-            $redirectParams['error'] = 'invalid_ids';
-            header("Location: events-memories.php?" . http_build_query($redirectParams));
-            exit;
+            $redirectParams['timeline_error'] = (string)($deleteResult['message'] ?? 'Failed to delete selected timeline events.');
         }
+        header("Location: events-memories.php?" . http_build_query($redirectParams));
+        exit;
     } else {
         Logger::warn("Bulk delete attempted but rowids is not an array: " . json_encode($rowids));
         $redirectParams = $eventLogCurrentPageParams;
@@ -974,7 +948,7 @@ function getTimeColor($time) {
             // Add subtitle description
             echo "<div class='event-log-intro'>";
             echo "<span style='color: rgb(242, 124, 17); font-weight: bold;'>📝 Events:</span> ";
-            echo "<span style='color: #f8f9fa;'>Combined timeline of in-game events and relationship changes. Relationship history remains stored separately and is not copied into the Event Log or AI event context.</span>";
+            echo "<span style='color: #f8f9fa;'>Combined timeline of in-game events and relationship changes. Deleting a relationship event safely restores its previous state. Relationship history remains separate from the Event Log and AI event context.</span>";
             echo "</div>";
 
             // Keep context guidance directly below the description so both scan as one compact introduction.
@@ -985,13 +959,22 @@ function getTimeColor($time) {
             // Show success message if events were deleted
             if (isset($_GET['deleted'])) {
                 $deletedCount = intval($_GET['deleted']);
-                echo "<div style='background: #28a745; color: white; padding: 10px; border-radius: 5px; margin: 10px 0;'>Successfully deleted $deletedCount event(s)!</div>";
+                $relationshipUndoCount = intval($_GET['relationships_undone'] ?? 0);
+                $undoCopy = $relationshipUndoCount > 0 ? " {$relationshipUndoCount} relationship change(s) were undone." : '';
+                echo "<div style='background: #28a745; color: white; padding: 10px; border-radius: 5px; margin: 10px 0;'>Removed $deletedCount timeline event(s).$undoCopy</div>";
+            }
+            if (isset($_GET['timeline_error'])) {
+                echo "<div style='background: #9b2c2c; color: white; padding: 10px; border-radius: 5px; margin: 10px 0;'>" . htmlspecialchars((string)$_GET['timeline_error']) . "</div>";
             }
             
             // Event Log title with integrated monitor toggle and delete buttons
             $isAutoRefresh = $eventLogAutoRefresh;
             $eventLogUrlBuilder = function(array $overrides = []) use ($eventLogBaseParams) {
-                return 'events-memories.php?' . http_build_query(array_merge($eventLogBaseParams, $overrides));
+                $params = array_merge($eventLogBaseParams, $overrides);
+                if (intval($params['page'] ?? 1) !== 1) {
+                    unset($params['autorefresh']);
+                }
+                return 'events-memories.php?' . http_build_query($params);
             };
             echo "<div class='event-log-toolbar'>";
             
@@ -1015,7 +998,7 @@ function getTimeColor($time) {
             echo "<option value='20'>Delete Latest 20</option>";
             echo "<option value='50'>Delete Latest 50</option>";
             echo "<option value='100'>Delete Latest 100</option>";
-            echo "<option value='all'>Delete ALL</option>";
+            echo "<option value='all'>Delete ALL Event Log Only</option>";
             echo "</select>";
             echo "<button onclick='handleDeletePresetAction()' class='btn-base btn-danger' style='padding: 6px 10px; font-size: 0.8em;'>Delete</button>";
             echo "</div>";
@@ -1055,10 +1038,10 @@ function getTimeColor($time) {
             $mappedResults = array_map(function ($row) use ($columnHeaders) {
                 $mappedRow = [];
                 $isRelationshipHistory = ($row['source'] ?? '') === 'relationship_history';
-                // Add checkbox column first (PostgreSQL returns rowid in lowercase)
-                $mappedRow['☑'] = $isRelationshipHistory
-                    ? ''
-                    : '<input type="checkbox" class="event-checkbox" data-rowid="' . htmlspecialchars($row['rowid'] ?? '') . '" style="cursor: pointer; width: 18px; height: 18px;">';
+                // Relationship and ordinary events share the same timeline selection controls.
+                $mappedRow['☑'] = '<input type="checkbox" class="event-checkbox" data-rowid="'
+                    . htmlspecialchars($row['rowid'] ?? '')
+                    . '" style="cursor: pointer; width: 18px; height: 18px;">';
                 
                 foreach ($row as $key => $value) {
                     if ($key === 'changes') {
@@ -1115,10 +1098,17 @@ function getTimeColor($time) {
                         }
                         $mappedRow['People Present'] = htmlspecialchars($peoplePresent);
                     } else if ($key === 'rowid') {
-                        $mappedRow['Record'] = $isRelationshipHistory
+                        $timelineRowId = (string)$value;
+                        $recordLabel = $isRelationshipHistory
                             ? 'Relationship #' . intval($row['relationship_history_id'] ?? 0)
-                            : '<a class="icon-link" href="#" style="color: red !important;" onclick="deleteRowAndRefresh(\'eventlog\', ' . intval($value) . '); return false;">'
-                                . intval($value) . ' <i class="bi-trash" style="color: red !important;"></i></a>';
+                            : (string)intval($value);
+                        $mappedRow['Record'] = '<a class="icon-link" href="#" style="color: red !important;" title="'
+                            . ($isRelationshipHistory ? 'Undo this relationship change' : 'Delete this event')
+                            . '" onclick="deleteTimelineRowAndRefresh('
+                            . htmlspecialchars(json_encode($timelineRowId), ENT_QUOTES)
+                            . ', ' . ($isRelationshipHistory ? 'true' : 'false') . '); return false;">'
+                            . htmlspecialchars($recordLabel)
+                            . ' <i class="bi-trash" style="color: red !important;"></i></a>';
                     } else if (in_array($key, ['people', 'ts', 'source', 'relationship_history_id'], true)) {
                         // Skip rendering raw people column; we show only 'People Present'
                         continue;
@@ -1225,7 +1215,7 @@ function getTimeColor($time) {
             
             echo "<script>
             function deleteAllEventsConfirm() {
-                var userInput = prompt('THIS WILL DELETE ALL EVENTS IN THE EVENT LOG!\\n\\nEvents are used for AI context. This action cannot be undone.\\n\\nTo confirm this dangerous operation, please type exactly: Delete');
+                var userInput = prompt('THIS WILL DELETE ALL ORDINARY EVENTS IN THE EVENT LOG!\\n\\nRelationship history is not affected. Events are used for AI context. This action cannot be undone.\\n\\nTo confirm this dangerous operation, please type exactly: Delete');
                 if (userInput === 'Delete') {
                     window.location.href = " . json_encode($eventLogUrlBuilder(['page' => 1, 'reset' => 'true'])) . ";
                 } else if (userInput !== null) {
@@ -1249,15 +1239,17 @@ function getTimeColor($time) {
             const currentLimitEventLog = $limit;
             const headersEventLog = " . json_encode($columnHeaders) . ";
             const eventLogApiBaseUrl = " . json_encode($webRoot . "/ui/api/eventlog.php") . ";
+            const eventDeleteApiUrl = " . json_encode($webRoot . "/ui/cmd/action_delete_event.php") . ";
 
             function buildEventLogPageUrl(overrides = {}) {
                 const params = new URLSearchParams();
                 params.set('tab', 'eventlog');
-                params.set('page', String(overrides.page !== undefined ? overrides.page : currentPageEventLog));
+                const targetPage = Number(overrides.page !== undefined ? overrides.page : currentPageEventLog);
+                params.set('page', String(targetPage));
                 params.set('limit', String(overrides.limit !== undefined ? overrides.limit : currentLimitEventLog));
 
                 const autoRefreshValue = overrides.autorefresh !== undefined ? overrides.autorefresh : isLiveModeEventLog;
-                if (autoRefreshValue) {
+                if (autoRefreshValue && targetPage === 1) {
                     params.set('autorefresh', 'true');
                 }
 
@@ -1289,6 +1281,30 @@ function getTimeColor($time) {
                 currentPage: currentPageEventLog,
                 currentLimit: currentLimitEventLog
             };
+
+            async function deleteTimelineRowAndRefresh(rowId, isRelationshipHistory) {
+                const action = isRelationshipHistory ? 'undo this relationship change' : 'delete this event';
+                if (!confirm('Are you sure you want to ' + action + '?')) {
+                    return;
+                }
+
+                try {
+                    const response = await fetch(eventDeleteApiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                        body: new URLSearchParams({ rowid: String(rowId) }).toString()
+                    });
+                    const result = await response.json();
+                    if (!response.ok || !result.ok) {
+                        throw new Error(result.message || 'Timeline event could not be removed.');
+                    }
+                    window.location.reload();
+                } catch (error) {
+                    alert(error.message || 'Timeline event could not be removed.');
+                }
+            }
+
+            window.deleteTimelineRowAndRefresh = deleteTimelineRowAndRefresh;
             
             function getLastRowIdEventLog() {
                 const table = document.querySelector('#eventlog-table-container table');
@@ -1341,11 +1357,8 @@ function getTimeColor($time) {
                                 
                                 const isRelationshipHistory = String(row['ROWID'] || '').startsWith('relationship:');
 
-                                // Relationship history is read-only here; deleting events must not alter relationship state.
                                 const checkboxTd = document.createElement('td');
-                                checkboxTd.innerHTML = isRelationshipHistory
-                                    ? ''
-                                    : '<input type=\"checkbox\" class=\"event-checkbox\" data-rowid=\"' + (row['ROWID'] || '') + '\" style=\"cursor: pointer; width: 18px; height: 18px;\" onclick=\"updateDeleteButton()\">';
+                                checkboxTd.innerHTML = '<input type=\"checkbox\" class=\"event-checkbox\" data-rowid=\"' + (row['ROWID'] || '') + '\" style=\"cursor: pointer; width: 18px; height: 18px;\" onclick=\"updateSelectedCount()\">';
                                 newRow.appendChild(checkboxTd);
                                 
                                 // Add data cells
@@ -1372,9 +1385,23 @@ function getTimeColor($time) {
                                 
                                 const td6 = document.createElement('td');
                                 const rowId = row['ROWID'] || '';
-                                td6.innerHTML = isRelationshipHistory
-                                    ? 'Relationship #' + String(rowId).split(':').pop()
-                                    : '<a class=\"icon-link\" href=\"#\" style=\"color: red !important;\" onclick=\"deleteRowAndRefresh(\'eventlog\', ' + JSON.stringify(rowId) + '); return false;\">' + rowId + ' <i class=\"bi-trash\" style=\"color: red !important;\"></i></a>';
+                                const deleteLink = document.createElement('a');
+                                deleteLink.className = 'icon-link';
+                                deleteLink.href = '#';
+                                deleteLink.style.setProperty('color', 'red', 'important');
+                                deleteLink.title = isRelationshipHistory ? 'Undo this relationship change' : 'Delete this event';
+                                deleteLink.appendChild(document.createTextNode(isRelationshipHistory
+                                    ? 'Relationship #' + String(rowId).split(':').pop() + ' '
+                                    : String(rowId) + ' '));
+                                const deleteIcon = document.createElement('i');
+                                deleteIcon.className = 'bi-trash';
+                                deleteIcon.style.setProperty('color', 'red', 'important');
+                                deleteLink.appendChild(deleteIcon);
+                                deleteLink.addEventListener('click', event => {
+                                    event.preventDefault();
+                                    deleteTimelineRowAndRefresh(rowId, isRelationshipHistory);
+                                });
+                                td6.appendChild(deleteLink);
                                 newRow.appendChild(td6);
                                 
                                 if (headerRow && headerRow.nextSibling) {
@@ -2535,7 +2562,7 @@ function handleDeletePresetAction() {
         return;
     }
 
-    if (confirm(`Are you sure you want to delete the last ${deleteCount} events?`)) {
+    if (confirm(`Remove the latest ${deleteCount} visible timeline events? Any relationship changes included will be undone.`)) {
         if (typeof window.buildEventLogPageUrl === 'function') {
             window.location.href = window.buildEventLogPageUrl({
                 deleteLast: deleteCount,
@@ -2600,7 +2627,7 @@ function deleteSelectedEvents() {
         return;
     }
     
-    if (!confirm(`Are you sure you want to delete ${rowids.length} selected event(s)?`)) {
+    if (!confirm(`Remove ${rowids.length} selected timeline event(s)? Selected relationship changes will be undone.`)) {
         return;
     }
     
