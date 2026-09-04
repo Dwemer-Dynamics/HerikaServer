@@ -28,6 +28,7 @@ if (!function_exists('chimGetVisibleEventLogExcludedTypes')) {
             'status_msg',
             'region',
             'ext_nsfw_physics_raw',
+            'relationship',
         ];
     }
 }
@@ -79,33 +80,13 @@ if (!function_exists('chimGetVisibleEventLogTypes')) {
     {
         $visibleWhereClause = chimBuildVisibleEventLogWhereClause($db, '', $additionalExcludedTypes);
 
-        $types = $db->fetchAll("
+        return $db->fetchAll("
             SELECT type, COUNT(*) AS total
             FROM eventlog
             WHERE {$visibleWhereClause}
             GROUP BY type
             ORDER BY type ASC
         ");
-
-        if (!in_array('relationship', $additionalExcludedTypes, true)) {
-            $relationshipRow = $db->fetchOne(
-                "SELECT 1 AS available
-                 FROM core_npc_master_history
-                 WHERE extended_data ->> '_chim_history_source' = 'relationship'
-                 LIMIT 1"
-            );
-            if ($relationshipRow) {
-                $types[] = [
-                    'type' => 'relationship',
-                    'total' => 1,
-                ];
-                usort($types, static function (array $left, array $right): int {
-                    return strcmp((string)($left['type'] ?? ''), (string)($right['type'] ?? ''));
-                });
-            }
-        }
-
-        return $types;
     }
 }
 
@@ -135,29 +116,6 @@ if (!function_exists('chimRelationshipHistoryTimelineCte')) {
               AND COALESCE(extended_data -> 'relationships', '{}'::jsonb)
                   IS DISTINCT FROM COALESCE(previous_extended_data -> 'relationships', '{}'::jsonb)
         )";
-    }
-}
-
-if (!function_exists('chimCountRelationshipHistoryTimelineRows')) {
-    function chimCountRelationshipHistoryTimelineRows($db)
-    {
-        $row = $db->fetchOne(
-            chimRelationshipHistoryTimelineCte()
-            . " SELECT COUNT(*) AS total FROM visible_relationship_history"
-        );
-        return intval($row['total'] ?? 0);
-    }
-}
-
-if (!function_exists('chimGetLatestRelationshipHistoryId')) {
-    function chimGetLatestRelationshipHistoryId($db)
-    {
-        $row = $db->fetchOne(
-            "SELECT COALESCE(MAX(history_id), 0) AS latest_id
-             FROM core_npc_master_history
-             WHERE extended_data ->> '_chim_history_source' = 'relationship'"
-        );
-        return intval($row['latest_id'] ?? 0);
     }
 }
 
@@ -228,52 +186,6 @@ if (!function_exists('chimBuildRelationshipHistoryTimelineRows')) {
         }
 
         return $rows;
-    }
-}
-
-if (!function_exists('chimFetchRelationshipHistoryTimelineRows')) {
-    function chimFetchRelationshipHistoryTimelineRows(
-        $db,
-        $limit,
-        $offset = 0,
-        $sinceHistoryId = 0,
-        $sinceGamets = 0,
-        $includeChangeDetails = false
-    ) {
-        $limit = max(1, min(5000, intval($limit)));
-        $offset = max(0, intval($offset));
-        $sinceHistoryId = max(0, intval($sinceHistoryId));
-        $sinceGamets = max(0, intval($sinceGamets));
-
-        $where = [];
-        if ($sinceHistoryId > 0) {
-            $where[] = "history_id > {$sinceHistoryId}";
-        }
-        if ($sinceGamets > 0) {
-            $where[] = "gamets_last_updated >= {$sinceGamets}";
-        }
-        $whereSql = empty($where) ? '' : 'WHERE ' . implode(' AND ', $where);
-        $incremental = $sinceHistoryId > 0;
-        $orderSql = $incremental
-            ? 'history_id ASC'
-            : 'gamets_last_updated DESC NULLS LAST, created DESC, history_id DESC';
-
-        $snapshots = $db->fetchAll(
-            chimRelationshipHistoryTimelineCte()
-            . " SELECT
-                    history_id,
-                    npc_name,
-                    extended_data,
-                    previous_extended_data,
-                    gamets_last_updated,
-                    EXTRACT(EPOCH FROM created)::bigint AS localts
-                FROM visible_relationship_history
-                {$whereSql}
-                ORDER BY {$orderSql}
-                LIMIT {$limit} OFFSET {$offset}"
-        );
-
-        return chimBuildRelationshipHistoryTimelineRows($snapshots, $includeChangeDetails);
     }
 }
 
@@ -515,27 +427,6 @@ if (!function_exists('chimFetchRecentRelationshipHistoryChanges')) {
         }
 
         return array_slice($rows, 0, $limit);
-    }
-}
-
-if (!function_exists('chimMergeTimelineRows')) {
-    function chimMergeTimelineRows(array $eventRows, array $relationshipRows, $limit = 0, $offset = 0)
-    {
-        $rows = array_merge($eventRows, $relationshipRows);
-        usort($rows, static function (array $left, array $right): int {
-            foreach (['gamets', 'ts', 'localts'] as $key) {
-                $comparison = ((float)($right[$key] ?? 0)) <=> ((float)($left[$key] ?? 0));
-                if ($comparison !== 0) {
-                    return $comparison;
-                }
-            }
-            return intval($right['relationship_history_id'] ?? $right['rowid'] ?? 0)
-                <=> intval($left['relationship_history_id'] ?? $left['rowid'] ?? 0);
-        });
-
-        $offset = max(0, intval($offset));
-        $limit = max(0, intval($limit));
-        return $limit > 0 ? array_slice($rows, $offset, $limit) : array_slice($rows, $offset);
     }
 }
 
