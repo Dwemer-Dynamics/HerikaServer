@@ -25,6 +25,26 @@ if (!is_string($distroDashboardRoot) || trim($distroDashboardRoot) === '' || $di
 $distroDebuggerChimEmbedUrl = rtrim($distroDashboardRoot, '/') . '/distro_debugger.php?embed=1&tab=chim';
 $distroDatabaseManagerUrl = rtrim($distroDashboardRoot, '/') . '/database_manager.php';
 
+// Prefer the shared Dwemer Dashboard data manager when it is installed alongside this server.
+$distroDataManagerFile = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'Dwemer-Dashboard' . DIRECTORY_SEPARATOR . 'data_manager.php';
+$distroDataManagerAvailable = is_file($distroDataManagerFile);
+$distroDataManagerUrl = rtrim($distroDashboardRoot, '/') . '/data_manager.php?mod=chim&view=';
+$playthroughTabLabel = $distroDataManagerAvailable ? 'Playthroughs' : 'Playthrough Manager';
+$playthroughEmbedUrl = $distroDataManagerAvailable
+    ? $distroDataManagerUrl . 'playthroughs'
+    : $webRoot . '/ui/playthrough_manager.php?embed=1';
+$playthroughEmbedTitle = $distroDataManagerAvailable
+    ? 'CHIM snapshots in the shared Playthroughs page'
+    : 'CHIM Playthrough Manager';
+$dbmgrTabLabel = $distroDataManagerAvailable ? 'Storage & Cleanup' : 'Database Manager';
+$dbmgrEmbedUrl = $distroDataManagerAvailable ? $distroDataManagerUrl . 'storage' : $distroDatabaseManagerUrl;
+if (!$distroDataManagerAvailable && !is_file(dirname($distroDataManagerFile) . DIRECTORY_SEPARATOR . 'database_manager.php')) {
+    $dbmgrEmbedUrl = $webRoot . '/ui/import_db.php?embed=1';
+}
+$dbmgrEmbedTitle = $distroDataManagerAvailable
+    ? 'CHIM storage usage and cleanup tools'
+    : 'CHIM Database Manager';
+
 $TITLE = "Control Panel";
 $BODY_CLASS = 'hub-page';
 ob_start();
@@ -154,8 +174,8 @@ main { padding-top: 80px; padding-left: 10px; padding-right: 10px; }
                 <div class="tab-group-label">Data &amp; Tools</div>
                 <div class="tab-buttons" role="tablist" aria-label="Data and tools pages">
                     <button class="tab-button" data-tab="cache"><span class="tab-icon" aria-hidden="true">&#x1F3BC;</span><span class="tab-label">Audio &amp; Image Cache</span></button>
-                    <button class="tab-button" data-tab="playthrough"><span class="tab-icon" aria-hidden="true">&#x1F3AE;</span><span class="tab-label">Playthrough Manager</span></button>
-                    <button class="tab-button" data-tab="dbmgr"><span class="tab-icon" aria-hidden="true">&#x1F5C4;&#xFE0F;</span><span class="tab-label">Database Manager</span></button>
+                    <button class="tab-button" data-tab="playthrough"><span class="tab-icon" aria-hidden="true">&#x1F3AE;</span><span class="tab-label"><?php echo htmlspecialchars($playthroughTabLabel, ENT_QUOTES, 'UTF-8'); ?></span></button>
+                    <button class="tab-button" data-tab="dbmgr"><span class="tab-icon" aria-hidden="true">&#x1F5C4;&#xFE0F;</span><span class="tab-label"><?php echo htmlspecialchars($dbmgrTabLabel, ENT_QUOTES, 'UTF-8'); ?></span></button>
                 </div>
             </section>
         </div>
@@ -198,12 +218,12 @@ main { padding-top: 80px; padding-left: 10px; padding-right: 10px; }
     </div>
     <div id="playthrough" class="tab-content">
         <div class="embed-wrap">
-            <iframe class="embed" loading="lazy" src="about:blank" data-src="<?php echo $webRoot; ?>/ui/playthrough_manager.php?embed=1"></iframe>
+            <iframe class="embed" loading="lazy" src="about:blank" title="<?php echo htmlspecialchars($playthroughEmbedTitle, ENT_QUOTES, 'UTF-8'); ?>" data-src="<?php echo htmlspecialchars($playthroughEmbedUrl, ENT_QUOTES, 'UTF-8'); ?>"></iframe>
         </div>
     </div>
     <div id="dbmgr" class="tab-content">
         <div class="embed-wrap">
-            <iframe class="embed" loading="lazy" src="about:blank" data-src="<?php echo htmlspecialchars($distroDatabaseManagerUrl, ENT_QUOTES, 'UTF-8'); ?>"></iframe>
+            <iframe class="embed" loading="lazy" src="about:blank" title="<?php echo htmlspecialchars($dbmgrEmbedTitle, ENT_QUOTES, 'UTF-8'); ?>" data-src="<?php echo htmlspecialchars($dbmgrEmbedUrl, ENT_QUOTES, 'UTF-8'); ?>"></iframe>
         </div>
     </div>
 </main>
