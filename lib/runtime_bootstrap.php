@@ -23,6 +23,8 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             'core_itt_connector',
             'core_tts_connector',
             'core_tts_pronunciation',
+            'npc_profile_reference_groups',
+            'npc_profile_reference_groups_custom',
         ];
 
         try {
@@ -30,7 +32,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
                 "SELECT table_name
                  FROM information_schema.tables
                  WHERE table_schema='public'
-                   AND table_name IN ('database_versioning','general_settings','core_stt_connector','core_itt_connector','core_tts_connector','core_tts_pronunciation')"
+                   AND table_name IN ('database_versioning','general_settings','core_stt_connector','core_itt_connector','core_tts_connector','core_tts_pronunciation','npc_profile_reference_groups','npc_profile_reference_groups_custom')"
             );
         } catch (\Throwable $e) {
             $decision = false;
@@ -60,6 +62,8 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             'prompts' => 20260615001,
             'skyrim_quest_definitions' => 20260628003,
             'core_tts_connector_omnivoice' => 20260708001,
+            'npc_actor_identity' => 20260824003,
+            'npc_profile_sharing' => 20260901001,
             'core_tts_pronunciation' => 20260829003,
         ];
 
@@ -67,7 +71,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             $versionRows = $db->fetchAll(
                 "SELECT tablename, version
                  FROM public.database_versioning
-                 WHERE tablename IN ('general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation')"
+                 WHERE tablename IN ('general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','npc_actor_identity','npc_profile_sharing','core_tts_pronunciation')"
             );
         } catch (\Throwable $e) {
             $decision = true;
