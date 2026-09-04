@@ -45,10 +45,6 @@ $typeFilter = chimBuildVisibleEventLogWhereClause($db, $selectedEventType, $save
 $includeRelationships = ($selectedEventType === '' || $selectedEventType === 'relationship')
     && !in_array('relationship', $savedHiddenTypes, true);
 
-if (empty($GLOBALS['RELATIONSHIP_SYSTEM_ENABLED'])) {
-    $includeRelationships=false;    
-}
-
 // If specific event types are requested (for MCM conversation history panel)
 if (isset($_GET["event_types"]) && !empty($_GET["event_types"])) {
     $allowedTypes = explode(',', $_GET["event_types"]);
@@ -66,6 +62,9 @@ if (isset($_GET["event_types"]) && !empty($_GET["event_types"])) {
         // Note: Background chat filtering is handled by JavaScript on the client side
     }
 }
+
+// Explicit relationship filters must not bypass the global disabled state.
+$includeRelationships = $includeRelationships && !empty($GLOBALS['RELATIONSHIP_SYSTEM_ENABLED']);
 
 // Build query based on filtering options
 if ($sinceGamets > 0) {
@@ -220,7 +219,7 @@ foreach ($relationshipResults ?? [] as $relationshipResult) {
         intval($relationshipResult['relationship_history_id'] ?? 0)
     );
 }
-if ($sinceRowId === 0 || count($relationshipResults ?? []) < $limit) {
+if ($includeRelationships && ($sinceRowId === 0 || count($relationshipResults ?? []) < $limit)) {
     $latestRelationshipId = max($latestRelationshipId, chimGetLatestRelationshipHistoryId($db));
 }
 
