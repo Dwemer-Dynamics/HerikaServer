@@ -3035,15 +3035,21 @@ function compactHistoricContext($lastDialogFull,$actor,$compactContextInfo=false
                         $extracted=$matches[1] ?? $singleline;
                         $compactedBuffer .= trim(removeTalkingToOccurrences($extracted));
                         $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]};","",$compactedBuffer);
+                        error_log("[compactHistoricContext] Extracted line: " . $extracted)      ;
+                        error_log("[compactHistoricContext] Compacted buffer so far: " . $compactedBuffer);
 
                     } else {
                         $compactedBuffer .= trim(removeTalkingToOccurrences($singleline));
                         $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]}:","",$compactedBuffer);
+
+                        error_log("[compactHistoricContext] Extracted line: " . $singleline)      ;
+                        error_log("[compactHistoricContext] Compacted buffer so far: " . $compactedBuffer);
                     }
 
 
                 }
-                $lastDialogFullCopy[] = ["role"=>"assistant","content"=>trim($compactedBuffer)];
+
+                $lastDialogFullCopy[] = ["role"=>"assistant","content"=>trim(removeTalkingToOccurrences($compactedBuffer))];
 
             }
             $bufferHerika=[];
@@ -3063,20 +3069,21 @@ function compactHistoricContext($lastDialogFull,$actor,$compactContextInfo=false
             if ($m>0) {
                 //$regexpNpcName = strtr($GLOBALS["HERIKA_NAME"],["-"=>'\-', "["=>"\[", "]"=>"\]"]);
                 // Same robust extraction for subsequent lines in the buffer
-                preg_match('/^\s*[^:]+:\s*(.*?)\s*(?:\([^)]*\))?\s*$/s', $singleline, $matches);
+                //preg_match('/^\s*[^:]+:\s*(.*?)\s*(?:\([^)]*\))?\s*$/s', $singleline, $matches);
+                preg_match('/^\s*[^:]+:\s*(.*?)\s*$/s', $singleline, $matches);
                 $extracted=$matches[1] ?? $singleline;
                 $compactedBuffer .= trim(removeTalkingToOccurrences($extracted));
-                $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]};","",$compactedBuffer);
+                $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]}:","",$compactedBuffer);
 
             } else {
                 $compactedBuffer .= trim(removeTalkingToOccurrences($singleline));
-                $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]};","",$compactedBuffer);
+                $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]}:","",$compactedBuffer);
             }
 
 
 
         }
-        $lastDialogFullCopy[] = ["role"=>"assistant","content"=>trim($compactedBuffer)];
+        $lastDialogFullCopy[] = ["role"=>"assistant","content"=>trim(removeTalkingToOccurrences($compactedBuffer))];
         $bufferHerika=[];
     }
 
@@ -3273,6 +3280,7 @@ function DataLastDataExpandedFor($actor, $lastNelements = -10,$sqlfilter="")
     error_log("[replaceRoles] Elapsed time: " . (microtime(true) - $localStartTime) . " seconds");
 
     // Cases of self rechat
+
     if ((sizeof($ctx3)>3)&&(($GLOBALS["gameRequest"][3] ?? "")=="rechat")) {
         $lastElement = $ctx3[sizeof($ctx3)-1];
         // Last element is assistant
@@ -4352,6 +4360,7 @@ Removes duplicate target names case-insensitively.
 Preserves first-seen order.
 Removes all dialogue target tags from cleanedString.
 Returns targets as a comma-separated string.
+Support multiple separate annotations, removes duplicate names, and preserves their original order
 */
 
 function extractDialogueTarget($string) {
@@ -4360,12 +4369,15 @@ function extractDialogueTarget($string) {
         $targets = [];
         $seenTargets = [];
 
-        foreach ($matches[1] as $target) {
-            $target = trim($target);
-            $targetKey = strtolower($target);
-            if ($target !== '' && !isset($seenTargets[$targetKey])) {
-                $targets[] = $target;
-                $seenTargets[$targetKey] = true;
+        foreach ($matches[1] as $targetList) {
+            $targetList = preg_replace('/\s+\band\s+/i', ',', trim($targetList));
+            foreach (explode(',', $targetList) as $target) {
+                $target = trim($target);
+                $targetKey = strtolower($target);
+                if ($target !== '' && !isset($seenTargets[$targetKey])) {
+                    $targets[] = $target;
+                    $seenTargets[$targetKey] = true;
+                }
             }
         }
 
