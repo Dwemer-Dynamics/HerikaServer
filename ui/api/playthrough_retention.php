@@ -25,10 +25,10 @@ try {
     ptr_query($conn, "SET statement_timeout='20s'");
     ptr_query($conn, "SET lock_timeout='2s'");
     $action = $method === 'GET' ? 'state' : ($_POST['action'] ?? '');
-    if (!is_string($action) || !in_array($action, ['state','save','preview','run','pin'], true)) throw new InvalidArgumentException('Unknown retention action.');
+    if (!is_string($action) || !in_array($action, ['state','save','preview','run','pin'], true)) throw new InvalidArgumentException('That cleanup action is not recognized.');
     if ($method === 'POST') {
         $locked = ptr_lock($conn);
-        if (!$locked) throw new RuntimeException('A snapshot or cleanup is running. Try again shortly.');
+        if (!$locked) throw new RuntimeException('A snapshot or a cleanup is already running. Try again in a moment.');
     }
     $response = ['ok' => true];
     if ($action === 'save') {
@@ -41,11 +41,11 @@ try {
     } elseif ($action === 'pin') {
         $id = filter_var($_POST['profile_id'] ?? null, FILTER_VALIDATE_INT);
         $pinned = $_POST['pinned'] ?? null;
-        if (!$id || $id < 1 || !in_array($pinned, ['0','1'], true)) throw new InvalidArgumentException('Invalid snapshot protection request.');
+        if (!$id || $id < 1 || !in_array($pinned, ['0','1'], true)) throw new InvalidArgumentException('That snapshot protection request was not valid.');
         ptr_query($conn, 'BEGIN');
         ptr_ensure_schema($conn);
         $result = ptr_query($conn, 'UPDATE chim_meta.playthrough_profiles SET retention_pinned=$2 WHERE id=$1', [$id, $pinned === '1' ? 'true' : 'false']);
-        if (pg_affected_rows($result) !== 1) throw new RuntimeException('Snapshot no longer exists.');
+        if (pg_affected_rows($result) !== 1) throw new RuntimeException('That snapshot no longer exists.');
         ptr_query($conn, 'COMMIT');
         unset($_SESSION['ptm_retention_preview']);
     } elseif ($action === 'preview') {
@@ -68,7 +68,7 @@ try {
     } elseif ($action === 'run') {
         $saved = $_SESSION['ptm_retention_preview'] ?? null;
         $token = $_POST['preview_token'] ?? null;
-        if (!$saved || !is_string($token) || !hash_equals($saved['token'], $token)) throw new RuntimeException('Preview cleanup before running it.');
+        if (!$saved || !is_string($token) || !hash_equals($saved['token'], $token)) throw new RuntimeException('Run a preview first, then confirm the cleanup.');
         unset($_SESSION['ptm_retention_preview']);
         ptr_ensure_schema($conn);
         $response['result'] = ptr_execute($conn, $saved['plan']);
@@ -76,7 +76,7 @@ try {
     if (in_array($action, ['state','save','pin'], true)) {
         $response += ['settings' => ptr_settings($conn), 'snapshots' => ptr_profiles($conn),
             'last_run' => ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', null),
-            'event_status' => 'In-game day cutoffs are preview-only. Events remain protected until CHIM can verify memory processing is complete.'];
+            'event_status' => 'The event-days box is preview only. This cleanup never deletes events: CHIM may still need them to build NPC memories.'];
     }
     echo json_encode($response, JSON_THROW_ON_ERROR);
 } catch (Throwable $e) {

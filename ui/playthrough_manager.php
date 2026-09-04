@@ -900,19 +900,19 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         <div class="help-text" style="margin-top: 12px;">
             For backups, exports, and maintenance, use the
             <a href="<?php echo $webRoot; ?>/ui/import_db.php"<?php echo $isEmbed ? ' target="_top"' : ''; ?> style="color:#ffb862;">Database Manager</a>.
-            Cleanup policies (diagnostics logs, automatic snapshot pruning) are managed in the <a href="#retention-section" style="color:#ffb862;">Data retention</a> panel below.
+            Optional cleanup of old debug logs and old automatic snapshots is set up in the <a href="#retention-section" style="color:#ffb862;">Storage cleanup</a> panel below.
         </div>
     </div>
 
     <div class="content-section full-width-section" id="retention-section" style="margin-top: 30px;">
-        <h2>🧹 Data retention</h2>
+        <h2>🧹 Storage cleanup</h2>
         <div class="help-text" style="margin-bottom: 10px;">
-            Choose what CHIM keeps. Cleanup is <strong>off by default</strong>.
-            Policies apply server-wide, including after switching playthroughs.
+            Choose which old data CHIM can delete. Cleanup is <strong>off by default</strong>.
+            These settings apply to every playthrough on this server.
         </div>
         <div class="retention-note" style="margin-bottom: 4px;">
-            Live memories, relationships, diaries, quests and files are preserved.
-            Removing a snapshot deletes its entire saved copy.
+            Your current playthrough's memories, relationships, diaries, quests and files stay intact.
+            Snapshots are saved copies of CHIM data — not Skyrim saves. Deleting one removes that whole copy.
         </div>
 
         <div id="retention-status" role="status" aria-live="polite" class="retention-status"></div>
@@ -923,32 +923,33 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                     <legend>Automatic cleanup</legend>
                     <div class="retention-row">
                         <input type="checkbox" id="ret-automatic" name="automatic" disabled>
-                        <label for="ret-automatic">Run enabled policies automatically</label>
+                        <label for="ret-automatic">Clean up automatically</label>
                     </div>
                     <p class="retention-note" id="ret-automatic-help">
-                        When on, the CHIM background processor runs one bounded cleanup batch per hour. Off by default.
+                        After you save, CHIM can run the enabled cleanups once an hour while its Background Processor is running. Off by default.
                     </p>
                     <p class="retention-note">Last run: <span id="ret-lastrun">—</span></p>
                 </fieldset>
 
                 <fieldset class="retention-fieldset">
-                    <legend>Diagnostics logs</legend>
+                    <legend>Debug logs</legend>
                     <div class="retention-row">
                         <input type="checkbox" id="ret-diag-enabled" name="diagnostics_enabled" disabled>
-                        <label for="ret-diag-enabled">Trim diagnostics logs</label>
+                        <label for="ret-diag-enabled">Delete old debug logs</label>
                     </div>
                     <div class="retention-row">
-                        <label for="ret-diag-days">Keep the last</label>
+                        <label for="ret-diag-days">Delete entries older than</label>
                         <input type="number" id="ret-diag-days" name="diagnostic_days" inputmode="numeric" min="1" max="3650" step="1" value="7" disabled aria-describedby="ret-diag-help">
                         <span>real-world days (1–3650)</span>
                     </div>
                     <div class="retention-row">
-                        <label for="ret-diag-maxmb">Size target per table</label>
+                        <label for="ret-diag-maxmb">Try to stay under</label>
                         <input type="number" id="ret-diag-maxmb" name="diagnostic_max_mb" inputmode="numeric" min="0" max="102400" step="1" value="500" disabled aria-describedby="ret-diag-help">
-                        <span>MB (0 = no size target)</span>
+                        <span>MB per log table (0 = ignore size)</span>
                     </div>
                     <p class="retention-note" id="ret-diag-help">
-                        Always keeps the last 24 hours and unsent responses. Size is a soft target per table, not a disk-space limit.
+                        Deletes old entries, or entries from logs above the size target. Always keeps the last 24 hours and unsent replies.
+                        The size target applies separately to each of the three log tables. It is a goal, not a hard limit.
                     </p>
                 </fieldset>
 
@@ -956,7 +957,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                     <legend>Automatic snapshots (Dragon Breaks)</legend>
                     <div class="retention-row">
                         <input type="checkbox" id="ret-snap-enabled" name="snapshots_enabled" disabled>
-                        <label for="ret-snap-enabled">Prune old automatic snapshots</label>
+                        <label for="ret-snap-enabled">Delete old automatic snapshots</label>
                     </div>
                     <div class="retention-row">
                         <label for="ret-snap-keep">Keep the newest</label>
@@ -964,7 +965,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                         <span>automatic snapshots (1–100)</span>
                     </div>
                     <p class="retention-note" id="ret-snap-help">
-                        Always keeps active, default, protected, manual and older unclassified snapshots.
+                        Keeps the loaded and default snapshots, protected copies, snapshots you saved yourself, and copies made before this cleanup feature.
                     </p>
                 </fieldset>
 
@@ -976,9 +977,9 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                         <span>in-game days (0 = no preview)</span>
                     </div>
                     <div class="retention-blocked" id="ret-event-blocked">
-                        <strong>Preview only. Events are never deleted:</strong> CHIM cannot yet verify that memory processing has finished.
+                        <strong>Preview only — no events are deleted.</strong> CHIM may still need them to build NPC memories.
                     </div>
-                    <p class="retention-note" id="ret-event-help">Measured from the latest recorded game time in the active data.</p>
+                    <p class="retention-note" id="ret-event-help">Counted in in-game days back from the latest game time CHIM has recorded.</p>
                 </fieldset>
             </div>
 
@@ -988,8 +989,8 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                 <button type="button" class="button" id="ret-run" style="background-color: rgba(166, 53, 63, 0.9); color:#fff;" disabled aria-disabled="true">🗑️ Run cleanup now</button>
             </div>
             <p class="retention-note" id="ret-run-hint">
-                Saving never runs a cleanup. Preview always uses the last <em>saved</em> settings.
-                "Run cleanup now" unlocks only after a preview and asks for confirmation first; a preview expires after 5 minutes and is invalidated by any settings or protection change.
+                Saving settings never deletes anything. Preview always uses the settings you last <em>saved</em>, so save first if you just changed something.
+                "Run cleanup now" unlocks only after a preview and still asks you to confirm. A preview lasts 5 minutes, and changing any setting or snapshot protection cancels it.
             </p>
         </form>
 
@@ -998,7 +999,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         <div style="margin-top: 16px;">
             <strong style="color:#ffb862; font-size: 14px;">Snapshot protection</strong>
             <p class="retention-note">
-                Protected snapshots cannot be deleted until you unprotect them. Manual and unclassified snapshots are never pruned automatically.
+                Protected snapshots cannot be deleted, even manually, until you unprotect them.
             </p>
             <ul class="retention-snap-list" id="ret-snap-list">
                 <li><span>Loading snapshot list…</span></li>
@@ -1006,16 +1007,16 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         </div>
 
         <details>
-            <summary>How data retention works (details)</summary>
+            <summary>How storage cleanup works (details)</summary>
             <ul>
-                <li>Settings are stored server-wide and apply to the active playthrough. <strong>Saving settings does not run cleanup itself.</strong></li>
-                <li>Diagnostics cleanup trims log, audit_request, and delivered responselog rows by real-world age or estimated logical size. Rows younger than 24 hours and unsent responses are always kept.</li>
-                <li>Cleanup runs only when you press "Run cleanup now" after a preview and confirm, or about once an hour when automatic cleanup is on and the CHIM background processor is running.</li>
-                <li>A preview always uses the last <em>saved</em> settings. It shows the exact candidate rows for the next bounded cleanup batch and the names of candidate snapshots, and it expires after 5 minutes.</li>
-                <li>Each batch removes at most 1,000 diagnostic rows per table and three automatic snapshots. Byte figures are estimated logical size: that space becomes reusable inside the database, it is not immediately freed on disk.</li>
-                <li id="ret-event-status">Event log deletion is blocked by design and the event-days setting is preview-only — it never deletes anything.</li>
-                <li>Live NPC memories, relationships, diaries and quest data are never trimmed. Removing a snapshot removes its entire saved copy, including those records. Audio and temporary files are preserved pending reference validation.</li>
-                <li>Automatic snapshot pruning considers only snapshots explicitly marked as automatic Dragon Breaks when created. Snapshots made before this feature count as manual/unclassified and are never removed automatically.</li>
+                <li>These settings are stored on the server and apply to whichever playthrough is loaded. <strong>Saving them never deletes anything by itself</strong> — turning on automatic cleanup is what lets CHIM delete in the background.</li>
+                <li>Debug log cleanup covers three tables: log, audit_request, and already-sent rows in responselog. Each table is checked on its own, by real-world age or by estimated size. Rows from the last 24 hours and replies CHIM has not sent yet are always kept.</li>
+                <li>Cleanup runs only when you press "Run cleanup now" after a preview and confirm, or at most once an hour when automatic cleanup is on and CHIM's Background Processor is running.</li>
+                <li>A preview always uses the settings you last <em>saved</em>. It shows the exact number of log entries and the snapshot names for the next cleanup, and it expires after 5 minutes.</li>
+                <li>Each round deletes at most 1,000 debug log rows per table and 3 automatic snapshots. Sizes shown are estimates of the data itself: that space becomes reusable inside the database, but the files on disk may not shrink.</li>
+                <li id="ret-event-status">The event-days box is preview only. This cleanup never deletes events.</li>
+                <li>Your current playthrough's NPC memories, relationships, diaries and quests are never trimmed. Deleting a snapshot deletes the whole saved copy, including the records inside it. Audio and temporary files are left alone.</li>
+                <li>Only snapshots that were tagged as automatic Dragon Breaks when they were created can be deleted here. Snapshots made before this feature existed count as manual and are never removed automatically.</li>
             </ul>
         </details>
     </div>

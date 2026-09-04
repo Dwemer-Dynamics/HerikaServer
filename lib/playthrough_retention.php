@@ -11,7 +11,7 @@ function ptr_defaults(): array {
 
 function ptr_query($conn, string $sql, array $params = []) {
     $result = @pg_query_params($conn, $sql, $params);
-    if (!$result) throw new RuntimeException('Retention database operation failed.');
+    if (!$result) throw new RuntimeException('The cleanup database request failed.');
     return $result;
 }
 
@@ -48,13 +48,13 @@ function ptr_validate(array $input): array {
     $settings = ptr_defaults();
     foreach (['automatic', 'diagnostics_enabled', 'snapshots_enabled'] as $key) {
         if (!array_key_exists($key, $input)) continue;
-        if (!in_array($input[$key], [true, false, 0, 1, '0', '1'], true)) throw new InvalidArgumentException('Invalid cleanup switch.');
+        if (!in_array($input[$key], [true, false, 0, 1, '0', '1'], true)) throw new InvalidArgumentException('That cleanup on/off value was not valid.');
         $settings[$key] = in_array($input[$key], [true, 1, '1'], true);
     }
     foreach (['diagnostic_days' => [1,3650], 'diagnostic_max_mb' => [0,102400], 'snapshot_keep' => [1,100], 'event_days' => [0,3650]] as $key => [$min,$max]) {
         if (!array_key_exists($key, $input)) continue;
         $number = filter_var($input[$key], FILTER_VALIDATE_INT);
-        if ($number === false || $number < $min || $number > $max) throw new InvalidArgumentException('Retention value is outside its allowed range.');
+        if ($number === false || $number < $min || $number > $max) throw new InvalidArgumentException('That cleanup value is outside its allowed range.');
         $settings[$key] = $number;
     }
     return $settings;
@@ -102,8 +102,8 @@ function ptr_identity($conn): string {
 function ptr_preview($conn, array $settings): array {
     $plan = ['identity' => ptr_identity($conn), 'created' => time(), 'diagnostics' => [], 'snapshots' => [],
         'events' => ['older_rows' => 0, 'cutoff_gamets' => null,
-            'blocked_reason' => 'Events are retained: CHIM cannot yet verify that all NPC memory processing has finished.'],
-        'message' => 'One bounded batch. Space from deleted rows becomes reusable; database files may not shrink.'];
+            'blocked_reason' => 'CHIM cannot yet confirm that these events have finished being turned into NPC memories.'],
+        'message' => 'This is one cleanup round. Space from deleted rows becomes reusable inside the database, but the files on disk may not shrink.'];
     if ($settings['diagnostics_enabled']) {
         $cutoff = time() - $settings['diagnostic_days'] * 86400;
         foreach (['log' => 'localts', 'audit_request' => 'created_at', 'responselog' => 'localts'] as $table => $column) {
@@ -155,13 +155,13 @@ function ptr_preview($conn, array $settings): array {
 function ptr_delete_snapshot($conn, int $id): void {
     $row = pg_fetch_assoc(ptr_query($conn, 'SELECT *, to_jsonb(p)->>\'retention_pinned\' AS pinned FROM chim_meta.playthrough_profiles p WHERE id=$1 FOR UPDATE', [$id]));
     if (!$row || $row['is_active'] === 't' || strtolower($row['name']) === 'default' || $row['pinned'] === 'true') {
-        throw new RuntimeException('Snapshot is missing, loaded, default, or protected.');
+        throw new RuntimeException('That snapshot is missing, currently loaded, the default one, or protected.');
     }
     if (($row['storage_type'] ?? 'dump') === 'schema') {
         $schema = (string)($row['schema_name'] ?? '');
-        if (!preg_match('/^chim_profile_[a-z0-9_]+$/D', $schema)) throw new RuntimeException('Invalid snapshot schema.');
+        if (!preg_match('/^chim_profile_[a-z0-9_]+$/D', $schema)) throw new RuntimeException('That snapshot has an unexpected name and was left alone.');
         $result = pts_drop_schema($conn, $schema);
-        if (!$result['success']) throw new RuntimeException('Snapshot could not be removed; nothing was deleted.');
+        if (!$result['success']) throw new RuntimeException('That snapshot could not be removed, so nothing was deleted.');
     }
     ptr_query($conn, 'DELETE FROM chim_meta.playthrough_profiles WHERE id=$1', [$id]);
 }
@@ -169,27 +169,27 @@ function ptr_delete_snapshot($conn, int $id): void {
 // All mutations commit together; timeouts, changed row versions, or a restore
 // invalidate the entire batch, including snapshot drops.
 function ptr_execute($conn, array $plan): array {
-    if (time() - $plan['created'] >= 300) throw new RuntimeException('Preview expired. Preview cleanup again.');
+    if (time() - $plan['created'] >= 300) throw new RuntimeException('The preview expired. Run a new preview.');
     ptr_query($conn, 'BEGIN');
     try {
         ptr_query($conn, "SET LOCAL lock_timeout='2s'");
         ptr_query($conn, "SET LOCAL statement_timeout='20s'");
         if (ptr_exists($conn, 'chim_meta.playthrough_profiles')) ptr_query($conn, 'LOCK TABLE chim_meta.playthrough_profiles IN SHARE ROW EXCLUSIVE MODE');
-        if (!hash_equals($plan['identity'], ptr_identity($conn))) throw new RuntimeException('Playthrough or settings changed. Preview cleanup again.');
+        if (!hash_equals($plan['identity'], ptr_identity($conn))) throw new RuntimeException('Your playthrough or settings changed. Run a new preview.');
         $deleted = 0;
         foreach ($plan['diagnostics'] as $group) {
-            if (!in_array($group['table'], ['log','audit_request','responselog'], true)) throw new RuntimeException('Invalid cleanup table.');
+            if (!in_array($group['table'], ['log','audit_request','responselog'], true)) throw new RuntimeException('An unexpected log table was in the plan, so nothing was deleted.');
             if (!$group['selected']) continue;
             $table = $group['table'];
             $queueGuard = $table === 'responselog' ? 'AND t.sent > 0' : '';
             $res = ptr_query($conn, "DELETE FROM public.{$table} t USING jsonb_to_recordset($1::jsonb) AS chosen(id bigint, version text)
                 WHERE t.rowid=chosen.id AND t.xmin::text=chosen.version {$queueGuard}", [json_encode($group['selected'])]);
-            if (pg_affected_rows($res) !== count($group['selected'])) throw new RuntimeException('Diagnostics changed. Preview cleanup again.');
+            if (pg_affected_rows($res) !== count($group['selected'])) throw new RuntimeException('The debug logs changed since the preview. Run a new preview.');
             $deleted += pg_affected_rows($res);
         }
         foreach ($plan['snapshots'] as $snapshot) ptr_delete_snapshot($conn, $snapshot['id']);
         $result = ['at' => gmdate('c'), 'rows' => $deleted, 'snapshots' => count($plan['snapshots']),
-            'message' => 'Cleanup batch finished. Events, NPC memories, relationships, diaries, quests, and files were preserved.'];
+            'message' => 'Cleanup finished. Your current playthrough and files were left alone.'];
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', $result);
         ptr_query($conn, 'COMMIT');
         return $result;
@@ -216,7 +216,7 @@ function ptr_tick($conn): void {
         ptr_execute($conn, $plan);
     } catch (Throwable $e) {
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', ['at' => gmdate('c'), 'rows' => 0, 'snapshots' => 0,
-            'message' => 'Automatic cleanup did not finish. Data was preserved; retry from Preview cleanup.']);
+            'message' => 'Automatic cleanup did not finish, so nothing was deleted. You can try it yourself with Preview cleanup.']);
         Logger::error('Playthrough retention: ' . $e->getMessage());
     } finally {
         @pg_query($conn, 'RESET statement_timeout');

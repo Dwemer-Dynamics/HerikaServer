@@ -25,8 +25,8 @@
     };
 
     var NUM_RULES = [
-        { key: 'diagnostic_days', label: 'Diagnostics days', min: 1, max: 3650 },
-        { key: 'diagnostic_max_mb', label: 'Diagnostics size target per table (MB)', min: 0, max: 102400 },
+        { key: 'diagnostic_days', label: 'Debug log days', min: 1, max: 3650 },
+        { key: 'diagnostic_max_mb', label: 'Debug log size target per table (MB)', min: 0, max: 102400 },
         { key: 'snapshot_keep', label: 'Automatic snapshots to keep', min: 1, max: 100 },
         { key: 'event_days', label: 'Event preview days', min: 0, max: 3650 }
     ];
@@ -86,7 +86,7 @@
             if (reason) {
                 var n = document.createElement('p');
                 n.className = 'retention-note';
-                n.textContent = 'Preview invalidated (' + reason + '). Run a new preview before "Run cleanup now".';
+                n.textContent = 'Preview cancelled (' + reason + '). Run a new preview before "Run cleanup now".';
                 previewOut.appendChild(n);
             }
         }
@@ -145,7 +145,7 @@
         if (!lastRunEl) return;
         if (!lr || typeof lr !== 'object') { lastRunEl.textContent = 'No cleanup has run yet.'; return; }
         var txt = lr.at ? String(lr.at) + ' — ' : '';
-        txt += Number(lr.rows || 0).toLocaleString() + ' rows and ' + Number(lr.snapshots || 0).toLocaleString() + ' snapshots removed';
+        txt += Number(lr.rows || 0).toLocaleString() + ' log rows and ' + Number(lr.snapshots || 0).toLocaleString() + ' snapshots deleted';
         if (lr.message) txt += '. ' + String(lr.message);
         lastRunEl.textContent = txt;
     }
@@ -178,7 +178,7 @@
             if (asBool(sn.is_default)) left.appendChild(badge('Default', 'b-default'));
             left.appendChild(asBool(sn.automatic)
                 ? badge('Automatic (Dragon Break)', 'b-auto')
-                : badge('Manual / unclassified', ''));
+                : badge('Manual or older', ''));
             if (asBool(sn.pinned)) left.appendChild(badge('Protected', 'b-pinned'));
             li.appendChild(left);
             if (!asBool(sn.is_active) && !asBool(sn.is_default)) {
@@ -225,7 +225,7 @@
         }).catch(function(err){
             loaded = false;
             syncButtons();
-            if (showErrors !== false) setStatus('Data retention controls are unavailable: ' + err.message, 'error');
+            if (showErrors !== false) setStatus('Storage cleanup controls are unavailable: ' + err.message, 'error');
             throw err;
         });
     }
@@ -236,7 +236,7 @@
         var box = document.createElement('div');
         box.className = 'retention-preview-box';
         var h = document.createElement('h3');
-        h.textContent = 'Cleanup preview (from saved settings)';
+        h.textContent = 'Cleanup preview (uses your saved settings)';
         box.appendChild(h);
         if (p.message) {
             var pm = document.createElement('p');
@@ -248,13 +248,13 @@
         var diagTitle = document.createElement('p');
         diagTitle.style.cssText = 'margin:8px 0 0 0; font-size:13px; color:#e0e0e0;';
         if (p.diagnostics.length) {
-            diagTitle.textContent = 'Diagnostics log rows that would be deleted (exact counts for the next bounded batch):';
+            diagTitle.textContent = 'Debug log rows that would be deleted in the next cleanup round:';
             box.appendChild(diagTitle);
             var tbl = document.createElement('table');
             tbl.className = 'retention-preview-table';
             var thead = document.createElement('thead');
             var trh = document.createElement('tr');
-            ['Table', 'Candidate rows (this batch)', 'Estimated logical size'].forEach(function(t, i){
+            ['Log table', 'Rows this round', 'Estimated size'].forEach(function(t, i){
                 var th = document.createElement('th');
                 th.scope = 'col';
                 if (i > 0) th.className = 'num';
@@ -286,14 +286,14 @@
             tbl.appendChild(tbody);
             box.appendChild(tbl);
         } else {
-            diagTitle.textContent = 'Diagnostics: no rows qualify for cleanup with the saved settings.';
+            diagTitle.textContent = 'Debug logs: nothing to delete with your saved settings.';
             box.appendChild(diagTitle);
         }
 
         var snapTitle = document.createElement('p');
         snapTitle.style.cssText = 'margin:8px 0 0 0; font-size:13px; color:#e0e0e0;';
         if (p.snapshots.length) {
-            snapTitle.textContent = 'Automatic snapshots that would be removed (' + p.snapshots.length + '):';
+            snapTitle.textContent = 'Automatic snapshots that would be deleted (' + p.snapshots.length + '):';
             box.appendChild(snapTitle);
             var ul = document.createElement('ul');
             ul.style.cssText = 'margin:4px 0; padding-left:20px; font-size:13px; color:#e0e0e0;';
@@ -304,7 +304,7 @@
             });
             box.appendChild(ul);
         } else {
-            snapTitle.textContent = 'Snapshots: none would be removed with the saved settings.';
+            snapTitle.textContent = 'Snapshots: none would be deleted with your saved settings.';
             box.appendChild(snapTitle);
         }
 
@@ -312,27 +312,27 @@
             var evWrap = document.createElement('div');
             evWrap.className = 'retention-blocked';
             var older = Number(p.events.older_rows || 0);
-            var line = 'Event log: ' + older.toLocaleString() + ' rows are older than the cutoff' +
-                (p.events.cutoff_gamets ? ' (in-game timestamp ' + String(p.events.cutoff_gamets) + ')' : '') +
-                '. These rows will NOT be deleted';
+            var line = 'Event log: ' + older.toLocaleString() + ' events are older than your cutoff' +
+                (p.events.cutoff_gamets ? ' (in-game time ' + String(p.events.cutoff_gamets) + ')' : '') +
+                '. None of them will be deleted';
             line += p.events.blocked_reason
-                ? ' — blocked: ' + String(p.events.blocked_reason)
-                : ' — automatic event deletion is blocked.';
+                ? ' — ' + String(p.events.blocked_reason)
+                : ' — this cleanup never deletes events.';
             evWrap.textContent = p.events.cutoff_gamets === null
-                ? 'Event age preview is off. Events are never deleted.'
+                ? 'Event preview is off. This cleanup never deletes events.'
                 : line;
             box.appendChild(evWrap);
         }
 
         var note = document.createElement('p');
         note.className = 'retention-note';
-        note.textContent = 'Row counts are exact for the next bounded cleanup batch. Byte figures are estimated logical size — that space becomes reusable inside the database; it is not disk space freed immediately.';
+        note.textContent = 'Row counts are exact for the next cleanup round. Sizes are estimates of the data itself — that space becomes reusable inside the database, but the files on disk may not shrink.';
         box.appendChild(note);
 
         var exp = document.createElement('p');
         exp.className = 'retention-note';
         var when = new Date(p.expiresMs);
-        exp.textContent = 'Preview valid for 5 minutes (until ' + when.toLocaleTimeString() + '). Changing settings or snapshot protection invalidates it.';
+        exp.textContent = 'This preview is good for 5 minutes (until ' + when.toLocaleTimeString() + '). Changing any setting or snapshot protection cancels it.';
         box.appendChild(exp);
 
         previewOut.appendChild(box);
@@ -344,8 +344,8 @@
         post({ action: 'pin', profile_id: String(id), pinned: pinned }).then(function(){
             invalidatePreview('snapshot protection changed');
             setStatus('Snapshot "' + name + '" is ' + (pinned === '1'
-                ? 'now protected from automatic pruning.'
-                : 'no longer protected. Manual snapshots are still never pruned automatically.'), 'success');
+                ? 'now protected. Cleanup cannot delete it, and neither can you, until you unprotect it.'
+                : 'no longer protected. Snapshots you made yourself are still never deleted automatically.'), 'success');
             return refresh(false).catch(function(){});
         }).catch(function(err){
             setStatus('Updating protection failed: ' + err.message, 'error');
@@ -361,7 +361,7 @@
         setBusy(true, 'Saving settings… nothing is being deleted.');
         post(settings).then(function(){
             invalidatePreview('settings saved');
-            setStatus('Settings saved. Saving never runs a cleanup.', 'success');
+            setStatus('Settings saved. Saving on its own never deletes anything.', 'success');
             return refresh(false).catch(function(){
                 setStatus('Settings saved, but refreshing the panel failed. Reload the page to see the current state.', 'error');
             });
@@ -389,13 +389,13 @@
             renderPreview(preview);
             if (previewTimer) clearTimeout(previewTimer);
             previewTimer = setTimeout(function(){
-                invalidatePreview('preview expired after 5 minutes');
+                invalidatePreview('it expired after 5 minutes');
                 setStatus('The preview expired. Run a new preview before cleaning up.', 'error');
             }, Math.max(0, expiresMs - Date.now()));
             var hasWork = preview.snapshots.length || preview.diagnostics.some(function(d){ return Number(d.rows) > 0; });
             setStatus(preview.token
-                ? (hasWork ? 'Preview ready. Review it, then use "Run cleanup now" within 5 minutes.' : 'Preview ready. Nothing qualifies for deletion with the saved settings.')
-                : 'Preview ready, but the server did not return a run token, so "Run cleanup now" stays locked.',
+                ? (hasWork ? 'Preview ready. Review it, then use "Run cleanup now" within 5 minutes.' : 'Preview ready. Nothing needs deleting with your saved settings.')
+                : 'Preview ready, but the server did not send back a confirmation code, so "Run cleanup now" stays locked.',
                 preview.token ? 'success' : 'error');
         }).catch(function(err){
             setStatus('Preview failed: ' + err.message, 'error');
@@ -409,11 +409,11 @@
         var snapNames = preview.snapshots.map(function(s){ return String(s.name || ('#' + s.id)); });
         var msg = 'Run cleanup now?\n\n' +
             'This will permanently delete:\n' +
-            '- ' + totRows.toLocaleString() + ' diagnostics log rows (this bounded batch)\n' +
+            '- ' + totRows.toLocaleString() + ' debug log rows (this round)\n' +
             '- ' + (snapNames.length
                 ? snapNames.length + ' automatic snapshot(s): ' + snapNames.join(', ')
                 : 'no snapshots') + '\n\n' +
-            'Event log rows are NOT deleted (blocked). NPC memories, relationships, diaries/quests, and audio files are not touched.\n\n' +
+            'Selected snapshots will be deleted with all their contents. Your current playthrough, including events and NPC memories, and your files will stay intact.\n\n' +
             'This cannot be undone. Choose Cancel to keep everything.';
         var token = preview.token;
         var dialog = document.getElementById('ret-confirm-dialog');
@@ -439,13 +439,13 @@
             var r = (j && j.result && typeof j.result === 'object') ? j.result : {};
             invalidatePreview('cleanup ran');
             renderLastRun({ at: r.at, rows: r.rows, snapshots: r.snapshots, message: r.message });
-            var txt = 'Cleanup finished: ' + Number(r.rows || 0).toLocaleString() + ' rows and ' +
-                Number(r.snapshots || 0).toLocaleString() + ' snapshots removed';
+            var txt = 'Cleanup finished: ' + Number(r.rows || 0).toLocaleString() + ' log rows and ' +
+                Number(r.snapshots || 0).toLocaleString() + ' snapshots deleted';
             if (r.message) txt += '. ' + String(r.message);
             setStatus(txt, 'success');
             return refresh(false).catch(function(){});
         }).catch(function(err){
-            invalidatePreview('cleanup attempt failed');
+            invalidatePreview('the cleanup attempt failed');
             setStatus('Cleanup failed: ' + err.message, 'error');
         }).then(function(){ setBusy(false); });
     });
@@ -453,17 +453,17 @@
     function maybeInvalidate(){
         if (preview) {
             invalidatePreview('settings changed');
-            setStatus('Settings changed — the preview was invalidated. Save, then preview again before running cleanup.', '');
+            setStatus('Settings changed, so the preview no longer applies. Save, then preview again before running cleanup.', '');
         }
     }
     form.addEventListener('input', maybeInvalidate);
     form.addEventListener('change', maybeInvalidate);
 
     // Initial load: one read-only GET, no polling afterwards.
-    setStatus('Loading retention settings…', 'busy');
+    setStatus('Loading cleanup settings…', 'busy');
     refresh(false).then(function(){
         setStatus('', '');
     }).catch(function(err){
-        setStatus('Data retention controls are unavailable: ' + err.message, 'error');
+        setStatus('Storage cleanup controls are unavailable: ' + err.message, 'error');
     });
 })();
