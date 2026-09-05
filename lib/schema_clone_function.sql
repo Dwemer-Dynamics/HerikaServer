@@ -1,4 +1,4 @@
--- Schema cloning function for fast playthrough snapshots
+-- Schema cloning function for fast playthrough saves
 -- Clone tables, data, and sequences; the updater rebuilds public views after restore.
 -- Functions are created in chim_meta schema so they survive public schema drops
 
@@ -254,7 +254,7 @@ BEGIN
     PERFORM chim_meta.sync_schema_sequences(dest_schema);
 
     -- Do not copy views: unqualified definitions can bind to the live public
-    -- tables instead of the snapshot. db_updates.php rebuilds views on restore.
+    -- tables instead of the playthrough. db_updates.php rebuilds views on restore.
     
     RAISE NOTICE 'Schema cloning complete: % -> %', source_schema, dest_schema;
 

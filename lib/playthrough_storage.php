@@ -243,10 +243,10 @@ function ptm_update_profile_blob_from_file(
 }
 
 /**
- * Fetch snapshot by profile id to a file. Prefers LOB; falls back to TEXT.
+ * Fetch playthrough by profile id to a file. Prefers LOB; falls back to TEXT.
  * Returns ['success'=>bool, 'used'=>'lob'|'text', 'error'=>string].
  */
-function ptm_fetch_snapshot_to_file($adminConn, int $profileId, string $destFile, int $chunkSize = 262144): array {
+function ptm_fetch_playthrough_to_file($adminConn, int $profileId, string $destFile, int $chunkSize = 262144): array {
     $res = ['success'=>false, 'used'=>'', 'error'=>''];
     $q = @pg_query_params($adminConn, 'SELECT dump_lob, dump_data FROM chim_meta.playthrough_blobs WHERE profile_id=$1', [(string)$profileId]);
     if (!$q) {
@@ -254,7 +254,7 @@ function ptm_fetch_snapshot_to_file($adminConn, int $profileId, string $destFile
     }
     $row = @pg_fetch_assoc($q);
     if (!$row) {
-        return ['success'=>false,'used'=>'','error'=>'Snapshot not found'];
+        return ['success'=>false,'used'=>'','error'=>'Playthrough not found'];
     }
     $lob = isset($row['dump_lob']) ? (int)$row['dump_lob'] : 0;
     if ($lob > 0) {
@@ -262,7 +262,7 @@ function ptm_fetch_snapshot_to_file($adminConn, int $profileId, string $destFile
         return ['success'=>$ok, 'used'=>'lob', 'error'=>$ok ? '' : 'LOB stream failed'];
     }
     if (!isset($row['dump_data']) || $row['dump_data'] === null) {
-        return ['success'=>false,'used'=>'','error'=>'Empty snapshot data'];
+        return ['success'=>false,'used'=>'','error'=>'Empty playthrough data'];
     }
     $ok = (@file_put_contents($destFile, $row['dump_data']) !== false);
     return ['success'=>$ok, 'used'=>'text', 'error'=>$ok ? '' : 'Write file failed'];

@@ -737,6 +737,7 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/navbar.php");
         .dashboard-btn {
             display: inline-flex;
             align-items: center;
+            gap: 4px;
             padding: 8px 16px;
             background: #2d2d2d;
             color: #f8f9fa;
@@ -762,7 +763,6 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/navbar.php");
         }
 
         .dashboard-btn .btn-icon {
-            margin-right: 8px;
             font-size: 1.1em;
         }
 
@@ -987,14 +987,17 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/navbar.php");
         </div>
     </div>
     <main class="container">
-        <h1>Dwemer Dashboard</h1>
+        <h1>CHIM Home</h1>
 
         <div class="dashboard-buttons">
+            <button onclick="window.location.href='<?php echo htmlspecialchars($webRoot . '/ui/control_panel.php?tab=storage', ENT_QUOTES, 'UTF-8'); ?>'" class="dashboard-btn">
+                <span class="btn-icon" aria-hidden="true">🧩</span><span>Playthrough Management</span>
+            </button>
             <button onclick="window.open('https://dwemerdynamics.com/chim/index.html', '_blank')" class="dashboard-btn">
-                <span class="btn-icon">📚</span> CHIM Wiki
+                <span class="btn-icon" aria-hidden="true">📚</span><span>CHIM Wiki</span>
             </button>
             <button onclick="window.open('https://docs.google.com/spreadsheets/d/1UtAR_r18wskmTMMsg8IlhVvr1Fn9tHvRJT8drH6RuzY/edit?gid=1257158105#gid=1257158105', '_blank')" class="dashboard-btn">
-                <span class="btn-icon">🥇</span> AI/LLM Tier List
+                <span class="btn-icon" aria-hidden="true">🥇</span><span>AI/LLM Tier List</span>
             </button>
         </div>
 

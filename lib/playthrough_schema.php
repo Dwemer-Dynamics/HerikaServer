@@ -10,7 +10,7 @@
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'logger.php');
 
 /**
- * Check for identity/sequence support and the removal of snapshot view cloning.
+ * Check for identity/sequence support and the removal of playthrough view cloning.
  */
 function pts_clone_function_is_current($definition): bool {
     return is_string($definition)
