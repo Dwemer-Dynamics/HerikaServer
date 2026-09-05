@@ -74,7 +74,8 @@ try {
         $response['result'] = ptr_execute($conn, $saved['plan']);
     }
     if (in_array($action, ['state','save','pin'], true)) {
-        $response += ['settings' => ptr_settings($conn), 'snapshots' => ptr_profiles($conn),
+        // The shared settings view already paginates snapshots through its read-only list API.
+        $response += ['settings' => ptr_settings($conn), 'snapshots' => ($_GET['summary'] ?? '') === '1' ? [] : ptr_profiles($conn),
             'last_run' => ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', null),
             'event_status' => 'The event-days box is preview only. This cleanup never deletes events: CHIM may still need them to build NPC memories.'];
     }

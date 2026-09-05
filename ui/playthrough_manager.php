@@ -512,6 +512,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// API callers reuse the operation above, never the legacy layout or full snapshot list.
+if (defined('DWEMER_STORAGE_ACTIONS_ONLY')) {
+    return ['ok' => !str_contains($message, 'Error:'), 'message' => $message];
+}
+
 // Read-only state detection (safe on GET: catalog queries only)
 $ptmInitialized = $adminConn ? ptm_meta_table_exists($adminConn) : false;
 
