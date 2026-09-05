@@ -220,6 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_narrator'])) {
         $narrator->set('diary_enabled', isset($_POST['diary_enabled']) && $_POST['diary_enabled'] === '1' ? '1' : '0');
         $narrator->set('auto_diary_enabled', isset($_POST['auto_diary_enabled']) && $_POST['auto_diary_enabled'] === '1' ? '1' : '0');
         $narrator->set('only_diary_access', isset($_POST['only_diary_access']) && $_POST['only_diary_access'] === '1' ? '1' : '0');
+        $narrator->set('latest_diary_context_enabled', isset($_POST['latest_diary_context_enabled']) && $_POST['latest_diary_context_enabled'] === '1' ? '1' : '0');
         
         // Save integer settings
         if (isset($_POST['random_chance'])) {
@@ -397,6 +398,19 @@ foreach ($allProfiles as $prof) {
 // Get current profile data
 $currentProfileData = $profilesConnById[$profileId] ?? null;
 
+// Latest diary entry context: narrator-specific override in core_narrator.
+// Never saved -> inherit the assigned narrator profile so shared profiles stay untouched.
+$latestDiaryContextRaw = $narrator->get('latest_diary_context_enabled');
+if ($latestDiaryContextRaw === null || trim($latestDiaryContextRaw) === '') {
+    $narratorProfileMetadata = json_decode(strval($currentProfileData['metadata'] ?? '{}'), true);
+    $latestDiaryContextEnabled = is_array($narratorProfileMetadata)
+        && filter_var($narratorProfileMetadata['LATEST_DIARY_CONTEXT_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    $latestDiaryContextInherited = true;
+} else {
+    $latestDiaryContextEnabled = filter_var($latestDiaryContextRaw, FILTER_VALIDATE_BOOLEAN);
+    $latestDiaryContextInherited = false;
+}
+
 $advancedPromptOrderSql = [];
 foreach ($advancedPromptKeys as $index => $advancedPromptKey) {
     $advancedPromptOrderSql[] = "WHEN " . $GLOBALS["db"]->escapeLiteral($advancedPromptKey) . " THEN " . ($index + 1);
@@ -424,6 +438,10 @@ if (!$isEmbed) {
 ?>
 
 <link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/main.css">
+<?php if ($isEmbed): ?>
+<link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/chim-theme.css?v=<?php echo filemtime(dirname(__DIR__) . DIRECTORY_SEPARATOR . 'css' . DIRECTORY_SEPARATOR . 'chim-theme.css'); ?>">
+<?php endif; ?>
+<link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/player-narration.css?v=<?php echo filemtime(dirname(__DIR__) . DIRECTORY_SEPARATOR . 'css' . DIRECTORY_SEPARATOR . 'player-narration.css'); ?>">
 <style>
     /* Font Face Declaration */
     @font-face {
@@ -1352,14 +1370,13 @@ if (!$isEmbed) {
 </style>
 
 <?php if ($isEmbed): ?>
-<link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/chim-theme.css?v=<?php echo filemtime(dirname(__DIR__) . DIRECTORY_SEPARATOR . 'css' . DIRECTORY_SEPARATOR . 'chim-theme.css'); ?>">
 <style>
     /* Embedded in hub: remove extra top padding since navbar is hidden */
     main { padding-top: 20px; }
 </style>
 <?php endif; ?>
 
-<main>
+<main class="player-narration-settings narration-settings-page<?php echo $isEmbed ? ' is-embedded' : ''; ?>">
     <div class="page-container">
         <div id="toast" class="toast-notification <?php echo $saveSuccess ? '' : 'error'; ?>">
             <span class="message"><?php echo htmlspecialchars($saveMessage); ?></span>
@@ -1379,15 +1396,15 @@ if (!$isEmbed) {
             </script>
         <?php endif; ?>
 
-        <div class="page-header">
-            <h1>
-                🗣️ Narrator Management
-            </h1>
-            <p>Configure narrator behavior and settings</p>
+        <div class="page-header chim-page-head">
+            <h1 class="chim-page-head-title">🗣️ Narrator Management</h1>
+            <div class="chim-page-head-note">
+                <p>Configure narrator behavior and settings</p>
+            </div>
         </div>
 
         <form method="post" action="">
-            <div class="narrator-settings-actions">
+            <div class="narrator-settings-actions settings-page-actions">
                 <button type="submit" class="btn-save" name="save_narrator" value="1">Save Narration Settings</button>
                 <a class="btn-narrator-transfer" href="<?php echo $webRoot; ?>/ui/cmd/settings_portability.php?scope=narration&amp;action=export">&#128228; Export Narration</a>
                 <button type="button" class="btn-narrator-transfer" id="import_narration_settings_btn">&#128229; Import Narration</button>
@@ -1456,6 +1473,15 @@ if (!$isEmbed) {
                         <span class="toggle-label">Narrator only diary access</span>
                     </label>
                     <span class="hint">Restrict the Narrator to diary entries written by The Narrator. When disabled, the Narrator may recall relevant diary entries from all NPCs.</span>
+
+                    <label class="toggle-row">
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="latest_diary_context_enabled" name="latest_diary_context_enabled" value="1" <?php echo $latestDiaryContextEnabled ? 'checked' : ''; ?>>
+                            <span class="toggle-slider"></span>
+                        </div>
+                        <span class="toggle-label">&#x1F4D6; Include Latest Diary Entry</span>
+                    </label>
+                    <span class="hint">Add The Narrator's most recent diary entry to its context. Narrator only &mdash; NPCs sharing the same Core Profile are unaffected.<?php echo $latestDiaryContextInherited ? ' Currently inherited from the Core Profile until you save Narrator settings.' : ''; ?></span>
                 </div>
 
                 <!-- Narration Section -->

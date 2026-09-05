@@ -980,7 +980,7 @@ $F_TRANSLATIONS_LOCAL["ArrestPlayer"] = "#HERIKA_NAME# attempts to arrest #PLAYE
 $F_TRANSLATIONS_LOCAL["ForgiveCrime"] = "#HERIKA_NAME# forgives #PLAYER_NAME#'s crimes and clears their bounty. Guard-only action for persuasion, bribe, or thane status.";
 $F_TRANSLATIONS_LOCAL["FollowPlayer"] = "#HERIKA_NAME# follows #PLAYER_NAME#.";
 $F_TRANSLATIONS_LOCAL["ComeCloser"] = "#HERIKA_NAME# approaches #PLAYER_NAME#.";
-$F_TRANSLATIONS_LOCAL["Brawl"] = "#HERIKA_NAME# engages in non-lethal combat with another actor, using weapons.";
+$F_TRANSLATIONS_LOCAL["Brawl"] = "#HERIKA_NAME# starts a brawl with #PLAYER_NAME# or another nearby NPC: an agreed, bare-fisted fight that is not meant to kill. Fists only, no weapons, shields, spells, staves, or poisons. Use Attack instead when #HERIKA_NAME# truly means to kill.";
 $F_TRANSLATIONS_LOCAL["ReturnBackHome"] = "#HERIKA_NAME# travels to their home or place of origin. Returns home.";
 $F_TRANSLATIONS_LOCAL["GiveGoldTo"] = "#HERIKA_NAME# gives gold, coins, or septims to another actor or #PLAYER_NAME#. REQUIRED: Must include 'target' field with recipient name and 'item' field with amount as a number string.";
 $F_TRANSLATIONS_LOCAL["GiveItemTo"] = "#HERIKA_NAME# gives a specific item from inventory to another actor or #PLAYER_NAME#. REQUIRED: Must include 'item' field with exact item name from <inventory> tag, and 'target' field with recipient name.";
@@ -1707,7 +1707,7 @@ $GLOBALS["FUNCTIONS"] = [
             "properties" => [
                 "target" => [
                     "type" => "string",
-                    "description" => "Target NPC, actor, or being. Prefer exact Name [RefID: XXXXXXXX] from people_present; otherwise use the actor name.",
+                    "description" => "Who #HERIKA_NAME# brawls: a nearby NPC, actor, or #PLAYER_NAME#. Prefer exact Name [RefID: XXXXXXXX] from people_present; otherwise use the actor name.",
                 ],
             ],
             "required" => ["target"],
@@ -3617,6 +3617,233 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
 
                 error_log("[ACTION POSTFILTER Toast] Executed server-side");
 
+            } else if ($actionCodeNameResolved=="PatrolArea") {
+                
+                 $npcMaster = new Npcmaster();
+
+                $npc = $npcMaster->getByName($actionParts[0]);
+                $skyrimCmd = new SkyrimCommandBuilder();
+                if ($npc) {
+                    $skyrimCmd = new SkyrimCommandBuilder();
+
+                    // Player is Linked ref.
+                    $json = $skyrimCmd->ActorUtil->SetLinkedRef("0x{$npc["refid"]}", "0x14",true);
+                    $skyrimCmd->send(cmd: $json);
+
+                    // Set alerted
+                    $json = $skyrimCmd->Actor->SetAlert("0x{$npc["refid"]}", true);
+                    $skyrimCmd->send(cmd: $json);
+                    
+                    // Add package override. AIAganetgenericPatrol.
+                    $localPckgFormID="031ab1";
+                    $loadOrderESP = $skyrimCmd->getLoadOrderESP();
+                    $PckgFormID="0x{$loadOrderESP}$localPckgFormID";
+
+                    $json = $skyrimCmd->ActorUtil->AddPackageOverride("","0x{$npc["refid"]}", $PckgFormID, 100);
+                    $skyrimCmd->send(cmd: $json);
+
+                    // Evaluate package to start patrol
+                    $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+                    $futureTrigger=time()+15;
+                    $skyrimCmd->send(cmd: $json, localts:$futureTrigger);
+
+                    $cnName= $GLOBALS["db"]->escape($actionParts[0]) ?? $actionParts[0];
+                    $GLOBALS["db"]->insert(
+                        'responselog',
+                        [
+
+                            'localts' => time(),
+                            'sent' => 0,
+                            'actor' => "rolemaster",
+                            'text' => "",
+                            'action' => "rolecommand|DebugNotification@{$cnName} is guarding the area",
+                            'tag' => "",
+
+                        ]
+                    );
+                }
+            
+            } else if ($actionCodeNameResolved=="EquipGear") {
+                
+                $rawParameter = implode("@", array_slice($actionParts2, 1));
+                $payload = decodeFunctionExecutionParameterPayload($rawParameter);
+                if (!is_array($payload)) {
+                    $payload = [];
+                }
+
+                $playerName = trim(strval($GLOBALS["PLAYER_NAME"] ?? "Player"));
+                $targetName = trim(strval($payload["target"] ?? ""));
+                $itemRef = trim(strval($payload["item"] ?? ""));
+                
+                // Extract hex string in format 0x00000000 (e.g., 0xFE038801 or 0xFE038801:DD)
+                if (preg_match('/0x([0-9A-Fa-f]{8})/', $itemRef, $matches)) {
+                    $itemRef = $matches[0];
+                }
+                
+                if (!$itemRef) {
+                    if (preg_match('/([0-9A-Fa-f]{8})/', $itemRef, $matches)) 
+                        $itemRef = "0x".$matches[0];
+                
+                }
+
+                if (!$itemRef) {
+                    error_log("[ACTION POSTFILTER EquipGear] Missing item reference");
+                    unset($actionsCopy[$n]);
+                    continue;
+
+                }
+                $npcMaster = new Npcmaster();
+
+                $npc = $npcMaster->getByName($actionParts[0]);
+                $skyrimCmd = new SkyrimCommandBuilder();
+
+                $json = $skyrimCmd->Actor->EquipItem("0x{$npc["refid"]}", "{$itemRef}", true);
+                $skyrimCmd->send(cmd: $json);
+
+                unset($actionsCopy[$n]);// Remove action from list, so client does not execute it
+
+                error_log("[ACTION POSTFILTER EquipGear] Executed server-side EquipItem(\"0x{$npc["refid"]}\", \"{$itemRef}\", true)");
+            
+            } else if ($actionCodeNameResolved=="Surrender") {
+                
+                $npcMaster = new Npcmaster();
+
+                $npc = $npcMaster->getByName($actionParts[0]);
+                $skyrimCmd = new SkyrimCommandBuilder();
+                if ($npc) {
+                    $json = $skyrimCmd->Actor->StopCombat("0x{$npc["refid"]}");
+                    $skyrimCmd->send(cmd: $json);
+
+                    $json = $skyrimCmd->Actor->SetActorValue("0x{$npc["refid"]}", "Aggression", 0);
+                    $skyrimCmd->send(cmd: $json);
+                    
+                    $json = $skyrimCmd->Actor->SetActorValue("0x{$npc["refid"]}", "Confidence", 0);
+                    $skyrimCmd->send(cmd: $json);
+
+                    $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+                    $skyrimCmd->send(cmd: $json);
+                }
+
+
+                //unset($actionsCopy[$n]);// Remove action from list, so client does not execute it
+
+                error_log("[ACTION POSTFILTER Surrender] Executed server-side StopCombat(\"0x{$npc["refid"]}\")");
+
+            } else if ($actionCodeNameResolved=="ReadBook") {
+                
+                $rawParameter = implode("@", array_slice($actionParts2, 1));
+                $payload = decodeFunctionExecutionParameterPayload($rawParameter);
+                if (!is_array($payload)) {
+                    $payload = [];
+                }
+
+                $playerName = trim(strval($GLOBALS["PLAYER_NAME"] ?? "Player"));
+                $bookIdentifier = trim(strval($payload["item"] ?? ""));
+                $bookLookupByQuery = false;
+
+                $rootPath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
+                require_once $rootPath.'lib/core/book_read.class.php';
+
+                if ($bookIdentifier === '') {
+                    $activeReading = bookReadStateGet();
+                    if (
+                        !empty($activeReading['title'])
+                        && in_array($activeReading['status'] ?? '', ['reading', 'paused', 'unpaused', 'resume_requested'], true)
+                    ) {
+                        $bookIdentifier = trim(strval($activeReading['title']));
+                        error_log("[ACTION POSTFILTER ReadBook] Reused active book title '{$bookIdentifier}' for an empty action item");
+                    } else {
+                        $inputRows = $GLOBALS["db"]->fetchAll("
+                            SELECT data
+                            FROM public.eventlog
+                            WHERE type IN ('inputtext', 'narrator_inputtext')
+                              AND COALESCE(data, '') <> ''
+                            ORDER BY gamets DESC, ts DESC
+                            LIMIT 1
+                        ");
+                        $bookIdentifier = trim(strval($inputRows[0]['data'] ?? ''));
+                        $bookIdentifier = preg_replace('/^[^:]+:\s*/u', '', $bookIdentifier) ?? $bookIdentifier;
+                        $bookIdentifier = preg_replace('/\s*\(Talking to .*$/iu', '', $bookIdentifier) ?? $bookIdentifier;
+                        $bookIdentifier = trim($bookIdentifier);
+                        $bookLookupByQuery = $bookIdentifier !== '';
+                    }
+                }
+
+                if ($bookIdentifier === '') {
+                    error_log("[ACTION POSTFILTER ReadBook] Missing book name and request text");
+                    unset($actionsCopy[$n]);
+                    continue;
+                }
+
+                $parsedBook = bookReadParseBookIdentifier($bookIdentifier);
+                $bookName = trim(strval($parsedBook['title'] ?? ''));
+                $bookFormId = $parsedBook['form_id'] ?? null;
+                if ($bookName === '') {
+                    error_log("[ACTION POSTFILTER ReadBook] Missing book title after identifier parsing");
+                    unset($actionsCopy[$n]);
+                    continue;
+                }
+
+                $cnBookName = $GLOBALS["db"]->escape($bookName) ?? $bookName;
+                $bookCandidate = $GLOBALS["db"]->fetchOne(
+                    "SELECT * FROM books WHERE LOWER(title)=LOWER('{$cnBookName}') AND content IS NOT NULL AND BTRIM(content) <> '' ORDER BY rowid DESC LIMIT 1"
+                );
+                $readerName = function_exists('chimGetPromptCharacterName')
+                    ? chimGetPromptCharacterName()
+                    : ($GLOBALS["HERIKA_NAME"] ?? '');
+
+                if ($bookCandidate) {
+                    error_log("[ACTION POSTFILTER ReadBook] Book found: '{$bookCandidate['title']}'");
+                    $result = bookReadStateHandleBookAction($bookCandidate, $readerName, $playerName);
+                    // $result is one of: 'resumed', 'replaced', 'started', 'ignored'
+                    unset($actionsCopy[$n]);
+                } else if ($bookFormId !== null) {
+                    try {
+                        $pendingState = bookReadStateRequestContent($bookName, $bookFormId, $readerName, $playerName);
+                        if (!empty($pendingState['_request_created'])) {
+                            $GLOBALS["db"]->insert('responselog', [
+                                'localts' => time(),
+                                'sent' => 0,
+                                'actor' => 'rolemaster',
+                                'text' => '',
+                                'action' => "rolecommand|UploadBookContent@{$bookFormId}@{$pendingState['request_token']}",
+                                'tag' => '',
+                            ]);
+                            error_log("[ACTION POSTFILTER ReadBook] Requested CHIM upload for uncached book '{$bookName}' ({$bookFormId})");
+                        } else {
+                            error_log("[ACTION POSTFILTER ReadBook] Reused pending CHIM upload request for '{$bookName}' ({$bookFormId})");
+                        }
+                    } catch (Throwable $error) {
+                        error_log("[ACTION POSTFILTER ReadBook] Could not request book content: " . $error->getMessage());
+                    }
+                    unset($actionsCopy[$n]);
+                } else {
+                    try {
+                        $pendingState = bookReadStateRequestContentByQuery($bookName, $readerName, $playerName);
+                        if (!empty($pendingState['_request_created'])) {
+                            $commandPayload = json_encode([
+                                'reader_b64' => base64_encode($readerName),
+                                'title_b64' => base64_encode($bookName),
+                                'request_token' => $pendingState['request_token'],
+                            ], JSON_UNESCAPED_SLASHES);
+                            $GLOBALS["db"]->insert('responselog', [
+                                'localts' => time(),
+                                'sent' => 0,
+                                'actor' => 'rolemaster',
+                                'text' => '',
+                                'action' => "rolecommand|UploadBookContentByTitle@{$commandPayload}",
+                                'tag' => '',
+                            ]);
+                            $lookupKind = $bookLookupByQuery ? 'request text' : 'title words';
+                            error_log("[ACTION POSTFILTER ReadBook] Requested CHIM inventory lookup by {$lookupKind} for uncached book '{$bookName}'");
+                        } else {
+                            error_log("[ACTION POSTFILTER ReadBook] Reused pending CHIM inventory lookup for '{$bookName}'");
+                        }
+                    } catch (Throwable $error) {
+                        error_log("[ACTION POSTFILTER ReadBook] Could not request book content by title: " . $error->getMessage());
+                    }
+                    unset($actionsCopy[$n]);
+                }
             }
         }
     }

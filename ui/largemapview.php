@@ -1521,6 +1521,10 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl/head.html");
         z-index: 40;
     }
 
+    .npc-marker {
+        z-index: 100;
+    }
+
     .marker-dot {
         width: 100%;
         height: 100%;
@@ -2430,7 +2434,7 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl/head.html");
                         <span class="map-width-value"><span id="widthValue">400</span>%</span>
                     </div>
                 </div>
-                <form id="background-life-settings" class="bgl-settings-card" method="post">
+                <form id="background-life-settings" class="bgl-settings-card" method="post" style="display:none">
                     <input type="hidden" name="action" value="save_bgl_settings">
                     <h3>Background Life Settings</h3>
                     <?php if ($bglSettingsFlash): ?>
@@ -2486,7 +2490,7 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl/head.html");
                                         <li><strong>Last Position Timestamp:</strong>
                                             (<?php echo $marker['last_pos_ts']; ?>)</li>
                                         <li><strong>Last Reported:</strong>
-                                            <span title="<?php echo htmlentities($marker['last_letter']); ?>">
+                                            <span title="<?php echo htmlentities($marker['last_letter']??''); ?>">
                                                 (<?php echo $marker['last_report']; ?>)
                                                 <?php if (isset($marker['last_letter']))
                                                     echo "<span style='cursor:help'>📜</span>"; ?>
@@ -2564,7 +2568,7 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl/head.html");
                             $symbol = '';
                         }
 
-                        echo '<div class="marker" style="left: ' . $percentX . '%; top: ' . $percentY . '%; transform: translate(calc(-50% + ' . $offsetX . 'px), calc(-50% + ' . $offsetY . 'px));">';
+                        echo '<div class="marker npc-marker" style="left: ' . $percentX . '%; top: ' . $percentY . '%; transform: translate(calc(-50% + ' . $offsetX . 'px), calc(-50% + ' . $offsetY . 'px));">';
                         echo '<div class="marker-dot" id="mkr_' . $marker['id'] . '" style="width: ' . ($marker['size'] * 2) . 'px; height: ' . ($marker['size'] * 2) . 'px; background-color: ' . $marker['color'] . '; opacity: 0.8;">';
                         echo ($symbol ?? '') . '</div>';
                         echo '<div class="marker-label">' . PHP_EOL;
@@ -2617,14 +2621,14 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl/head.html");
                         echo '</div>';
                         echo '<div class="location-marker-label">';
                         echo '<div class="location-name">' . htmlspecialchars($location['name']) . '</div>';
-                        echo '<div class="location-desc">' . htmlspecialchars($location['description']) . '</div>';
-                        echo '<div class="location-tags">' . htmlspecialchars($location['tags']) . '</div>';
+                        echo '<div class="location-desc">' . htmlspecialchars($location['description']??'') . '</div>';
+                        echo '<div class="location-tags">' . htmlspecialchars($location['tags']??'') . '</div>';
                         echo '<div class="location-coords">';
-                        echo 'Type: ' . htmlspecialchars($location['type']) . '<br/>';
-                        echo 'Coords: ' . $location['ingame_x'] . ', ' . $location['ingame_y'] . '<br/>';
-                        echo 'FormID: ' . htmlspecialchars($location['formID']) . '<br/>';
-                        echo 'Tags: ' . htmlspecialchars($location['tags']) . '<br/>';
-                        echo '' . htmlspecialchars($location['symbol']) . '<br/>';
+                        echo 'Type: ' . htmlspecialchars($location['type']??'') . '<br/>';
+                        echo 'Coords: ' . ($location['ingame_x']??'') . ', ' . ($location['ingame_y']??'') . '<br/>';
+                        echo 'FormID: ' . htmlspecialchars($location['formID']??'') . '<br/>';
+                        echo 'Tags: ' . htmlspecialchars($location['tags']??'') . '<br/>';
+                        echo '' . htmlspecialchars($location['symbol']??'') . '<br/>';
                         echo '</div>';
                         echo '</div>';
                         echo '</div>' . PHP_EOL;
@@ -2660,7 +2664,7 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl/head.html");
     </div>
     <div class="info-section">
         <span class="open-new-window" onclick="openInNewWindow()" title="Open in new window">↗️</span>
-        <span class="open-new-window-2" onclick="location.href='mapview.php'" title="Refresh">🔄</span>
+        <span class="open-new-window-2" onclick="location.href='largemapview.php'" title="Refresh">🔄</span>
         <script>
             // NPC Diary Data - embedded directly in page
             const npcDiaryData = <?php echo json_encode(array_combine(

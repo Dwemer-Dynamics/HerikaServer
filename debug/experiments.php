@@ -638,11 +638,26 @@ Must sell fish to merchants,(e.g at Candlehearth Hall), innkeepers and citizens 
 if ($argv[1] == '9a') {
 
     $npcMaster = new NpcMaster();
-    $npc = $npcMaster->getByName("Orianne");
+    $npcname = "Jaryra";
+    $npc = $npcMaster->getByName($npcname);
+
+    $GLOBALS["db"]->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => "rolemaster",
+            'text' => "",
+            'action' => "rolecommand|BackgroundCmd@0x{$npc["refid"]}@Track",
+            'tag' => __FILE__ . ":" . __LINE__,
+        ]
+    );
+    sleep(1);
+
     $meta = $npcMaster->getMetaData($npc);
     print_r($meta["last_coords"]);
 
-    print_r(getLocationsNearNpcCoords("Orianne"));
+    print_r(getLocationsNearNpcCoords($npcname));
 
     /*
     // This does not work, because the TravelToRaw only accepts location formid.
@@ -661,7 +676,7 @@ if ($argv[1] == '9a') {
     // This works
     // Jorvasrk 1014097
     // Silver-Blood Inn
-
+    /*
     $db->insert(
         'responselog',
         [
@@ -673,6 +688,7 @@ if ($argv[1] == '9a') {
             'tag' => '',
         ]
     );
+    */
 }
 
 if ($argv[1] == '9') {
@@ -843,14 +859,14 @@ if ($argv[1] == '14') {
     //$skyrimCmd->send(cmd: $json);
     //$json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x08365D75");
     //$skyrimCmd->send(cmd: $json);
-    print_r(resolveTravelLocation("Elysium Estate (Interior)",$npc,$GLOBALS["db"]));
+    print_r(resolveTravelLocation("Elysium Estate (Interior)", $npc, $GLOBALS["db"]));
 
 }
 
 if ($argv[1] == '15') {
     // Clone an NPC for BgL
     // 
-    $name="Orianne";
+    $name = "Orianne";
     $chimBase = 0x0820D4C5;
     $chimBaseClothing = 0x000a1983; //Outfit
     $chimWeapon = 0x00013989;
@@ -884,7 +900,7 @@ if ($argv[1] == '16') {
 }
 
 if ($argv[1] == '17') {
-    
+
     $GLOBALS["db"]->insert(
         'responselog',
         [
@@ -892,11 +908,11 @@ if ($argv[1] == '17') {
             'sent' => 0,
             'actor' => "rolemaster",
             'text' => "",
-            'action' => "rolecommand|BackgroundCmd@0xFF00127C@RemoveFromBgL",
+            'action' => "rolecommand|BackgroundCmd@0x0D24507B@RemoveFromBgL",
             'tag' => __FILE__ . ":" . __LINE__,
         ]
     );
-    
+
 }
 
 if ($argv[1] == '18') {
@@ -925,10 +941,10 @@ if ($argv[1] == '19') {
 if ($argv[1] == '20') {
     // Clone an NPC for BgL
     // 
-    $name="Karrie";
-    $npcMaster = new NpcMaster();   
+    $name = "Karrie";
+    $npcMaster = new NpcMaster();
     $npc = $npcMaster->getByName($name);
-    $bedref=0x1813A3AF;
+    $bedref = 0x1813A3AF;
     $GLOBALS["db"]->insert(
         'responselog',
         [
@@ -944,11 +960,11 @@ if ($argv[1] == '20') {
 }
 
 if ($argv[1] == '21a') {
-    
-    $name="Lydia";
-    $npcMaster = new NpcMaster();   
+
+    $name = "Lydia";
+    $npcMaster = new NpcMaster();
     $npc = $npcMaster->getByName($name);
-    $bedref=0x1A51804C;
+    $bedref = 0x1A51804C;
     /*
     $GLOBALS["db"]->insert(
         'responselog',
@@ -963,20 +979,20 @@ if ($argv[1] == '21a') {
     );
     */
     $skyrimCmd = new SkyrimCommandBuilder();
-    $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}","0x1A51804C",0,0,155);
+    $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x1A51804C", 0, 0, 155);
     $skyrimCmd->send(cmd: $json);
 }
 
 if ($argv[1] == '21b') {
-    
-    $name="Lydia";
-    $npcMaster = new NpcMaster();   
+
+    $name = "Lydia";
+    $npcMaster = new NpcMaster();
     $npc = $npcMaster->getByName($name);
-   
+
     $npc = $npcMaster->getByName($name);
     $skyrimCmd = new SkyrimCommandBuilder();
 
-    $json = $skyrimCmd->Actor->SetUnconscious("0x{$npc["refid"]}",false);
+    $json = $skyrimCmd->Actor->SetUnconscious("0x{$npc["refid"]}", false);
     $skyrimCmd->send(cmd: $json);
 
     /*
@@ -989,41 +1005,268 @@ if ($argv[1] == '21b') {
 }
 
 if ($argv[1] == '22') {
-    
-    $name="Lydia";
-    $npcMaster = new NpcMaster();   
+
+    $name = "Lydia";
+    $npcMaster = new NpcMaster();
     $npc = $npcMaster->getByName($name);
-    $bedref=0x1a224b54;
-    
-    
+    $bedref = 0x1a224b54;
+
+
     $npc = $npcMaster->getByName($name);
     $skyrimCmd = new SkyrimCommandBuilder();
 
-    $json = $skyrimCmd->Actor->EnableAI("0x{$npc["refid"]}",true);
+    $json = $skyrimCmd->Actor->EnableAI("0x{$npc["refid"]}", true);
     $skyrimCmd->send(cmd: $json);
 
-    $json = $skyrimCmd->Actor->SetUnconscious("0x{$npc["refid"]}",true);
+    $json = $skyrimCmd->Actor->SetUnconscious("0x{$npc["refid"]}", true);
     $skyrimCmd->send(cmd: $json);
 
     $json = $skyrimCmd->Actor->UnequipAll("0x{$npc["refid"]}");
     $skyrimCmd->send(cmd: $json);
-    
-    $json = $skyrimCmd->Actor->EnableAI("0x{$npc["refid"]}",true);
+
+    $json = $skyrimCmd->Actor->EnableAI("0x{$npc["refid"]}", true);
     $skyrimCmd->send(cmd: $json);
 
 }
 
 if ($argv[1] == '23') {
     $GLOBALS["db"]->execQuery("INSERT INTO public.responselog VALUES (0, 0, 'Karrie', 'Today, as we gather in this virtual hall, I can''t help but draw inspiration from the vast and enchanting universe of Skyrim/////1/Varek/utt_39b8b31c32bb0abb9a92', 'ScriptQueue', '', nextval('responselog_rowid_seq'::regclass))");
-    
+
 
 }
 
-if ($argv[1] == '24') {
+if ($argv[1] == '25') {
+
+    $name = "Lydia";
     $npcMaster = new NpcMaster();
-    $npc = $npcMaster->getByName("Karrie");
+    $npc = $npcMaster->getByName($name);
     $refHexString = "0x{$npc["refid"]}";
-    $locId = ["formid" => "0x14"];
+    /*
+    $db->insert(
+        'responselog',
+        array(
+            'localts' => time(),
+            'sent' => 0,
+            'text' => "TakeASeat@",
+            'actor' => "Lydia",
+            'action' => 'command'
+        )
+    );*/
+
+    $db->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => "rolemaster",
+            'text' => "",
+            'action' => "rolecommand|BackgroundCmd@$refHexString@StayAtPlace/436259230/sleep",
+            'tag' => '',
+        ]
+    );
+}
+
+if ($argv[1] == '26') {
+
+    print_r(buildHistoricContext("Lydia", -1, "and type<>'prechat'"));
+
+}
+
+if ($argv[1] == '27') {
+    /*
+    The following values are acceptable: (Will eventually be an enum)
+    4: Lover
+    3: Ally
+    2: Confidant
+    1: Friend
+    0: Acquaintance
+    -1: Rival
+    -2: Foe
+    -3: Enemy
+    -4: Archnemesis
+    */
+
+    $name = "Lydia";
+    $name2 = "Jaryra";
+    $npcMaster = new NpcMaster();
+    $npc1 = $npcMaster->getByName($name);
+    $npc2 = $npcMaster->getByName($name2);
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+
+    $json = $skyrimCmd->Actor->SetRelationShipRank("0x{$npc1["refid"]}", "0x{$npc2["refid"]}", 1);
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->SetRelationShipRank("0x{$npc2["refid"]}", "0x{$npc1["refid"]}", 1);
+    $skyrimCmd->send(cmd: $json);
+
+}
+
+if ($argv[1] == '28') {
+    $GLOBALS['REMOVE_ASTERISKS_FROM_NPC_OUTPUT'] = true;
+    echo unmoodSentence("*She stirs from her sleep, blinking groggily as she hears his voice. She sits up, rubbing her eyes, a soft smile forming on her lips.* Yes, my love?");
+    echo PHP_EOL;
+    echo unmoodSentence("Yes, my love? *She stirs from her sleep, blinking groggily as she hears his voice. She sits up, rubbing her eyes, a soft smile forming on her lips.* ");
+    echo PHP_EOL;
+}
+
+if ($argv[1] == '29') {
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Ursine");
+    $speech_style = getSpeechStyleText(strtolower($npc["race"]), "rogue");
+    $speech_style .= getRandomSpeechFillers();
+    echo $speech_style . PHP_EOL;
+}
+
+if ($argv[1] == '30') {
+    $oldName = $GLOBALS["db"]->escape("Otdis [Bandit Outlaw]");
+    $newName = $GLOBALS["db"]->escape("Ursine");
+    $GLOBALS["db"]->execQuery("
+                    UPDATE eventlog
+                    SET people = REPLACE(people, '$oldName', '$newName')
+                    WHERE people LIKE CONCAT('%', '$oldName', '%')
+                ");
+
+    // speech.speaker and speech.listener
+    $GLOBALS["db"]->execQuery("
+                    UPDATE speech
+                    SET speaker = '$newName'
+                    WHERE speaker = '$oldName'
+                ");
+    $GLOBALS["db"]->execQuery("
+                    UPDATE speech
+                    SET listener = '$newName'
+                    WHERE listener = '$oldName'
+                ");
+
+    // memory.speaker and memory.listener
+    $GLOBALS["db"]->execQuery("
+                    UPDATE memory
+                    SET speaker = '$newName'
+                    WHERE speaker = '$oldName'
+                ");
+    $GLOBALS["db"]->execQuery("
+                    UPDATE memory
+                    SET listener = '$newName'
+                    WHERE listener = '$oldName'
+                ");
+
+    // memory_summary.companions (pipe-separated list)
+    $GLOBALS["db"]->execQuery("
+                    UPDATE memory_summary
+                    SET companions = REPLACE(companions, '$oldName', '$newName')
+                    WHERE companions LIKE CONCAT('%', '$oldName', '%')
+                ");
+
+}
+
+if ($argv[1] == '31') {
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Alva");
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+
+    $json = $skyrimCmd->Actor->SetNoBleedoutRecovery("0x{$npc["refid"]}", false);
+    $skyrimCmd->send(cmd: $json);
+
+}
+
+if ($argv[1] == '32') {
+    // Patrol and guard test.
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Ursine");
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+
+    // Player is Linked ref.
+    $json = $skyrimCmd->ActorUtil->SetLinkedRef("0x{$npc["refid"]}", "0x000FDB0D", true);
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->SetAlert("0x{$npc["refid"]}", true);
+    $skyrimCmd->send(cmd: $json);
+    sleep(10);
+    // Add package override.
+    $localPckgFormID = "031ab1";
+    $loadOrderESP = $skyrimCmd->getLoadOrderESP();
+    $PckgFormID = "0x{$loadOrderESP}$localPckgFormID";
+
+
+
+    $json = $skyrimCmd->ActorUtil->AddPackageOverride("", "0x{$npc["refid"]}", $PckgFormID, 100);
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+
+}
+
+if ($argv[1] == '33') {
+
+    print_r(extractFirstEmoteMood("amused"));
+
+}
+
+if ($argv[1] == '34a' || $argv[1] == '34b') {
+
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Jaryra");
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+
+    //Stop reading animation
+    if ($argv[1] == '34b') {
+        $json = $skyrimCmd->Actor->PlayIdle("0x{$npc["refid"]}", "0x000e4242");
+        $skyrimCmd->send(cmd: $json);
+
+        $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+        $skyrimCmd->send(cmd: $json);
+    }
+
+    //Start reading animation
+    if ($argv[1] == '34a') {
+        $json = $skyrimCmd->Actor->PlayIdle("0x{$npc["refid"]}", "0x000bb053");
+        $skyrimCmd->send(cmd: $json);
+
+        //$json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+        //$skyrimCmd->send(cmd: $json);
+    }
+
+    if (false) {
+        $GLOBALS["db"]->insert(
+            'responselog',
+            array(
+                'localts' => time(),
+                'sent' => 0,
+                'text' => "CommandAnimation@IdleBook_Reading",
+                'actor' => "Jaryra",
+                'action' => 'command'
+            )
+        );
+    }
+
+}
+
+if ($argv[1] == '35') {
+
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Jaryra");
+
+
+    $GLOBALS["db"]->insert(
+        'responselog',
+        array(
+            'localts' => time(),
+            'sent' => 0,
+            'text' => "CommandAnimation@IdleBookSitting_Reading",
+            'actor' => "Jaryra",
+            'action' => 'command'
+        )
+    );
+
+
+}
+
+if ($argv[1] == '36') {
     $GLOBALS["db"]->insert(
         'responselog',
         [
@@ -1031,8 +1274,382 @@ if ($argv[1] == '24') {
             'sent' => 0,
             'actor' => "rolemaster",
             'text' => "",
-            'action' => "rolecommand|BackgroundCmd@$refHexString@StayAtPlace/0x14/sleep",
-            'tag' => '',
+            'action' => "rolecommand|Instruction@The Narrator@Should say something smart@0",
+            'tag' => "",
         ]
     );
+}
+
+if ($argv[1] == '37') {
+
+function chunkText(string $text, int $size = 100): array
+{
+    // Normalize line endings.
+    $text = str_replace(["\r\n", "\r"], "\n", $text);
+
+    // Remove pagebreak markers.
+    $text = preg_replace('/\[pagebreak\]/i', "\n\n", $text);
+
+    // Remove separator lines such as "==".
+    $text = preg_replace('/^\s*==\s*$/m', '', $text);
+
+    // Extract book metadata.
+    $title = null;
+    $author = null;
+
+    if (preg_match('/^Title:\s*(.+)$/mi', $text, $match)) {
+        $title = trim($match[1]);
+    }
+
+    if (preg_match('/^\s*By\s*\n\s*(.+)$/mi', $text, $match)) {
+        $author = trim($match[1]);
+    }
+
+    // Remove the title/author cover block from the body.
+    if ($title !== null) {
+        $coverPattern =
+            '/Title:.*?' .
+            '(?:\n\s*)+By\s*\n\s*' .
+            preg_quote($author ?? '', '/') .
+            '\s*/is';
+
+        $text = preg_replace($coverPattern, '', $text, 1);
+    }
+
+    // Split the text into paragraphs.
+    $paragraphs = preg_split('/\n\s*\n+/', trim($text));
+
+    $lines = [];
+
+    // Add the book metadata as the first line.
+    if ($title !== null) {
+        $header = 'Title: ' . trim($title, " *");
+
+        if ($author !== null) {
+            $header .= ', By ' . $author;
+        }
+
+        $lines[] = $header;
+    }
+
+    foreach ($paragraphs as $paragraph) {
+
+        $paragraph = trim($paragraph);
+
+        if ($paragraph === '') {
+            continue;
+        }
+
+        // Join artificial line breaks inside paragraphs.
+        $paragraph = preg_replace('/\s*\n\s*/', ' ', $paragraph);
+
+        // Normalize consecutive whitespace.
+        $paragraph = preg_replace('/\s+/', ' ', $paragraph);
+
+        $paragraph = trim($paragraph);
+
+        if ($paragraph === '') {
+            continue;
+        }
+
+        /*
+         * Split paragraphs into sentences.
+         *
+         * Sentences are kept together whenever possible.
+         * A sentence is only broken when it is longer than $size.
+         */
+        $sentences = preg_split(
+            '/(?<=[.!?])\s+(?=[A-Z"\“\‘])/',
+            $paragraph,
+            -1,
+            PREG_SPLIT_NO_EMPTY
+        );
+
+        $current = '';
+
+        foreach ($sentences as $sentence) {
+
+            $sentence = trim($sentence);
+
+            if ($sentence === '') {
+                continue;
+            }
+
+            /*
+             * If a single sentence is longer than the target size,
+             * flush the current line and wrap the sentence by words.
+             */
+            if (mb_strlen($sentence) > $size) {
+
+                if ($current !== '') {
+                    $lines[] = $current;
+                    $current = '';
+                }
+
+                $wrapped = wordwrap(
+                    $sentence,
+                    $size,
+                    "\n",
+                    false
+                );
+
+                foreach (explode("\n", $wrapped) as $line) {
+                    $line = trim($line);
+
+                    if ($line !== '') {
+                        $lines[] = $line;
+                    }
+                }
+
+                continue;
+            }
+
+            // Start a new line with the current sentence.
+            if ($current === '') {
+                $current = $sentence;
+                continue;
+            }
+
+            // Try to append the sentence to the current line.
+            $candidate = $current . ' ' . $sentence;
+
+            if (mb_strlen($candidate) <= $size) {
+                $current = $candidate;
+            } else {
+                $lines[] = $current;
+                $current = $sentence;
+            }
+        }
+
+        // Flush the remaining line of the paragraph.
+        if ($current !== '') {
+            $lines[] = $current;
+        }
+    }
+
+    /*
+     * Final cleanup for TTS:
+     *
+     * - Remove empty lines.
+     * - Remove separator-only lines.
+     * - Normalize whitespace.
+     * - Make sure no formatting markers remain as standalone lines.
+     */
+    $lines = array_map(function (string $line): string {
+        $line = preg_replace('/\s+/', ' ', $line);
+        return trim($line);
+    }, $lines);
+
+    $lines = array_filter($lines, function (string $line): bool {
+        if ($line === '') {
+            return false;
+        }
+
+        // Ignore separator-only lines.
+        if (preg_match('/^(?:==+|--+|__+|\*\*+)\s*$/', $line)) {
+            return false;
+        }
+
+        return true;
+    });
+
+    return array_values($lines);
+}
+
+
+function getTtsLines(
+    string $text,
+    int $size = 100,
+    int $minLineLength = 50
+): array {
+    /*
+     * Try several target sizes and keep the result that produces
+     * the best distribution of line lengths.
+     *
+     * Example:
+     *
+     * 100 -> 12 short lines
+     * 90  ->  7 short lines
+     * 80  ->  3 short lines  <-- selected
+     * 70  ->  8 short lines
+     */
+    $sizes = [];
+
+    // Try sizes from the requested size down to 50.
+    for ($currentSize = $size; $currentSize >= $minLineLength; $currentSize -= 10) {
+        $sizes[] = $currentSize;
+    }
+
+    // Make sure the minimum size is always tested.
+    if (!in_array($minLineLength, $sizes, true)) {
+        $sizes[] = $minLineLength;
+    }
+
+    $bestLines = [];
+    $bestShortLines = PHP_INT_MAX;
+    $bestMinLength = -1;
+    $bestTotalLines = PHP_INT_MAX;
+
+    foreach ($sizes as $currentSize) {
+
+        $lines = chunkText($text, $currentSize);
+
+        $shortLines = 0;
+        $minimumLength = PHP_INT_MAX;
+        $totalLength = 0;
+        $lineCount = 0;
+
+        foreach ($lines as $line) {
+
+            $line = trim($line);
+
+            if ($line === '') {
+                continue;
+            }
+
+            $length = mb_strlen($line);
+
+            $lineCount++;
+            $totalLength += $length;
+
+            if ($length < $minimumLength) {
+                $minimumLength = $length;
+            }
+
+            if ($length < $minLineLength) {
+                $shortLines++;
+            }
+        }
+
+        /*
+         * Pick the best result using these priorities:
+         *
+         * 1. Fewer lines below the minimum length.
+         * 2. Better minimum line length.
+         * 3. Fewer total lines.
+         */
+        $isBetter =
+            $shortLines < $bestShortLines ||
+            (
+                $shortLines === $bestShortLines &&
+                $minimumLength > $bestMinLength
+            ) ||
+            (
+                $shortLines === $bestShortLines &&
+                $minimumLength === $bestMinLength &&
+                $lineCount < $bestTotalLines
+            );
+
+        if ($isBetter) {
+            $bestLines = $lines;
+            $bestShortLines = $shortLines;
+            $bestMinLength = $minimumLength;
+            $bestTotalLines = $lineCount;
+        }
+
+        /*
+         * Perfect result.
+         *
+         * No line is shorter than the requested minimum,
+         * so there is no reason to test more sizes.
+         */
+        if ($shortLines === 0) {
+            break;
+        }
+    }
+
+    return array_values(array_filter(
+        $bestLines,
+        fn ($line) => trim($line) !== ''
+    ));
+}
+
+
+
+$chunkText=<<<EOT
+Title: * The Cake and the Diamond
+[pagebreak]
+
+
+
+The Cake and the Diamond
+
+
+
+by
+Athyn Muendil
+
+
+
+
+[pagebreak]
+
+ was in the Rat and the Pot, a foreigner cornerclub in Ald'ruhn, talking to my fellow Rats when I first saw the woman.  Now, Breton women are fairly common in the Rat and the Pot. As a breed, they seem inclined to wander far from their perches in High Rock.  Old Breton women, however, are not so migratory, and the wizened old biddy drew attention to herself, wandering about the room, talking to everyone.
+
+Nimloth and Oediad were at their usual places, drinking their usual stuff.  Oediad was showing off a prize he had picked up in some illicit manner -- a colossal diamond, large as a baby's hand, and clear as spring water.  I was admiring it when I heard the creaking of old bones behind me.
+
+"Good day to you, friends," said the old woman. "My name is Abelle Chriditte, and I am in need of financial assistance to facilitate my transportation to Ald Redaynia."
+
+"You'll want to see the Temple for charity," said Nimloth curtly.
+
+"I am not looking for charity," said Abelle. "I'm looking to barter services."
+
+"Don't make me sick, old woman," laughed Oediad.
+
+"Did you say your name was Abelle Chriditte?" I asked, "Are you related to Abelle Chriditte, the High Rock alchemist?"
+
+"Closely related," she said, with a cackle. "We are the same person.  Perhaps I could prepare you a potion in exchange for gold?  I noticed that you have in your possession a very fine diamond.  The magical qualities of diamonds are boundless."
+
+"Sorry, old woman, I ain't giving it up for magic.  It was trouble enough stealing this one," said Oediad. "I've got a fence who'll trade it for gold."
+
+"But your fence will demand a certain percentage, will he not?  What if I could give you a potion of invisibility in exchange?  In return for that diamond, you could have the means to steal many more.  A very fair exchange of services, I would say."
+
+"It would be, but I have no gold to give you," said Oediad.
+
+"I'll take what remains of the diamond after I've made the potion," said Abelle. "If you took it to the Mages Guild, you'd have to supply all the other ingredients and pay for it as well.  But I learned my craft in the wild, where no Potion-makers existed to dissolve diamonds into dust.  When you must do it all by hand, by simple skill, you are blessed with remnants those fool potion-makers at the Guild simply swallow up."
+
+"That sounds all very nice," said Nimloth, "But how do we know your potion is going to work?  If you make one potion, take the rest of Oediad's diamond, and leave, we won't know until you've gone whether the potion works or not."
+
+"Ah, trust is so rare these days," sighed Abelle. "I suppose I could make two potions for you, and there'd still be a little bit of the diamond left for me.  Not a lot, but perhaps enough to get me to Ald Redaynia. Then you could try the first potion right here and now, and see if you're satisfied or not."
+
+"But," I interjected. "You could make one potion that works and one that doesn't, and take more of the diamond.  She could even give you a slow-acting poison, and by the time she got to Ald Redaynia, you'd be dead."
+
+"Bleedin' Kynareth, you Dunmer are suspicious!  I will hardly have any diamond left, but I could make two potions of two doses each, so you can satisfy yourself that the potion works and has no negative effects. If you still don't trust me, come along with me to my table and witness my craft if you'd like." 
+
+So it was decided that I would accompany Abelle back to her table where she had all her traveling bags full of herbs and minerals, to make certain that she was not making two different potions.  It took nearly an hour of preparation, but she kindly allowed me to finish her half-filled flagon of wine while I watched her work.  Splintering the diamond and powdering the pieces required the bulk of the time; over and over again, she waved her gnarled hands over the gem, intoning ancient enchantments, breaking the facets of the stone into smaller and smaller pieces.  Separately she made pastes of minced bittergreen, crushed red bulbs of dell'arco spae, and driblets of ciciliani oil.  I finished the wine.
+
+"Old woman," I finally said with a sigh. "How much longer is this going to take?  I'm getting tired of watching you work."
+
+"The Mages Guild has fooled the populace into thinking alchemy is a science," she said. "But if you're tired, rest your eyes."
+
+My eyes closed, seemingly of their own volition.  But there had been something in that wine.  Something that made me do what she asked.
+
+"I think I'll make up the potion as cakes.  It's much more potent that way.  Now, tell me, young man, what will your friends do once I give them the potion?"
+
+"Mug you in the street afterwards to retrieve the rest of the diamond," I said simply.  I didn't want to tell the truth, but there it was.
+
+"I thought so, but I wanted to be certain.  You may open your eyes now."
+
+I opened my eyes.  Abelle had made a small presentation on a wooden platter: two small cakes and a silver cutting knife.
+
+"Pick up the cakes and bring them to the table," said Abelle. "And don't say anything, except to agree with whatever I say."
+
+I did as I was told.  It was a curious sensation.  I didn't really mind being her puppet.  Of course, in retrospect, I resent it, but it seemed perfectly natural at the time to obey without question.
+
+Abelle handed the cakes to Oediad and I dutifully verified that both cakes were made the same way.  She suggested that he cut one of the cakes in half, and she would take one piece and he'd take the other, just so he would know that they worked and weren't poisoned.  Oediad thought it was a good idea, and used Abelle's knife to cut the cake.  Abelle took the piece on the left and popped it into her mouth.  Oediad took the piece on the right and swallowed it more cautiously.
+
+Abelle and all the bags she was carrying vanished from sight almost instantly.  Nothing happened to Oediad.
+
+"Why did it work for the witch and not for me?" cried Oediad.
+
+"Because the diamond dust was only on the left-hand side of the blade," said the old alchemist through me.  I felt her control lessening as the distance grew and she hurried invisibly down the dark Ald'ruhn street away from the Rat and the Pot.  
+
+We never found Abelle Chriditte or the diamond.  Whether she completed her pilgrimage to Ald Redaynia is anyone's guess.  The cakes had no effect, except to give Oediad a bad case of droops that lasted for nearly a week.
+
+EOT;
+
+    echo "Chunking text..." . PHP_EOL;
+    $chunks = getTtsLines($chunkText, 125);
+    print_r($chunks);
+    echo "Done chunking text." . PHP_EOL;
 }

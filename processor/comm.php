@@ -144,6 +144,7 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
     $db->delete("named_cell", "gamets<=({$gameRequest[2]} - 30000000) "); //((24 * 3) / 0.0000024)
     $db->delete("sneq_quests_saved", "gamets>={$gameRequest[2]}  ");
     $db->delete("bgl_history", "gamets>={$gameRequest[2]}  ");
+    $db->delete("conf_opts", "id='book_reading_state'");
 
 
     /* This is obsolete */
@@ -1282,21 +1283,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
     // logEvent($gameRequest);
 
     $vars = explode("@", $gameRequest[3]);
-    if ($vars[0] == "chim_context_mode") {
-        $cRw = $db->fetchOne("select value from conf_opts where id='{$vars[0]}'");
-        $vars[1] = (isset($cRw["value"]) && $cRw["value"] == "1") ? "0" : "1";
-        $GLOBALS["db"]->insert(
-            'responselog',
-            array(
-                'localts' => time(),
-                'sent' => 0,
-                'actor' => "rolemaster",
-                'text' => '',
-                'action' => "rolecommand|DebugNotification@Compact Chat mode " . ($vars[1] ? "enabled" : "disabled"),
-                'tag' => ""
-            )
-        );
-    } else if ($vars[0] == "chim_renamenpc") {
+    if ($vars[0] == "chim_renamenpc") {
         // Convert signed to unsigned using bitwise AND
         $unsignedInt = ($vars[3] + 0) & 0xFFFFFFFF;
         // Represent as 8-digit zero-padded hex with 0x prefix
@@ -1721,9 +1708,9 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         $profData = json_decode($profile->getById($currentNpcData["profile_id"])["metadata"], true);
 
         if (!$offline) {
-            $doAutoGreeting = (isset($profData["SALUTATION_AFTER_1_DAY"]) && $profData["SALUTATION_AFTER_1_DAY"] || isset($meta["salutation_after_a_while"]) && $meta["salutation_after_a_while"]);
+            $doAutoGreeting = (isset($profData["SALUTATION_AFTER_1_DAY"]) && $profData["SALUTATION_AFTER_1_DAY"] || isset($extended["salutation_after_a_while"]) && $extended["salutation_after_a_while"]);
             if ($doAutoGreeting) {
-                error_log("[auto_greeting] enabled for {$currentNpcData["npc_name"]}, profile:{$profData["SALUTATION_AFTER_1_DAY"]} ,npc:{$meta["salutation_after_a_while"]}");
+                error_log("[auto_greeting] enabled for {$currentNpcData["npc_name"]}, profile:{$profData["SALUTATION_AFTER_1_DAY"]} ,npc:{$extended["salutation_after_a_while"]}");
                 $lit = GetLastInteraction($GLOBALS["PLAYER_NAME"], $currentNpcData["npc_name"]);
                 if (gamets2days_between($lit, $gameRequest[2]) > 1) {
                     // If auto greeting is enabled for this NPC and enough time has passed, force a greeting.
@@ -1975,7 +1962,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 ORDER BY distance ASC
                 LIMIT 1"
                 );
-                error_log("[UTIL_LOCATION_NPC] Closest location to {$pointLiteral} is: " . print_r($closestLocations, true));
+                error_log("[UTIL_LOCATION_NPC] Closest location to {$pointLiteral} on world {$worldEsc} is: " . print_r($closestLocations, true));
                 if (isset($closestLocations['name'])) {
                     $meta['last_coords']['location_name'] = $closestLocations['name'];
                     $meta['last_coords'][3] = $closestLocations['name'];

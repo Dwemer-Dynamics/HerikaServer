@@ -11,17 +11,56 @@ require_once(__DIR__."/utils_game_timestamp.php");
 require_once(__DIR__."/pipeline_status.php");
 require_once(__DIR__."/emote_moods.php");
 require_once(__DIR__."/core/event_type.php");
+require_once(__DIR__."/tts_pronunciation.php");
+
+// Narrator-specific override for the latest diary entry toggle. It lives in
+// core_narrator so the assigned Core Profile, which NPCs can share, is never changed.
+// Returns null when the Narrator has never saved a value.
+function chimGetNarratorLatestDiaryContextOverride(): ?bool
+{
+    $db = $GLOBALS['db'] ?? null;
+    if (!is_object($db) || !method_exists($db, 'fetchOne') || !method_exists($db, 'escape')) {
+        return null;
+    }
+
+    try {
+        $escapedKey = $db->escape('latest_diary_context_enabled');
+        $row = $db->fetchOne("SELECT value FROM core_narrator WHERE id = '{$escapedKey}' LIMIT 1");
+    } catch (Throwable $e) {
+        Logger::warn('[LATEST_DIARY_CONTEXT] Unable to load narrator override: ' . $e->getMessage());
+        return null;
+    }
+
+    $value = is_array($row) ? trim(strval($row['value'] ?? '')) : '';
+
+    return $value === '' ? null : filter_var($value, FILTER_VALIDATE_BOOLEAN);
+}
+
+// Only the canonical Narrator uses that override; every other NPC keeps its Core Profile setting.
+function chimIsLatestDiaryContextEnabledFor(string $npcName, array $profileData): bool
+{
+    $metadata = json_decode(strval($profileData['metadata'] ?? '{}'), true);
+    $profileEnabled = is_array($metadata)
+        && filter_var($metadata['LATEST_DIARY_CONTEXT_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+    $canonicalNarrator = class_exists('Narrator') ? Narrator::CANONICAL_NAME : 'The Narrator';
+    if (strcasecmp(trim($npcName), $canonicalNarrator) !== 0) {
+        return $profileEnabled;
+    }
+
+    $override = chimGetNarratorLatestDiaryContextOverride();
+
+    return $override === null ? $profileEnabled : $override;
+}
 
 function chimBuildLatestDiaryContextBlock(string $npcName, array $profileData): string
 {
     $safeNpcName = trim($npcName);
-    if ($safeNpcName === '' || strcasecmp($safeNpcName, 'The Narrator') === 0) {
+    if ($safeNpcName === '') {
         return '';
     }
 
-    $metadata = json_decode(strval($profileData['metadata'] ?? '{}'), true);
-    if (!is_array($metadata)
-        || !filter_var($metadata['LATEST_DIARY_CONTEXT_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+    if (!chimIsLatestDiaryContextEnabledFor($safeNpcName, $profileData)) {
         return '';
     }
 
@@ -833,6 +872,7 @@ function shouldStripNpcOutputAsterisks() {
 }
 
 function normalizeAsteriskTextForSpeech($text) {
+    // This just removes the asterisks (twice)
     $normalizedText = preg_replace('/\*([^*]+)\*/', '$1', (string)$text);
     return str_replace('*', '', $normalizedText);
 }
@@ -1187,15 +1227,23 @@ function unmoodSentence($sentence) {
     }
     
 
+    if (!isInlineNarrationEnabled()) {// Removes ALL text between asterisks.
+        error_log("[unmoodSentence] Narration is disabled. Removing all asterisked content from output: $output");
+        $output = preg_replace('/\*([^*]+)\*/', '', (string)$output);
+    }
+    
     if (!$isPlayerSpeech && $processAsterisks === true ) {
         error_log("[unmoodSentence] NPC output asterisk filtering is active! $sentence <" . ($GLOBALS['strip_emotes_from_output'] ?? 'N/A') . "> <" . ($GLOBALS['REMOVE_ASTERISKS_FROM_NPC_OUTPUT'] ?? $GLOBALS['REMOVE_ASTERISKS_FROM_OUTPUT'] ?? 'N/A') . ">" );
-
+        
         $output = formatNpcSpeechText($output);
     }
+
     else if (!$isPlayerSpeech) {
         error_log("[unmoodSentence] NPC output asterisk filtering is disabled; keeping asterisk content in speech");
         $output = formatNpcSpeechText($output);
     }
+
+ 
 
     // Non-asterisk-related cleanup always applies
     $output = strtr($output, [
@@ -1215,6 +1263,8 @@ function unmoodSentence($sentence) {
     
     $output = preg_replace('/\s*# ?ACTIONS.*/', '', $output);  // Remove "#ACTIONS ..."
     $output = preg_replace('/#[A-Za-z]+/', '', $output);       // Remove "#<text>"
+
+    $output = preg_replace('/\[mood: [^\]]*\]/i', '', $output);       // Removes "[mood: <text>]"
 
     // Remove quotes
     $output = preg_replace('/"/', '', $output);
@@ -1380,12 +1430,15 @@ function returnLines($lines,$writeOutput=true)
         // Set up subtitles based on whether inline narration is enabled
         if ($isPlayerSpeech) {
             $responseForSubtitles = formatPlayerSubtitleText($sentenceForSubtitles);
+            if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
+                $responseForSubtitles = substr($responseForSubtitles, 0, _MAX_SUBTITLE_LENGTH);
+            }
         } elseif ($textOnlyNarration) {
             $responseForSubtitles = formatTextOnlyInlineNarrationSubtitleText($sentenceForSubtitles);
             if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
                 $responseForSubtitles = substr($responseForSubtitles, 0, _MAX_SUBTITLE_LENGTH);
             }
-        } elseif (!$splitNarration) {
+        } elseif (!$splitNarration && $inlineNarrationEnabled) {
             $responseForSubtitles = formatNpcSubtitleText($sentenceForSubtitles);
             if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
                 $responseForSubtitles = substr($responseForSubtitles, 0, _MAX_SUBTITLE_LENGTH);
@@ -1492,11 +1545,15 @@ function returnLines($lines,$writeOutput=true)
                     // Prepare narration for TTS (with asterisks for subtitle display)
                     $narrationForTTS = $narrationText;
                     $narrationForSubtitles = formatNarrationSubtitleText($narrationText);
+                    $narrationForSpeech = chimApplyTtsPronunciationDictionary($narrationForTTS, null, []);
+                    $narrationTtsCacheText = $narrationForSpeech !== $narrationForTTS
+                        ? $narrationForSpeech
+                        : $narrationForSubtitles;
 
                     Logger::info("[INLINE_NARRATION] Generating TTS with function: " . $GLOBALS["TTSFUNCTION"]);
 
                     // Generate TTS for narration using the configured TTS function
-                    $narratorTtsOutput = callConfiguredTts($narrationForTTS, "default", $narrationForSubtitles);
+                    $narratorTtsOutput = callConfiguredTts($narrationForSpeech, "default", $narrationTtsCacheText);
 
                     // Track narrator TTS output
                     if ($narratorTtsOutput) {
@@ -1510,7 +1567,7 @@ function returnLines($lines,$writeOutput=true)
                             $narratorExpression = ""; // No expression for narrator
                             $narratorAnimation = ""; // No animation for narrator
 
-                            echo "The Narrator|ScriptQueue|{$narrationForSubtitles}/{$narratorExpression}/{$narratorListener}/{$narratorAnimation}/{$narrationText}\r\n";
+                            echo "The Narrator|ScriptQueue|{$narrationForSubtitles}/{$narratorExpression}/{$narratorListener}/{$narratorAnimation}/{$narrationForSpeech}\r\n";
                             if (ob_get_level()) @ob_flush();
                             @flush();
                             Logger::info("[INLINE_NARRATION] Narrator speech sent to game: " . $narrationForSubtitles);
@@ -1544,15 +1601,28 @@ function returnLines($lines,$writeOutput=true)
                 }
             }
 
+            $responseForSpeech = (string)$responseForTTS;
+            $npcPronunciationApplied = false;
             if ($shouldEmitNpcLine && trim((string)$responseForTTS) !== "") {
+                $pronunciationScope = chimTtsPronunciationCurrentSpeakerScope();
+                $responseForSpeech = chimApplyTtsPronunciationDictionary(
+                    (string)$responseForTTS,
+                    null,
+                    $pronunciationScope['knowledge_tags'],
+                    $pronunciationScope['npc_name'],
+                    $pronunciationScope['race']
+                );
+                $npcPronunciationApplied = $responseForSpeech !== $responseForTTS;
+                $ttsCacheText = $npcPronunciationApplied ? $responseForSpeech : $responseForSubtitles;
+
                 // Set TTS processing status
                 pipeline_status_set('tts', true);
 
                 // Generate regular TTS (either full text if no narration, or just dialogue after narration)
-                $ttsOutput = callNpcTtsWithFallback($responseForTTS, $mood, $responseForSubtitles);
+                $ttsOutput = callNpcTtsWithFallback($responseForSpeech, $mood, $responseForSubtitles); // Third parameter is used to calculate md5 hash, must be the same as the text sent as main response.
                 if (!$ttsOutput) {
                     if (isset($GLOBALS["TTS_FALLBACK_FNCT"]))
-                        $ttsOutput = $GLOBALS["TTS_FALLBACK_FNCT"]($responseForTTS, $mood, $responseForSubtitles);
+                        $ttsOutput = $GLOBALS["TTS_FALLBACK_FNCT"]($responseForSpeech, $mood, $responseForSubtitles);
                 }
 
                 // Clear TTS processing status
@@ -1743,19 +1813,28 @@ function returnLines($lines,$writeOutput=true)
                 $currentUtteranceId = chimGenerateUtteranceId();
                 $GLOBALS["SCRIPTLINE_UTTERANCE_ID"] = $currentUtteranceId;
 
-                $responseTextPhonetic = "";
+                $responseTextPhonetic = $npcPronunciationApplied ? $responseForSpeech : "";
                 if (Translation::isAudioEnabled() || Translation::isTextEnabled()) {
-                    $responseTextPhonetic = $responseForTTS;
+                    $responseTextPhonetic = $responseForSpeech;
                 }
-                if (Translation::containsCyrillic($responseForTTS)) {
-                    $responseTextPhonetic = Translation::convertCyrillicTextToLatin($responseForTTS);
+                if (Translation::containsCyrillic($responseForSpeech)) {
+                    $responseTextPhonetic = Translation::convertCyrillicTextToLatin($responseForSpeech);
                     Logger::debug("Transliterated Cyrillic text to: $responseTextPhonetic");
                 }
-                if (Translation::containsJapanese($responseForTTS)) {
-                    $responseTextPhonetic = Translation::convertJapaneseTextToLatin($responseForTTS);
+                if (Translation::containsJapanese($responseForSpeech)) {
+                    $responseTextPhonetic = Translation::convertJapaneseTextToLatin($responseForSpeech);
                     Logger::debug("Transliterated Japanese text to: $responseTextPhonetic");
                 }
                 
+                // We should check here is responseForSubtitles is different from responseTextUnmooded
+                // If so, and no responseTextPhonetic, responseTextPhonetic should be responseTextUnmooded
+                // 
+
+                if (empty($responseTextPhonetic) && $responseForSubtitles !== $responseTextUnmooded) {
+                    $responseTextPhonetic = $responseTextUnmooded;
+                    Logger::debug("No phonetic conversion available; using unmooded text for phonetic output: $responseTextPhonetic");
+                }
+
                 $volumeBoost = 1.0;
 
                 // Output here with volumeBoost appended
@@ -2890,6 +2969,8 @@ function chimDecodePlayerRoutingSnapshotField($rawField)
         "audience" => "",
         "present_actors" => [],
         "chat_shortcut_routed" => false,
+        "player_mood" => "",
+        "player_mood_custom" => "",
     ];
     $rawField = trim((string)$rawField);
     if ($rawField === "") {
@@ -2916,7 +2997,88 @@ function chimDecodePlayerRoutingSnapshotField($rawField)
     $result["chat_shortcut_routed"] =
         ($payload["source"] ?? "") === "plugin_player_routing_v2" &&
         ($payload["chat_shortcut_routed"] ?? false) === true;
+    if (($payload["source"] ?? "") === "plugin_player_routing_v2") {
+        $playerMood = chimNormalizePlayerMood($payload["player_mood"] ?? "");
+        if ($playerMood !== "") {
+            $result["player_mood"] = $playerMood;
+            if ($playerMood === "custom") {
+                $result["player_mood_custom"] = chimNormalizeCustomPlayerMood(
+                    $payload["player_mood_custom"] ?? ""
+                );
+            }
+        }
+    }
     return $result;
+}
+
+// Normalize the supported Prisma mood enum shared by decoding and history formatting.
+function chimNormalizePlayerMood($playerMood)
+{
+    $playerMood = strtolower(trim((string)$playerMood));
+    return in_array($playerMood, [
+        "happy",
+        "sad",
+        "angry",
+        "annoyed",
+        "scared",
+        "surprised",
+        "confused",
+        "suspicious",
+        "playful",
+        "flirty",
+        "custom",
+    ], true)
+        ? $playerMood
+        : "";
+}
+
+// Append the resolved mood phrase to the player line that enters persistent dialogue history.
+function chimAppendPlayerMoodToHistoryLine($playerDialogue, $moodPrompt)
+{
+    $playerDialogue = (string)$playerDialogue;
+    $moodPrompt = trim((string)$moodPrompt);
+    if ($playerDialogue === "" || $moodPrompt === "") {
+        return $playerDialogue;
+    }
+    $playerDialogue = rtrim($playerDialogue);
+    if ($playerDialogue === "") {
+        return "";
+    }
+    return "{$playerDialogue} {$moodPrompt}";
+}
+
+// Keep player playback separate from routing and mood cues added only for persistent history.
+function chimResolvePlayerTtsSourceText($fallbackDialogue)
+{
+    if (array_key_exists("PLAYER_TTS_SOURCE_TEXT", $GLOBALS)) {
+        return (string)$GLOBALS["PLAYER_TTS_SOURCE_TEXT"];
+    }
+    return (string)$fallbackDialogue;
+}
+
+// Keep custom delivery directions short and single-line before prompt insertion.
+function chimNormalizeCustomPlayerMood($customMood)
+{
+    if (!is_string($customMood)) {
+        return "";
+    }
+
+    $customMood = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)$customMood);
+    if (!is_string($customMood)) {
+        return "";
+    }
+    $customMood = preg_replace('/\s+/u', ' ', trim($customMood));
+    if (!is_string($customMood) || $customMood === "") {
+        return "";
+    }
+
+    if (function_exists('mb_substr')) {
+        return mb_substr($customMood, 0, 80, 'UTF-8');
+    }
+    if (preg_match_all('/./us', $customMood, $characters) === false) {
+        return "";
+    }
+    return implode('', array_slice($characters[0], 0, 80));
 }
 
 function chimDecodeAudienceSnapshotField($rawField)
@@ -3192,6 +3354,15 @@ function isCloseExecutionMode()
 {
     $mode = isset($GLOBALS["CHIM_EXECUTION_MODE"]) ? strtoupper(trim((string)$GLOBALS["CHIM_EXECUTION_MODE"])) : "";
     return ($mode === "CLOSE");
+}
+
+// Close permits audience-scoped NPC replies, but still excludes random Narrator interjections.
+function chimExecutionModeAllowsRechatEvent(string $mode, string $eventType): bool
+{
+    $mode = strtoupper(trim($mode));
+    return in_array($eventType, ['rechat', 'narration'], true)
+        && $mode !== 'WHISPER'
+        && !($mode === 'CLOSE' && $eventType === 'narration');
 }
 
 function isPrivateConversationExecutionMode()
@@ -3498,6 +3669,7 @@ function chimParseServerSideRechatPayload($rawData)
         "origin_line" => trim((string)$rawData),
         "rechat_depth" => 0,
         "chain_id" => "",
+        "active_agents" => null,
     ];
 
     $rawData = trim((string)$rawData);
@@ -3527,6 +3699,9 @@ function chimParseServerSideRechatPayload($rawData)
     }
     if (!empty($decoded["chain_id"])) {
         $payload["chain_id"] = trim((string)$decoded["chain_id"]);
+    }
+    if (array_key_exists("active_agents", $decoded) && is_array($decoded["active_agents"])) {
+        $payload["active_agents"] = chimNormalizeRechatActorList($decoded["active_agents"]);
     }
 
     return $payload;
@@ -3608,6 +3783,16 @@ function chimResolveServerSideRechatTarget(array $payload)
     $listenerHint = normalizeDialogueListenerName($payload["listener_hint"] ?? "");
     $rechatTargetHint = normalizeDialogueListenerName($payload["rechat_target_hint"] ?? "");
     $configuredRechatMode = chimGetRechatMode();
+    $activeAgents = is_array($payload["active_agents"] ?? null)
+        ? chimNormalizeRechatActorList($payload["active_agents"])
+        : null;
+    $activeAgentKeys = null;
+    if ($activeAgents !== null) {
+        $activeAgentKeys = [];
+        foreach ($activeAgents as $activeAgent) {
+            $activeAgentKeys[mb_strtolower($activeAgent, "UTF-8")] = true;
+        }
+    }
 
     $peoplePipe = "";
     foreach ([$rechatTargetHint, $listenerHint] as $scopeTarget) {
@@ -3670,6 +3855,14 @@ function chimResolveServerSideRechatTarget(array $payload)
     $selected = "";
     $actorStateMap = chimLatestRechatActorStateMap();
     $speakerBlockReason = chimRechatActorStateBlockReason($speakerName, $actorStateMap, false);
+    if (
+        $speakerBlockReason === "" &&
+        $activeAgentKeys !== null &&
+        strcasecmp($speakerName, "The Narrator") !== 0 &&
+        !isset($activeAgentKeys[mb_strtolower($speakerName, "UTF-8")])
+    ) {
+        $speakerBlockReason = "inactive";
+    }
 
     if ($speakerBlockReason !== "") {
         Logger::info("[RECHAT_SELECT] Terminating rechat for {$speakerName}: {$speakerBlockReason}");
@@ -3686,6 +3879,13 @@ function chimResolveServerSideRechatTarget(array $payload)
             continue;
         }
         if (isPlayerDialogueListenerName($candidate)) {
+            continue;
+        }
+        if (
+            $activeAgentKeys !== null &&
+            !isset($activeAgentKeys[mb_strtolower($candidate, "UTF-8")])
+        ) {
+            Logger::info("[RECHAT_SELECT] Skipping {$candidate}: inactive");
             continue;
         }
         if (!$npcMaster->getByName($candidate)) {
@@ -3722,6 +3922,7 @@ function chimResolveServerSideRechatTarget(array $payload)
         "configured_mode" => $configuredRechatMode,
         "origin_line" => trim((string)($payload["origin_line"] ?? "")),
         "chain_id" => trim((string)($payload["chain_id"] ?? "")),
+        "active_agents" => $activeAgents,
     ];
 }
 
@@ -5226,7 +5427,11 @@ function logEvent($dataArray,$forcePeople='')
             $eventPeople=DataBeingsInCloseRange(false);
         }
 
+        if ($dataArray[0]=="chat_background") {
+            $eventPeople=DataBeingsInCloseRange();
+        }
 
+        
         $insertData = array(
             'ts' => $dataArray[1],
             'gamets' => $dataArray[2],
