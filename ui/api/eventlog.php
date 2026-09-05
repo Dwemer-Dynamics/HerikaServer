@@ -42,6 +42,10 @@ $savedHiddenTypes = $applySavedFilters ? chimGetPersistedEventLogHiddenTypes($db
 // Base event type filter for the HerikaServer Events page.
 $typeFilter = chimBuildVisibleEventLogWhereClause($db, $selectedEventType, $savedHiddenTypes);
 
+if (empty($GLOBALS['RELATIONSHIP_SYSTEM_ENABLED'])) {
+    $includeRelationships=false;
+}
+
 // If specific event types are requested (for MCM conversation history panel)
 if (isset($_GET["event_types"]) && !empty($_GET["event_types"])) {
     $allowedTypes = explode(',', $_GET["event_types"]);
