@@ -30,7 +30,7 @@ $distroDataManagerFile = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'Dwemer-Das
 $distroDataManagerAvailable = is_file($distroDataManagerFile) && is_file(dirname($distroDataManagerFile) . '/lib/storage_fragment.php');
 $distroDataManagerUrl = rtrim($distroDashboardRoot, '/') . '/data_manager.php?mod=chim&view=';
 // One entry point: snapshots, storage and database tools now share a single page.
-$storageTabLabel = 'Storage & Cleanup';
+$storageTabLabel = 'Playthrough Management';
 $storageEmbedUrl = $distroDataManagerAvailable
     ? $distroDataManagerUrl . 'manage'
     : $webRoot . '/ui/playthrough_manager.php?embed=1';

@@ -1,6 +1,6 @@
 <?php
 
-// Shared "Storage & Cleanup" fragment mode. The Dwemer Dashboard includes this
+// Shared "Playthrough Management" fragment mode. The Dwemer Dashboard includes this
 // page in-process and renders its controls inside the shared shell, so only the
 // document chrome and asset URLs adapt while server-owned operations stay here.
 $ptmFragment = defined('DWEMER_STORAGE_FRAGMENT') && DWEMER_STORAGE_FRAGMENT === true;

@@ -19,7 +19,7 @@ function dwemerStorageRedirect(string $mod, string $view): void
     header('Cache-Control: no-store');
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
         http_response_code(409);
-        echo 'These tools have moved. Nothing was changed. <a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '">Open Storage &amp; Cleanup</a> and try again.';
+        echo 'These tools have moved. Nothing was changed. <a href="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '">Open Playthrough Management</a> and try again.';
         exit;
     }
     header('Location: ' . $url, true, 302);
