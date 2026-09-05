@@ -990,6 +990,9 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/navbar.php");
         <h1>Dwemer Dashboard</h1>
 
         <div class="dashboard-buttons">
+            <a href="<?php echo htmlspecialchars($webRoot . '/ui/control_panel.php?tab=storage', ENT_QUOTES, 'UTF-8'); ?>" class="dashboard-btn">
+                <span class="btn-icon" aria-hidden="true">🧩</span> Playthrough Management
+            </a>
             <button onclick="window.open('https://dwemerdynamics.com/chim/index.html', '_blank')" class="dashboard-btn">
                 <span class="btn-icon">📚</span> CHIM Wiki
             </button>
