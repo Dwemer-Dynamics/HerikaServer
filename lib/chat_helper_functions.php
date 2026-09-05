@@ -1430,6 +1430,9 @@ function returnLines($lines,$writeOutput=true)
         // Set up subtitles based on whether inline narration is enabled
         if ($isPlayerSpeech) {
             $responseForSubtitles = formatPlayerSubtitleText($sentenceForSubtitles);
+            if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
+                $responseForSubtitles = substr($responseForSubtitles, 0, _MAX_SUBTITLE_LENGTH);
+            }
         } elseif ($textOnlyNarration) {
             $responseForSubtitles = formatTextOnlyInlineNarrationSubtitleText($sentenceForSubtitles);
             if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
