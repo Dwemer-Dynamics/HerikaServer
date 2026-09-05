@@ -400,7 +400,7 @@ $serverLogoFile = $isDevBuild ? 'serverlogodev.png' : 'serverlogo.png';
                         : $webRoot . '/ui/import_db.php';
                     $navStorageLabel = $navStorageAvailable ? 'Playthrough Management' : 'Database Manager';
                     ?>
-                    <a class="dropdown-item" href="<?php echo htmlspecialchars((string)$navStorageUrl, ENT_QUOTES, 'UTF-8'); ?>" title="Playthrough snapshots, storage cleanup, backups, restore and maintenance.">
+                    <a class="dropdown-item" href="<?php echo htmlspecialchars((string)$navStorageUrl, ENT_QUOTES, 'UTF-8'); ?>" title="Playthroughs, storage cleanup, backups, restore and maintenance.">
                         <?php echo $navStorageLabel; ?>
                     </a>
                     </li>

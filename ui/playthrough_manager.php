@@ -240,7 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif (!$adminConn) {
         // Connection error message already queued above.
     } elseif (!ptr_lock($adminConn)) {
-        $message .= '<p><strong>Error:</strong> Another snapshot operation or cleanup is running. Try again shortly.</p>';
+        $message .= '<p><strong>Error:</strong> Another playthrough operation or cleanup is running. Try again shortly.</p>';
     } else {
         try {
         // Initialization/migrations run only after a CSRF-validated POST.
@@ -251,8 +251,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $res = ptm_create_default_snapshot($adminConn, $schema);
         if ($res['success']) {
             $message .= !empty($res['existing'])
-                ? '<p>Playthrough management is already set up. Existing snapshots were preserved.</p>'
-                : '<p><strong>✅ Playthrough management is set up.</strong> Your current data was captured as the <strong>default</strong> snapshot and is now the active playthrough.</p>';
+                ? '<p>Playthrough management is already set up. Existing playthroughs were preserved.</p>'
+                : '<p><strong>✅ Playthrough management is set up.</strong> Your current data was captured as the <strong>default</strong> playthrough and is now the active playthrough.</p>';
         } else {
             $message .= '<p><strong>Error:</strong> Setup failed. Please check the server logs and try again.</p>';
         }
@@ -269,13 +269,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // Check if schema already exists
             if (pts_schema_exists($adminConn, $schemaName)) {
-                $message .= '<p><strong>Error:</strong> A snapshot with this name already exists.</p>';
+                $message .= '<p><strong>Error:</strong> A playthrough with this name already exists.</p>';
             } else {
                 // Clone public schema to new profile schema
                 $cloneResult = pts_clone_schema($adminConn, 'public', $schemaName);
 
                 if (!$cloneResult['success']) {
-                    $message .= '<p><strong>Error:</strong> Failed to create snapshot.</p>';
+                    $message .= '<p><strong>Error:</strong> Failed to create playthrough.</p>';
                     $message .= '<pre>'.h($cloneResult['error']).'</pre>';
                 } else {
                     // Collect metadata
@@ -293,10 +293,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     );
                     if ($q1) {
                         @pg_query($adminConn, 'COMMIT');
-                        $message .= '<p><strong>✅ Snapshot created:</strong> '.h($name).' ('.h(formatFileSize($size)).')</p>';
+                        $message .= '<p><strong>✅ Playthrough created:</strong> '.h($name).' ('.h(formatFileSize($size)).')</p>';
                     } else {
                         @pg_query($adminConn, 'ROLLBACK');
-                        $message .= '<p><strong>Error:</strong> Failed to save snapshot metadata.</p>';
+                        $message .= '<p><strong>Error:</strong> Failed to save playthrough metadata.</p>';
                     }
                 }
             }
@@ -306,17 +306,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'switch') {
         $profileId = intval($_POST['profile_id'] ?? 0);
         if ($profileId <= 0) {
-            $message .= '<p><strong>Error:</strong> Invalid snapshot selected.</p>';
+            $message .= '<p><strong>Error:</strong> Invalid playthrough selected.</p>';
         } else {
             // Fetch target profile info
             $targetRes = pg_query_params($adminConn, 'SELECT name, storage_type, schema_name, is_active FROM chim_meta.playthrough_profiles WHERE id=$1', [$profileId]);
             $targetRow = $targetRes ? pg_fetch_assoc($targetRes) : null;
             if (!$targetRow) {
-                $message .= '<p><strong>Error:</strong> Snapshot not found.</p>';
+                $message .= '<p><strong>Error:</strong> Playthrough not found.</p>';
                 goto SWITCH_ABORT;
             }
             if (ptm_is_active($targetRow['is_active'] ?? null)) {
-                $message .= '<p><strong>Error:</strong> This snapshot is already the active playthrough. Nothing to restore.</p>';
+                $message .= '<p><strong>Error:</strong> This playthrough is already active. Nothing to restore.</p>';
                 goto SWITCH_ABORT;
             }
 
@@ -328,7 +328,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $curRes = pg_query($adminConn, "SELECT id, name, storage_type, schema_name FROM chim_meta.playthrough_profiles WHERE is_active = true LIMIT 1");
             $curRow = $curRes ? pg_fetch_assoc($curRes) : null;
             if (!$curRow) {
-                $message .= '<p><strong>Error:</strong> No loaded snapshot is recorded. Restore was cancelled to preserve your current playthrough.</p>';
+                $message .= '<p><strong>Error:</strong> No active playthrough is recorded. Restore was cancelled to preserve your current playthrough.</p>';
                 goto SWITCH_ABORT;
             }
             if ($curRow) {
@@ -361,13 +361,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $dumpOut = shell_exec($dumpCmd);
                     if (!file_exists($tmpSnap) || filesize($tmpSnap) === 0) {
                         $preview = $dumpOut ? '<pre>'.h(substr($dumpOut,0,2000)).'</pre>' : '';
-                        $message .= '<p><strong>Error:</strong> Failed to snapshot current database. Aborting.</p>'.$preview;
+                        $message .= '<p><strong>Error:</strong> Failed to save the current playthrough. Aborting.</p>'.$preview;
                         goto SWITCH_ABORT;
                     }
                     $upd = ptm_update_profile_blob_from_file($adminConn, $curProfileId, $tmpSnap, $meta['player_name'], $meta['game'], (int)$meta['eventlog_count'], (int)$meta['oghma_count'], (int)$meta['last_gamets']);
                     @unlink($tmpSnap);
                     if (!$upd['success']) {
-                        $message .= '<p><strong>Error:</strong> Failed to save current snapshot. Aborting.</p>';
+                        $message .= '<p><strong>Error:</strong> Failed to save current playthrough. Aborting.</p>';
                         goto SWITCH_ABORT;
                     }
                 }
@@ -377,7 +377,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($targetStorageType === 'schema' && !empty($targetSchemaName)) {
                 // Schema-based: fast switch
                 if (!pts_schema_exists($adminConn, $targetSchemaName)) {
-                    $message .= '<p><strong>Error:</strong> Snapshot schema does not exist.</p>';
+                    $message .= '<p><strong>Error:</strong> Playthrough schema does not exist.</p>';
                     goto SWITCH_ABORT;
                 }
 
@@ -398,7 +398,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $cloneResult = pts_clone_schema($adminConn, $targetSchemaName, 'public');
                 if (!$cloneResult['success']) {
                     @pg_query($adminConn, 'ROLLBACK');
-                    $message .= '<p><strong>Error:</strong> Failed to restore snapshot.</p>';
+                    $message .= '<p><strong>Error:</strong> Failed to restore playthrough.</p>';
                     $message .= '<pre>'.h($cloneResult['error']).'</pre>';
                     goto SWITCH_ABORT;
                 }
@@ -412,7 +412,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ? @pg_query($adminConn, 'TRUNCATE TABLE public.database_versioning')
                     : false;
                 if ($resetVersioning && @pg_query($adminConn, 'COMMIT')) {
-                    $message .= '<p><strong>✅ Restored snapshot:</strong> '.h($targetName).'</p>';
+                    $message .= '<p><strong>✅ Restored playthrough:</strong> '.h($targetName).'</p>';
                     $message .= '<div style="background:#4a1e0d; border:2px solid #dc2626; border-radius:8px; padding:15px; margin-top:15px;">';
                     $message .= '<p style="color:#fbbf24; font-weight:bold; margin:0 0 10px 0;">⚠️ RESTART REQUIRED</p>';
                     $message .= '<p style="margin:0 0 8px 0;">You must restart the CHIM server for the restore to take effect:</p>';
@@ -431,7 +431,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $tmpFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . ('playthrough_restore_'.time().'_'.mt_rand(1000,9999).'.sql');
                 $ff = ptm_fetch_snapshot_to_file($adminConn, $profileId, $tmpFile);
                 if (!$ff['success']) {
-                    $message .= '<p><strong>Error:</strong> Failed to materialize snapshot.</p><pre>'.h($ff['error']).'</pre>';
+                    $message .= '<p><strong>Error:</strong> Failed to materialize playthrough.</p><pre>'.h($ff['error']).'</pre>';
                     goto SWITCH_ABORT;
                 }
 
@@ -451,14 +451,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $output = []; $returnVar = 0;
                     exec($psqlCommand, $output, $returnVar);
                     if ($returnVar !== 0) {
-                        $message .= '<p><strong>Error:</strong> Failed to restore snapshot.</p><pre>'.h(implode("\n", $output)).'</pre>';
+                        $message .= '<p><strong>Error:</strong> Failed to restore playthrough.</p><pre>'.h(implode("\n", $output)).'</pre>';
                     } else {
                         pg_query($adminConn, 'BEGIN');
                         pg_query($adminConn, 'UPDATE chim_meta.playthrough_profiles SET is_active = false');
                         $resU = pg_query_params($adminConn, 'UPDATE chim_meta.playthrough_profiles SET is_active = true WHERE id=$1', [$profileId]);
                         if ($resU) {
                             pg_query($adminConn, 'COMMIT');
-                            $message .= '<p><strong>✅ Restored snapshot:</strong> '.h($targetName).'</p>';
+                            $message .= '<p><strong>✅ Restored playthrough:</strong> '.h($targetName).'</p>';
                             $message .= '<div style="background:#4a1e0d; border:2px solid #dc2626; border-radius:8px; padding:15px; margin-top:15px;">';
                             $message .= '<p style="color:#fbbf24; font-weight:bold; margin:0 0 10px 0;">⚠️ RESTART REQUIRED</p>';
                             $message .= '<p style="margin:0 0 8px 0;">You must restart the CHIM server for the restore to take effect:</p>';
@@ -483,16 +483,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'delete') {
         $profileId = intval($_POST['profile_id'] ?? 0);
         if ($profileId <= 0) {
-            $message .= '<p><strong>Error:</strong> Invalid snapshot selected.</p>';
+            $message .= '<p><strong>Error:</strong> Invalid playthrough selected.</p>';
         } else {
             $rowRes = pg_query_params($adminConn, 'SELECT is_active, name, storage_type, schema_name FROM chim_meta.playthrough_profiles WHERE id=$1', [$profileId]);
             $row = $rowRes ? pg_fetch_assoc($rowRes) : null;
             if (!$row) {
-                $message .= '<p><strong>Error:</strong> Snapshot not found.</p>';
+                $message .= '<p><strong>Error:</strong> Playthrough not found.</p>';
             } else if (ptm_is_active($row['is_active'] ?? null)) {
                 $message .= '<p><strong>Error:</strong> Cannot delete the active playthrough.</p>';
             } else if (strtolower((string)$row['name']) === 'default') {
-                $message .= '<p><strong>Error:</strong> Cannot delete the default snapshot.</p>';
+                $message .= '<p><strong>Error:</strong> Cannot delete the default playthrough.</p>';
             } else {
                 ptr_query($adminConn, 'BEGIN');
                 ptr_query($adminConn, "SET LOCAL lock_timeout='2s'");
@@ -505,7 +505,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } catch (Throwable $e) {
             @pg_query($adminConn, 'ROLLBACK');
             Logger::error('Playthrough Manager: ' . $e->getMessage());
-            $message .= '<p><strong>Error:</strong> The operation could not finish. Protected snapshots cannot be deleted. Check the server log for details.</p>';
+            $message .= '<p><strong>Error:</strong> The operation could not finish. Protected playthroughs cannot be deleted. Check the server log for details.</p>';
         } finally {
             ptr_unlock($adminConn);
         }
@@ -769,24 +769,24 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     <div id="toast" class="toast-notification"><span class="message"></span></div>
     <div id="switch-overlay" role="status" aria-live="polite">
         <div class="loading-modal">
-            <div class="loading-title" id="loading-title">Restoring snapshot…</div>
+            <div class="loading-title" id="loading-title">Restoring playthrough…</div>
             <div class="lds-ring"><div></div><div></div><div></div><div></div></div>
             <div class="loading-sub">This can take a few minutes. Please keep this tab open.</div>
         </div>
     </div>
 
     <div class="page-header">
-        <?php if ($ptmFragment): ?><h2>Snapshots and cleanup</h2><?php else: ?><h1>Playthrough Manager</h1><?php endif; ?>
-        <div style="font-size: 0.95em; color: #ccc; margin-bottom: 10px;">Save or restore server snapshots. Restoring first saves your current progress over the loaded snapshot.</div>
+        <?php if ($ptmFragment): ?><h2>Playthroughs and cleanup</h2><?php else: ?><h1>Playthrough Manager</h1><?php endif; ?>
+        <div style="font-size: 0.95em; color: #ccc; margin-bottom: 10px;">Save or restore playthroughs. Restoring first saves your current progress over the active playthrough.</div>
 
-        <details class="storage-help"><summary>How snapshots work</summary>
+        <details class="storage-help"><summary>How playthroughs work</summary>
         <div style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; border: 1px solid #444; margin-top: 15px; text-align: left;">
             <div style="font-size: 0.9em; color: #e0e0e0; line-height: 1.6;">
                 • <strong>Active playthrough</strong> = the live data CHIM is reading and writing right now.<br>
-                • <strong>Saved snapshots</strong> = stored copies of a playthrough. They are not in use.<br>
-                • <strong>Restore</strong> = saves your current progress over the loaded snapshot first, then loads the selected snapshot as the active playthrough. If the currently loaded snapshot cannot be determined, the restore is blocked so nothing is overwritten.<br>
-                • <strong>Dragon Breaks</strong> = automatic snapshots taken when you load a save 3+ days behind.<br>
-                <span class="help-text">Technical note: the active playthrough lives in the PostgreSQL <code>public</code> schema; snapshots are cloned schemas in the same database.</span>
+                • <strong>Saved playthroughs</strong> = stored copies of a playthrough. They are not in use.<br>
+                • <strong>Restore</strong> = saves your current progress over the active playthrough first, then loads the selected playthrough as the new active playthrough. If the currently active playthrough cannot be determined, the restore is blocked so nothing is overwritten.<br>
+                • <strong>Dragon Breaks</strong> = playthroughs saved automatically when you load a save 3+ days behind.<br>
+                <span class="help-text">Technical note: the active playthrough lives in the PostgreSQL <code>public</code> schema; saved playthroughs are cloned schemas in the same database.</span>
             </div>
         </div>
         </details>
@@ -798,12 +798,12 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     <div class="content-section full-width-section" style="margin-bottom: 30px;">
         <h2>🎮 Set up playthrough management</h2>
         <p style="margin: 0 0 10px 0;">
-            Playthrough management is not set up yet<?php echo $ptmInitialized ? ' (no snapshots exist)' : ''; ?>.
+            Playthrough management is not set up yet<?php echo $ptmInitialized ? ' (no playthroughs exist)' : ''; ?>.
             Nothing has been changed by opening this page.
         </p>
         <p class="help-text" style="margin: 0 0 10px 0;">
-            Setting up creates the snapshot bookkeeping tables and saves your current data as the
-            <strong>default</strong> snapshot, which becomes the active playthrough. Your live data is not modified.
+            Setting up creates the playthrough bookkeeping tables and saves your current data as the
+            <strong>default</strong> playthrough, which becomes the active playthrough. Your live data is not modified.
         </p>
         <form method="post" class="setup-form">
             <?php echo $csrfField; ?>
@@ -829,14 +829,14 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         <div style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 6px; border-left: 4px solid #4ade80;">
             <div style="display:flex; gap:12px; flex-wrap:wrap; font-size: 14px; color:#ccc; align-items: center;">
                 <div style="font-size: 1.1em; color: #4ade80; font-weight: bold;">
-                    📋 Loaded snapshot: <?php echo h($activeProfileName !== '' ? $activeProfileName : '(unknown)'); ?>
+                    📋 Active playthrough: <?php echo h($activeProfileName !== '' ? $activeProfileName : '(unknown)'); ?>
                 </div>
                 <div style="border-left: 2px solid #444; padding-left: 12px; margin-left: 6px;">
                     <strong style="color:#f8f9fa;">Player:</strong> <span id="live-player"><?php echo h($livePlayerName); ?></span>
                 </div>
                 <div><strong style="color:#f8f9fa;">Game:</strong> <span id="live-game"><?php echo h($liveGameName); ?></span></div>
-                <div><strong style="color:#f8f9fa;" id="live-eventlog-label">Events (at last snapshot save):</strong> <span id="live-eventlog" title="Refreshed with an approximate live estimate when database statistics are available"><?php echo intval($liveEventlogCount); ?></span></div>
-                <div><strong style="color:#f8f9fa;" id="live-oghma-label">Knowledge entries (at last snapshot save):</strong> <span id="live-oghma" title="Refreshed with an approximate live estimate when database statistics are available"><?php echo intval($liveOghmaCount); ?></span></div>
+                <div><strong style="color:#f8f9fa;" id="live-eventlog-label">Events (at last playthrough save):</strong> <span id="live-eventlog" title="Refreshed with an approximate live estimate when database statistics are available"><?php echo intval($liveEventlogCount); ?></span></div>
+                <div><strong style="color:#f8f9fa;" id="live-oghma-label">Knowledge entries (at last playthrough save):</strong> <span id="live-oghma" title="Refreshed with an approximate live estimate when database statistics are available"><?php echo intval($liveOghmaCount); ?></span></div>
                 <div><strong style="color:#f8f9fa;">Last in-game date:</strong> <span id="live-last"><?php echo h($liveSkyrimDate !== '' ? $liveSkyrimDate : 'n/a'); ?></span></div>
             </div>
         </div>
@@ -854,31 +854,31 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
 
     <div class="content-grid">
         <div class="content-section">
-            <h2>📦 Save snapshot</h2>
+            <h2>📦 Save playthrough</h2>
             <div class="help-text" style="margin-bottom: 12px;">
-                Saves a copy of the active playthrough as a new snapshot. The active playthrough keeps running unchanged.
+                Saves a copy of the active playthrough as a new saved playthrough. The active playthrough keeps running unchanged.
             </div>
                 <form method="post" class="create-form">
                     <?php echo $csrfField; ?>
                     <input type="hidden" name="action" value="create">
-                    <label for="name">Snapshot name</label><br>
+                    <label for="name">Playthrough name</label><br>
                     <input type="text" id="name" name="name" required style="width: 100%; margin: 6px 0;" placeholder="e.g., Before Quest X">
                     <label for="notes">Notes (optional)</label><br>
                     <input type="text" id="notes" name="notes" style="width: 100%; margin: 6px 0;" placeholder="e.g., Level 25, just finished main quest">
                     <div class="button-group">
-                        <button type="submit" class="button" style="background-color: rgb(1 53 166 / 90%); color: #fff;">💾 Save Snapshot</button>
+                        <button type="submit" class="button" style="background-color: rgb(1 53 166 / 90%); color: #fff;">💾 Save Playthrough</button>
                     </div>
                 </form>
         </div>
 
         <div class="content-section">
-            <h2>💾 Saved snapshots</h2>
+            <h2>💾 Saved playthroughs</h2>
             <div class="help-text" style="margin-bottom: 12px;">
                 Stored copies of playthroughs — they are not in use.
-                <strong>Restore</strong> loads one as the active playthrough; your current progress is saved over the loaded snapshot first.
+                <strong>Restore</strong> loads one as the active playthrough; your current progress is saved over the active playthrough first.
             </div>
                 <?php if (empty($profiles)) { ?>
-                    <div style="text-align:center; color:#ccc; padding: 12px;">No snapshots yet. Create one from the left panel.</div>
+                    <div style="text-align:center; color:#ccc; padding: 12px;">No playthroughs yet. Create one from the left panel.</div>
                 <?php } else { ?>
                     <div class="backup-list">
                         <?php foreach ($profiles as $p) {
@@ -894,7 +894,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                                 <div class="backup-info">
                                     <div style="font-weight:bold; font-size: 14px; word-break: break-all;">
                                         <?php if ($isActive) { ?>
-                                            <span class="badge-loaded">✓ LOADED</span>
+                                            <span class="badge-loaded">✓ ACTIVE</span>
                                         <?php } ?>
                                         <?php echo h($p['name']); ?>
                                     </div>
@@ -928,7 +928,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                                         <button type="submit" class="button" style="background-color: rgb(1 53 166 / 90%); color:#fff; padding:6px 10px;">Restore</button>
                                     </form>
                                     <?php } else { ?>
-                                    <button class="button" style="background-color: #333; color:#999; padding:6px 10px; cursor: not-allowed;" disabled aria-disabled="true" title="This snapshot is the active playthrough">Loaded</button>
+                                    <button class="button" style="background-color: #333; color:#999; padding:6px 10px; cursor: not-allowed;" disabled aria-disabled="true" title="This playthrough is currently active">Active</button>
                                     <?php } ?>
                                     <?php if (!$isActive && !$isDefault) { ?>
                                     <form method="post"
@@ -960,7 +960,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         <div class="help-text" style="margin-top: 12px;">
             For backups, exports, and maintenance, use the
             <a href="<?php echo htmlspecialchars($ptmDatabaseToolsUrl, ENT_QUOTES, 'UTF-8'); ?>"<?php echo ($isEmbed && !$ptmFragment) ? ' target="_top"' : ''; ?> style="color:#ffb862;"><?php echo htmlspecialchars($ptmDatabaseToolsLabel, ENT_QUOTES, 'UTF-8'); ?></a>.
-            Optional cleanup of old debug logs and old automatic snapshots is set up in the <a href="#retention-section" style="color:#ffb862;">Storage cleanup</a> panel below.
+            Optional cleanup of old debug logs and old automatic playthroughs is set up in the <a href="#retention-section" style="color:#ffb862;">Storage cleanup</a> panel below.
         </div>
     </div>
 
@@ -972,7 +972,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         </div>
         <div class="retention-note" style="margin-bottom: 4px;">
             Your current playthrough's memories, relationships, diaries, quests and files stay intact.
-            Snapshots are saved copies of CHIM data — not Skyrim saves. Deleting one removes that whole copy.
+            Playthroughs are saved copies of CHIM data — not Skyrim saves. Deleting one removes that whole copy.
         </div>
 
         <div id="retention-status" role="status" aria-live="polite" class="retention-status"></div>
@@ -1014,18 +1014,18 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                 </fieldset>
 
                 <fieldset class="retention-fieldset">
-                    <legend>Automatic snapshots (Dragon Breaks)</legend>
+                    <legend>Automatic playthroughs (Dragon Breaks)</legend>
                     <div class="retention-row">
                         <input type="checkbox" id="ret-snap-enabled" name="snapshots_enabled" disabled>
-                        <label for="ret-snap-enabled">Delete old automatic snapshots</label>
+                        <label for="ret-snap-enabled">Delete old automatic playthroughs</label>
                     </div>
                     <div class="retention-row">
                         <label for="ret-snap-keep">Keep the newest</label>
                         <input type="number" id="ret-snap-keep" name="snapshot_keep" inputmode="numeric" min="1" max="100" step="1" value="5" disabled aria-describedby="ret-snap-help">
-                        <span>automatic snapshots (1–100)</span>
+                        <span>automatic playthroughs (1–100)</span>
                     </div>
                     <p class="retention-note" id="ret-snap-help">
-                        Keeps the loaded and default snapshots, protected copies, snapshots you saved yourself, and copies made before this cleanup feature.
+                        Keeps the active and default playthroughs, protected copies, playthroughs you saved yourself, and copies made before this cleanup feature.
                     </p>
                 </fieldset>
 
@@ -1050,19 +1050,19 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
             </div>
             <p class="retention-note" id="ret-run-hint">
                 Saving settings never deletes anything. Preview always uses the settings you last <em>saved</em>, so save first if you just changed something.
-                "Run cleanup now" unlocks only after a preview and still asks you to confirm. A preview lasts 5 minutes, and changing any setting or snapshot protection cancels it.
+                "Run cleanup now" unlocks only after a preview and still asks you to confirm. A preview lasts 5 minutes, and changing any setting or playthrough protection cancels it.
             </p>
         </form>
 
         <div id="ret-preview-out" style="margin-top: 4px;"></div>
 
         <div style="margin-top: 16px;">
-            <strong style="color:#ffb862; font-size: 14px;">Snapshot protection</strong>
+            <strong style="color:#ffb862; font-size: 14px;">Playthrough protection</strong>
             <p class="retention-note">
-                Protected snapshots cannot be deleted, even manually, until you unprotect them.
+                Protected playthroughs cannot be deleted, even manually, until you unprotect them.
             </p>
             <ul class="retention-snap-list" id="ret-snap-list">
-                <li><span>Loading snapshot list…</span></li>
+                <li><span>Loading playthrough list…</span></li>
             </ul>
         </div>
 
@@ -1072,11 +1072,11 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                 <li>These settings are stored on the server and apply to whichever playthrough is loaded. <strong>Saving them never deletes anything by itself</strong> — turning on automatic cleanup is what lets CHIM delete in the background.</li>
                 <li>Debug log cleanup covers three tables: log, audit_request, and already-sent rows in responselog. Each table is checked on its own, by real-world age or by estimated size. Rows from the last 24 hours and replies CHIM has not sent yet are always kept.</li>
                 <li>Cleanup runs only when you press "Run cleanup now" after a preview and confirm, or at most once an hour when automatic cleanup is on and CHIM's Background Processor is running.</li>
-                <li>A preview always uses the settings you last <em>saved</em>. It shows the exact number of log entries and the snapshot names for the next cleanup, and it expires after 5 minutes.</li>
-                <li>Each round deletes at most 1,000 debug log rows per table and 3 automatic snapshots. Sizes shown are estimates of the data itself: that space becomes reusable inside the database, but the files on disk may not shrink.</li>
+                <li>A preview always uses the settings you last <em>saved</em>. It shows the exact number of log entries and the playthrough names for the next cleanup, and it expires after 5 minutes.</li>
+                <li>Each round deletes at most 1,000 debug log rows per table and 3 automatic playthroughs. Sizes shown are estimates of the data itself: that space becomes reusable inside the database, but the files on disk may not shrink.</li>
                 <li id="ret-event-status">The event-days box is preview only. This cleanup never deletes events.</li>
-                <li>Your current playthrough's NPC memories, relationships, diaries and quests are never trimmed. Deleting a snapshot deletes the whole saved copy, including the records inside it. Audio and temporary files are left alone.</li>
-                <li>Only snapshots that were tagged as automatic Dragon Breaks when they were created can be deleted here. Snapshots made before this feature existed count as manual and are never removed automatically.</li>
+                <li>Your current playthrough's NPC memories, relationships, diaries and quests are never trimmed. Deleting a playthrough deletes the whole saved copy, including the records inside it. Audio and temporary files are left alone.</li>
+                <li>Only playthroughs that were tagged as automatic Dragon Breaks when they were created can be deleted here. Playthroughs made before this feature existed count as manual and are never removed automatically.</li>
             </ul>
         </details>
     </div>
@@ -1135,14 +1135,14 @@ if (!$ptmFragment) {
     function buildRestoreBody(name, size, activeName){
         const frag = document.createDocumentFragment();
         const p1 = el('p');
-        p1.appendChild(el('strong', 'Snapshot: '));
+        p1.appendChild(el('strong', 'Playthrough: '));
         const nm = el('span', name + (size ? ' (' + size + ')' : ''));
         nm.className = 'ptm-dialog-target';
         p1.appendChild(nm);
         frag.appendChild(p1);
         frag.appendChild(el('p', activeName
-            ? 'Before restoring, your current live progress is saved over the currently loaded snapshot "' + activeName + '" — its stored copy is replaced with the current live state.'
-            : 'Before restoring, the server saves your current live progress over the currently loaded snapshot. If the loaded snapshot cannot be determined, the restore is blocked and nothing is changed.'));
+            ? 'Before restoring, your current live progress is saved over the active playthrough "' + activeName + '" — its stored copy is replaced with the current live state.'
+            : 'Before restoring, the server saves your current live progress over the active playthrough. If the active playthrough cannot be determined, the restore is blocked and nothing is changed.'));
         frag.appendChild(el('p', 'Then "' + name + '" replaces the active playthrough.'));
         frag.appendChild(el('p', 'After the restore completes you must:'));
         const ol = el('ol');
@@ -1156,24 +1156,24 @@ if (!$ptmFragment) {
     function buildDeleteBody(name, size){
         const frag = document.createDocumentFragment();
         const p1 = el('p');
-        p1.appendChild(el('strong', 'Snapshot: '));
+        p1.appendChild(el('strong', 'Playthrough: '));
         const nm = el('span', name + (size ? ' (' + size + ')' : ''));
         nm.className = 'ptm-dialog-target';
         p1.appendChild(nm);
         frag.appendChild(p1);
-        frag.appendChild(el('p', 'This permanently deletes the saved snapshot "' + name + '"' + (size ? ' and frees about ' + size + ' of storage' : '') + '. The active playthrough is not affected.'));
+        frag.appendChild(el('p', 'This permanently deletes the saved playthrough "' + name + '"' + (size ? ' and frees about ' + size + ' of storage' : '') + '. The active playthrough is not affected.'));
         frag.appendChild(el('p', 'This cannot be undone.'));
         return frag;
     }
 
     function plainTextConfirm(kind, name, size, activeName){
         if (kind === 'restore') {
-            return 'Restore snapshot "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\n' +
-                '1. Your current progress is saved over the loaded snapshot' + (activeName ? ' "' + activeName + '"' : ' (if it cannot be determined, the restore is blocked)') + '.\n' +
+            return 'Restore playthrough "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\n' +
+                '1. Your current progress is saved over the active playthrough' + (activeName ? ' "' + activeName + '"' : ' (if it cannot be determined, the restore is blocked)') + '.\n' +
                 '2. "' + name + '" then replaces the active playthrough.\n' +
                 '3. Afterwards: shut down Skyrim, restart the CHIM server, then restart Skyrim.\n\nContinue?';
         }
-        return 'Permanently delete snapshot "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\nThis cannot be undone.';
+        return 'Permanently delete playthrough "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\nThis cannot be undone.';
     }
 
     function proceed(){
@@ -1186,8 +1186,8 @@ if (!$ptmFragment) {
             f.requestSubmit();
         } else {
             // Fallback path bypasses the submit event, so show the overlay here.
-            if (f.classList.contains('switch-form')) { if (overlayTitle) overlayTitle.textContent = 'Restoring snapshot…'; showOverlay(); }
-            if (f.getAttribute('data-confirm') === 'delete') { if (overlayTitle) overlayTitle.textContent = 'Deleting snapshot…'; showOverlay(); }
+            if (f.classList.contains('switch-form')) { if (overlayTitle) overlayTitle.textContent = 'Restoring playthrough…'; showOverlay(); }
+            if (f.getAttribute('data-confirm') === 'delete') { if (overlayTitle) overlayTitle.textContent = 'Deleting playthrough…'; showOverlay(); }
             f.submit();
         }
     }
@@ -1208,12 +1208,12 @@ if (!$ptmFragment) {
         lastFocus = document.activeElement;
         dlgBody.textContent = '';
         if (kind === 'restore') {
-            dlgTitle.textContent = 'Restore snapshot?';
+            dlgTitle.textContent = 'Restore playthrough?';
             dlgBody.appendChild(buildRestoreBody(name, size, activeName));
             dlgConfirm.textContent = 'Restore "' + name + '"';
             dlgConfirm.className = 'button btn-confirm-primary';
         } else {
-            dlgTitle.textContent = 'Delete snapshot?';
+            dlgTitle.textContent = 'Delete playthrough?';
             dlgBody.appendChild(buildDeleteBody(name, size));
             dlgConfirm.textContent = 'Delete "' + name + '"';
             dlgConfirm.className = 'button btn-confirm-danger';
@@ -1221,7 +1221,7 @@ if (!$ptmFragment) {
         dlg.returnValue = '';
         dlg.showModal();
         dlgCancel.focus();
-        if (dlgStatus) dlgStatus.textContent = (kind === 'restore' ? 'Restore' : 'Delete') + ' confirmation opened for snapshot ' + name;
+        if (dlgStatus) dlgStatus.textContent = (kind === 'restore' ? 'Restore' : 'Delete') + ' confirmation opened for playthrough ' + name;
     }
 
     if (dlg) {
@@ -1248,11 +1248,11 @@ if (!$ptmFragment) {
             return false;
         }
         if (form.classList.contains('switch-form')) {
-            if (overlayTitle) overlayTitle.textContent = 'Restoring snapshot…';
+            if (overlayTitle) overlayTitle.textContent = 'Restoring playthrough…';
             showOverlay();
         }
         if (form.classList.contains('create-form')) {
-            if (overlayTitle) overlayTitle.textContent = 'Saving snapshot…';
+            if (overlayTitle) overlayTitle.textContent = 'Saving playthrough…';
             showOverlay();
         }
         if (form.classList.contains('setup-form')) {
@@ -1260,7 +1260,7 @@ if (!$ptmFragment) {
             showOverlay();
         }
         if (form.getAttribute && form.getAttribute('data-confirm') === 'delete') {
-            if (overlayTitle) overlayTitle.textContent = 'Deleting snapshot…';
+            if (overlayTitle) overlayTitle.textContent = 'Deleting playthrough…';
             showOverlay();
         }
     }, true);
@@ -1389,7 +1389,7 @@ if (!$ptmFragment) {
         const total = Math.max(0, s.total_bytes);
         const segs = [
             { label: 'Active playthrough and settings', bytes: Math.max(0, s.playthrough_bytes || 0), cls: 'seg-playthrough' },
-            { label: 'Saved snapshots' + (s.snapshot_schemas ? ' (' + s.snapshot_schemas + ')' : ''), bytes: Math.max(0, s.snapshots_bytes || 0), cls: 'seg-snapshots' },
+            { label: 'Saved playthroughs' + (s.snapshot_schemas ? ' (' + s.snapshot_schemas + ')' : ''), bytes: Math.max(0, s.snapshots_bytes || 0), cls: 'seg-snapshots' },
             { label: 'Diagnostics logs', bytes: Math.max(0, s.diagnostics_bytes || 0), cls: 'seg-diagnostics' },
             { label: 'Other', bytes: Math.max(0, s.other_bytes || 0), cls: 'seg-other' }
         ];
@@ -1447,7 +1447,7 @@ if (!$ptmFragment) {
                 renderStorage(j.storage || null);
                 // Counts are planner estimates and can lag or reset; only replace the
                 // metadata-based value with a positive estimate, never with zero.
-                // The label stays "(at last snapshot save)" unless the live estimate applies.
+                // The label stays "(at last playthrough save)" unless the live estimate applies.
                 const ev = document.getElementById('live-eventlog');
                 const evLabel = document.getElementById('live-eventlog-label');
                 if (ev && typeof j.eventlog_estimate === 'number' && j.eventlog_estimate > 0) {

@@ -155,13 +155,13 @@ function ptr_preview($conn, array $settings): array {
 function ptr_delete_snapshot($conn, int $id): void {
     $row = pg_fetch_assoc(ptr_query($conn, 'SELECT *, to_jsonb(p)->>\'retention_pinned\' AS pinned FROM chim_meta.playthrough_profiles p WHERE id=$1 FOR UPDATE', [$id]));
     if (!$row || $row['is_active'] === 't' || strtolower($row['name']) === 'default' || $row['pinned'] === 'true') {
-        throw new RuntimeException('That snapshot is missing, currently loaded, the default one, or protected.');
+        throw new RuntimeException('That playthrough is missing, currently active, the default one, or protected.');
     }
     if (($row['storage_type'] ?? 'dump') === 'schema') {
         $schema = (string)($row['schema_name'] ?? '');
-        if (!preg_match('/^chim_profile_[a-z0-9_]+$/D', $schema)) throw new RuntimeException('That snapshot has an unexpected name and was left alone.');
+        if (!preg_match('/^chim_profile_[a-z0-9_]+$/D', $schema)) throw new RuntimeException('That playthrough has an unexpected name and was left alone.');
         $result = pts_drop_schema($conn, $schema);
-        if (!$result['success']) throw new RuntimeException('That snapshot could not be removed, so nothing was deleted.');
+        if (!$result['success']) throw new RuntimeException('That playthrough could not be removed, so nothing was deleted.');
     }
     ptr_query($conn, 'DELETE FROM chim_meta.playthrough_profiles WHERE id=$1', [$id]);
 }

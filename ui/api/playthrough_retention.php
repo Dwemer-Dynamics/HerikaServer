@@ -28,7 +28,7 @@ try {
     if (!is_string($action) || !in_array($action, ['state','save','preview','run','pin'], true)) throw new InvalidArgumentException('That cleanup action is not recognized.');
     if ($method === 'POST') {
         $locked = ptr_lock($conn);
-        if (!$locked) throw new RuntimeException('A snapshot or a cleanup is already running. Try again in a moment.');
+        if (!$locked) throw new RuntimeException('A playthrough operation or a cleanup is already running. Try again in a moment.');
     }
     $response = ['ok' => true];
     if ($action === 'save') {
@@ -41,11 +41,11 @@ try {
     } elseif ($action === 'pin') {
         $id = filter_var($_POST['profile_id'] ?? null, FILTER_VALIDATE_INT);
         $pinned = $_POST['pinned'] ?? null;
-        if (!$id || $id < 1 || !in_array($pinned, ['0','1'], true)) throw new InvalidArgumentException('That snapshot protection request was not valid.');
+        if (!$id || $id < 1 || !in_array($pinned, ['0','1'], true)) throw new InvalidArgumentException('That playthrough protection request was not valid.');
         ptr_query($conn, 'BEGIN');
         ptr_ensure_schema($conn);
         $result = ptr_query($conn, 'UPDATE chim_meta.playthrough_profiles SET retention_pinned=$2 WHERE id=$1', [$id, $pinned === '1' ? 'true' : 'false']);
-        if (pg_affected_rows($result) !== 1) throw new RuntimeException('That snapshot no longer exists.');
+        if (pg_affected_rows($result) !== 1) throw new RuntimeException('That playthrough no longer exists.');
         ptr_query($conn, 'COMMIT');
         unset($_SESSION['ptm_retention_preview']);
     } elseif ($action === 'preview') {

@@ -27,7 +27,7 @@
     var NUM_RULES = [
         { key: 'diagnostic_days', label: 'Debug log days', min: 1, max: 3650 },
         { key: 'diagnostic_max_mb', label: 'Debug log size target per table (MB)', min: 0, max: 102400 },
-        { key: 'snapshot_keep', label: 'Automatic snapshots to keep', min: 1, max: 100 },
+        { key: 'snapshot_keep', label: 'Automatic playthroughs to keep', min: 1, max: 100 },
         { key: 'event_days', label: 'Event preview days', min: 0, max: 3650 }
     ];
 
@@ -145,7 +145,7 @@
         if (!lastRunEl) return;
         if (!lr || typeof lr !== 'object') { lastRunEl.textContent = 'No cleanup has run yet.'; return; }
         var txt = lr.at ? String(lr.at) + ' — ' : '';
-        txt += Number(lr.rows || 0).toLocaleString() + ' log rows and ' + Number(lr.snapshots || 0).toLocaleString() + ' snapshots deleted';
+        txt += Number(lr.rows || 0).toLocaleString() + ' log rows and ' + Number(lr.snapshots || 0).toLocaleString() + ' playthroughs deleted';
         if (lr.message) txt += '. ' + String(lr.message);
         lastRunEl.textContent = txt;
     }
@@ -163,7 +163,7 @@
         if (!list.length) {
             var li0 = document.createElement('li');
             var sp0 = document.createElement('span');
-            sp0.textContent = 'No snapshots found.';
+            sp0.textContent = 'No playthroughs found.';
             li0.appendChild(sp0);
             snapListEl.appendChild(li0);
             return;
@@ -187,7 +187,7 @@
                 btn.type = 'button';
                 btn.className = 'button btn-pin';
                 btn.textContent = isPinned ? 'Unprotect' : 'Protect';
-                btn.setAttribute('aria-label', (isPinned ? 'Remove protection from snapshot ' : 'Protect snapshot ') + String(sn.name || sn.id));
+                btn.setAttribute('aria-label', (isPinned ? 'Remove protection from playthrough ' : 'Protect playthrough ') + String(sn.name || sn.id));
                 btn.style.backgroundColor = isPinned ? '#333' : 'rgb(1 53 166 / 90%)';
                 btn.style.color = '#fff';
                 btn.addEventListener('click', function(){
@@ -293,7 +293,7 @@
         var snapTitle = document.createElement('p');
         snapTitle.style.cssText = 'margin:8px 0 0 0; font-size:13px; color:#e0e0e0;';
         if (p.snapshots.length) {
-            snapTitle.textContent = 'Automatic snapshots that would be deleted (' + p.snapshots.length + '):';
+            snapTitle.textContent = 'Automatic playthroughs that would be deleted (' + p.snapshots.length + '):';
             box.appendChild(snapTitle);
             var ul = document.createElement('ul');
             ul.style.cssText = 'margin:4px 0; padding-left:20px; font-size:13px; color:#e0e0e0;';
@@ -304,7 +304,7 @@
             });
             box.appendChild(ul);
         } else {
-            snapTitle.textContent = 'Snapshots: none would be deleted with your saved settings.';
+            snapTitle.textContent = 'Playthroughs: none would be deleted with your saved settings.';
             box.appendChild(snapTitle);
         }
 
@@ -332,7 +332,7 @@
         var exp = document.createElement('p');
         exp.className = 'retention-note';
         var when = new Date(p.expiresMs);
-        exp.textContent = 'This preview is good for 5 minutes (until ' + when.toLocaleTimeString() + '). Changing any setting or snapshot protection cancels it.';
+        exp.textContent = 'This preview is good for 5 minutes (until ' + when.toLocaleTimeString() + '). Changing any setting or playthrough protection cancels it.';
         box.appendChild(exp);
 
         previewOut.appendChild(box);
@@ -340,12 +340,12 @@
 
     function pinSnapshot(id, pinned, name){
         if (busy || !loaded) return;
-        setBusy(true, (pinned === '1' ? 'Protecting' : 'Unprotecting') + ' snapshot "' + name + '"…');
+        setBusy(true, (pinned === '1' ? 'Protecting' : 'Unprotecting') + ' playthrough "' + name + '"…');
         post({ action: 'pin', profile_id: String(id), pinned: pinned }).then(function(){
-            invalidatePreview('snapshot protection changed');
-            setStatus('Snapshot "' + name + '" is ' + (pinned === '1'
+            invalidatePreview('playthrough protection changed');
+            setStatus('Playthrough "' + name + '" is ' + (pinned === '1'
                 ? 'now protected. Cleanup cannot delete it, and neither can you, until you unprotect it.'
-                : 'no longer protected. Snapshots you made yourself are still never deleted automatically.'), 'success');
+                : 'no longer protected. Playthroughs you made yourself are still never deleted automatically.'), 'success');
             return refresh(false).catch(function(){});
         }).catch(function(err){
             setStatus('Updating protection failed: ' + err.message, 'error');
@@ -411,9 +411,9 @@
             'This will permanently delete:\n' +
             '- ' + totRows.toLocaleString() + ' debug log rows (this round)\n' +
             '- ' + (snapNames.length
-                ? snapNames.length + ' automatic snapshot(s): ' + snapNames.join(', ')
-                : 'no snapshots') + '\n\n' +
-            'Selected snapshots will be deleted with all their contents. Your current playthrough, including events and NPC memories, and your files will stay intact.\n\n' +
+                ? snapNames.length + ' automatic playthrough(s): ' + snapNames.join(', ')
+                : 'no playthroughs') + '\n\n' +
+            'Selected playthroughs will be deleted with all their contents. Your current playthrough, including events and NPC memories, and your files will stay intact.\n\n' +
             'This cannot be undone. Choose Cancel to keep everything.';
         var token = preview.token;
         var dialog = document.getElementById('ret-confirm-dialog');
@@ -440,7 +440,7 @@
             invalidatePreview('cleanup ran');
             renderLastRun({ at: r.at, rows: r.rows, snapshots: r.snapshots, message: r.message });
             var txt = 'Cleanup finished: ' + Number(r.rows || 0).toLocaleString() + ' log rows and ' +
-                Number(r.snapshots || 0).toLocaleString() + ' snapshots deleted';
+                Number(r.snapshots || 0).toLocaleString() + ' playthroughs deleted';
             if (r.message) txt += '. ' + String(r.message);
             setStatus(txt, 'success');
             return refresh(false).catch(function(){});

@@ -106,7 +106,7 @@ if ($totRes && ($tr = @pg_fetch_assoc($totRes)) && isset($tr['b']) && $tr['b'] !
             'snapshots_bytes' => $snapBytes,
             'other_bytes' => $otherBytes,
             'snapshot_schemas' => $snapSchemas,
-            'snapshot_note' => 'Snapshot sizes include schema copies and inline legacy dumps. Legacy large-object dumps are included in Other.',
+            'snapshot_note' => 'Playthrough sizes include schema copies and inline legacy dumps. Legacy large-object dumps are included in Other.',
         ];
     }
 }

@@ -35,7 +35,7 @@ $storageEmbedUrl = $distroDataManagerAvailable
     ? $distroDataManagerUrl . 'manage'
     : $webRoot . '/ui/playthrough_manager.php?embed=1';
 $storageEmbedTitle = $distroDataManagerAvailable
-    ? 'CHIM snapshots, storage and database tools'
+    ? 'CHIM playthroughs, storage and database tools'
     : 'CHIM Playthrough Manager';
 // Without the shared page installed, the legacy database tools keep their own tab.
 $legacyDbmgrEmbedUrl = null;

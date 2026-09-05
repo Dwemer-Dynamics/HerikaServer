@@ -178,7 +178,7 @@ function dragon_break_snapshot_if_needed($prevGamets, $incomingGamets) {
 	$dateNew = convert_gamets2skyrim_long_date_no_time($incoming);
 	$dateOld = convert_gamets2skyrim_long_date_no_time($prev);
 	$name = "Dragon Break (" . $dateOld . " -> " . $dateNew . ")";
-	$notes = "Auto snapshot due to rollback of {$daysRollback} in-game days ({$incoming} -> {$prev}).";
+	$notes = "Automatic playthrough save due to rollback of {$daysRollback} in-game days ({$incoming} -> {$prev}).";
 	return dragon_break_create_snapshot($name, $notes);
 }
 
