@@ -2548,6 +2548,8 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
 
     $visibleChatStateSql = chimBuildChatDeliveryStateSql('delivery_state');
 
+    // Apply the recorded audience to every branch, including extension OR filters
+    // and held-item events, so unrelated conversations cannot enter NPC history.
     $query="select  
     case 
       when type='infoaction' and a.data like '#%MEMORY%' then 'MEMORY'
@@ -2576,7 +2578,7 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
       when type like 'ext_%' then 'PLUGIN'
       else '' 
     end as subtype,a.data  as data , gamets,localts,type,location
-    FROM  eventlog a WHERE
+    FROM  eventlog a WHERE (
     type<>'combatend'
     and type<>'bored' and type<>'init' and type<>'infoloc' and type<>'info' and type<>'funcret' and type<>'book'
     and type<>'addnpc' and type<>'infonpc' and type<>'infoitems'
@@ -2586,7 +2588,9 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
     AND type<>'narrator_welcome'
     and (type<>'chat' or {$visibleChatStateSql})
     AND type<>'funccall' AND type<>'togglemodel'
-    {$removeBooks} {$sqlfilter} {$ext_sqlfilter1}
+    {$removeBooks} {$sqlfilter} {$ext_sqlfilter1} {$ext_sqlfilter2}
+    or (type='ext_held_item_pickup' or type='ext_held_item_drop')
+    )
     ".(($b_actor) ? "
     AND (
      people like '%|$actorEscaped|%'
@@ -2599,13 +2603,9 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
      
     )
     " : " ").
-    //((false)?" and gamets>".($currentGameTs-(60*60*60*60)):"").
-    " {$ext_sqlfilter2} 
-    or (type='ext_held_item_pickup' or type='ext_held_item_drop')
+    "
     ORDER BY gamets desc, ts desc, rowid desc LIMIT {$nRecordsLimit} OFFSET 0 ";
     
-    // Note: Analyce this part: or (type='ext_held_item_pickup' or type='ext_held_item_drop')
-
     // error_log("[BGL] $query");   
     // Keep generic far-away actors out of historic context. Shared narrator rows are flattened on write.
     $results = $db->fetchAll($query);
