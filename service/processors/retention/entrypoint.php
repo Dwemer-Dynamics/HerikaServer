@@ -9,7 +9,7 @@
     try {
         $settings = ptr_settings($conn);
         $due = time() - (int)ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', 0) >= 3600;
-        if (!$settings['automatic'] || !$due || (!$settings['diagnostics_enabled'] && !$settings['snapshots_enabled'])) return;
+        if (!$settings['automatic'] || !$due || (!$settings['diagnostics_enabled'] && !$settings['playthroughs_enabled'])) return;
         $GLOBALS['TASKS']['retention'] = ['fn' => function () {
             $workerConn = @pg_connect('host=localhost port=5432 dbname=dwemer user=dwemer password=dwemer', PGSQL_CONNECT_FORCE_NEW);
             if (!$workerConn) return;

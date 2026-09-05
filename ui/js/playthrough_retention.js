@@ -10,7 +10,7 @@
     var previewBtn = document.getElementById('ret-preview');
     var runBtn = document.getElementById('ret-run');
     var previewOut = document.getElementById('ret-preview-out');
-    var snapListEl = document.getElementById('ret-snap-list');
+    var playthroughListEl = document.getElementById('ret-pt-list');
     var lastRunEl = document.getElementById('ret-lastrun');
     var eventStatusEl = document.getElementById('ret-event-status');
 
@@ -19,21 +19,21 @@
         diagnostics_enabled: document.getElementById('ret-diag-enabled'),
         diagnostic_days: document.getElementById('ret-diag-days'),
         diagnostic_max_mb: document.getElementById('ret-diag-maxmb'),
-        snapshots_enabled: document.getElementById('ret-snap-enabled'),
-        snapshot_keep: document.getElementById('ret-snap-keep'),
+        playthroughs_enabled: document.getElementById('ret-pt-enabled'),
+        playthrough_keep: document.getElementById('ret-pt-keep'),
         event_days: document.getElementById('ret-event-days')
     };
 
     var NUM_RULES = [
         { key: 'diagnostic_days', label: 'Debug log days', min: 1, max: 3650 },
         { key: 'diagnostic_max_mb', label: 'Debug log size target per table (MB)', min: 0, max: 102400 },
-        { key: 'snapshot_keep', label: 'Automatic playthroughs to keep', min: 1, max: 100 },
+        { key: 'playthrough_keep', label: 'Automatic playthroughs to keep', min: 1, max: 100 },
         { key: 'event_days', label: 'Event preview days', min: 0, max: 3650 }
     ];
 
     var busy = false;
     var loaded = false;
-    var preview = null; // { token, expiresMs, diagnostics, snapshots, events, message }
+    var preview = null; // { token, expiresMs, diagnostics, playthroughs, events, message }
     var previewTimer = null;
 
     function asBool(v){ return v === true || v === 1 || v === '1'; }
@@ -60,13 +60,13 @@
         var lock = busy || !loaded;
         saveBtn.disabled = lock;
         previewBtn.disabled = lock;
-        var hasWork = preview && (preview.snapshots.length || preview.diagnostics.some(function(d){ return Number(d.rows) > 0; }));
+        var hasWork = preview && (preview.playthroughs.length || preview.diagnostics.some(function(d){ return Number(d.rows) > 0; }));
         runBtn.disabled = lock || !previewValid() || !hasWork;
         saveBtn.setAttribute('aria-disabled', String(saveBtn.disabled));
         previewBtn.setAttribute('aria-disabled', String(previewBtn.disabled));
         runBtn.setAttribute('aria-disabled', String(runBtn.disabled));
-        if (snapListEl) {
-            snapListEl.querySelectorAll('button').forEach(function(b){ b.disabled = lock; });
+        if (playthroughListEl) {
+            playthroughListEl.querySelectorAll('button').forEach(function(b){ b.disabled = lock; });
         }
         Object.keys(fields).forEach(function(k){ if (fields[k]) fields[k].disabled = lock; });
     }
@@ -124,7 +124,7 @@
         var out = {
             automatic: fields.automatic.checked ? '1' : '0',
             diagnostics_enabled: fields.diagnostics_enabled.checked ? '1' : '0',
-            snapshots_enabled: fields.snapshots_enabled.checked ? '1' : '0'
+            playthroughs_enabled: fields.playthroughs_enabled.checked ? '1' : '0'
         };
         for (var i = 0; i < NUM_RULES.length; i++) {
             var rule = NUM_RULES[i];
@@ -145,7 +145,7 @@
         if (!lastRunEl) return;
         if (!lr || typeof lr !== 'object') { lastRunEl.textContent = 'No cleanup has run yet.'; return; }
         var txt = lr.at ? String(lr.at) + ' — ' : '';
-        txt += Number(lr.rows || 0).toLocaleString() + ' log rows and ' + Number(lr.snapshots || 0).toLocaleString() + ' playthroughs deleted';
+        txt += Number(lr.rows || 0).toLocaleString() + ' log rows and ' + Number(lr.playthroughs || 0).toLocaleString() + ' playthroughs deleted';
         if (lr.message) txt += '. ' + String(lr.message);
         lastRunEl.textContent = txt;
     }
@@ -157,15 +157,15 @@
         return b;
     }
 
-    function renderSnapshots(list){
-        if (!snapListEl) return;
-        snapListEl.textContent = '';
+    function renderPlaythroughs(list){
+        if (!playthroughListEl) return;
+        playthroughListEl.textContent = '';
         if (!list.length) {
             var li0 = document.createElement('li');
             var sp0 = document.createElement('span');
             sp0.textContent = 'No playthroughs found.';
             li0.appendChild(sp0);
-            snapListEl.appendChild(li0);
+            playthroughListEl.appendChild(li0);
             return;
         }
         list.forEach(function(sn){
@@ -191,11 +191,11 @@
                 btn.style.backgroundColor = isPinned ? '#333' : 'rgb(1 53 166 / 90%)';
                 btn.style.color = '#fff';
                 btn.addEventListener('click', function(){
-                    pinSnapshot(sn.id, isPinned ? '0' : '1', String(sn.name || sn.id));
+                    pinPlaythrough(sn.id, isPinned ? '0' : '1', String(sn.name || sn.id));
                 });
                 li.appendChild(btn);
             }
-            snapListEl.appendChild(li);
+            playthroughListEl.appendChild(li);
         });
         syncButtons();
     }
@@ -204,13 +204,13 @@
         var s = (j && j.settings && typeof j.settings === 'object') ? j.settings : {};
         fields.automatic.checked = asBool(s.automatic);
         fields.diagnostics_enabled.checked = asBool(s.diagnostics_enabled);
-        fields.snapshots_enabled.checked = asBool(s.snapshots_enabled);
+        fields.playthroughs_enabled.checked = asBool(s.playthroughs_enabled);
         fields.diagnostic_days.value = numOr(s.diagnostic_days, 7);
         fields.diagnostic_max_mb.value = numOr(s.diagnostic_max_mb, 500);
-        fields.snapshot_keep.value = numOr(s.snapshot_keep, 5);
+        fields.playthrough_keep.value = numOr(s.playthrough_keep, 5);
         fields.event_days.value = numOr(s.event_days, 0);
         renderLastRun(j.last_run || null);
-        renderSnapshots(Array.isArray(j.snapshots) ? j.snapshots : []);
+        renderPlaythroughs(Array.isArray(j.playthroughs) ? j.playthroughs : []);
         if (eventStatusEl) {
             eventStatusEl.textContent = (typeof j.event_status === 'string' && j.event_status) ? j.event_status : '—';
         }
@@ -290,22 +290,22 @@
             box.appendChild(diagTitle);
         }
 
-        var snapTitle = document.createElement('p');
-        snapTitle.style.cssText = 'margin:8px 0 0 0; font-size:13px; color:#e0e0e0;';
-        if (p.snapshots.length) {
-            snapTitle.textContent = 'Automatic playthroughs that would be deleted (' + p.snapshots.length + '):';
-            box.appendChild(snapTitle);
+        var playthroughTitle = document.createElement('p');
+        playthroughTitle.style.cssText = 'margin:8px 0 0 0; font-size:13px; color:#e0e0e0;';
+        if (p.playthroughs.length) {
+            playthroughTitle.textContent = 'Automatic playthroughs that would be deleted (' + p.playthroughs.length + '):';
+            box.appendChild(playthroughTitle);
             var ul = document.createElement('ul');
             ul.style.cssText = 'margin:4px 0; padding-left:20px; font-size:13px; color:#e0e0e0;';
-            p.snapshots.forEach(function(s){
+            p.playthroughs.forEach(function(s){
                 var li = document.createElement('li');
                 li.textContent = String(s.name || ('#' + s.id)) + ' (' + fmtB(s.bytes) + ')';
                 ul.appendChild(li);
             });
             box.appendChild(ul);
         } else {
-            snapTitle.textContent = 'Playthroughs: none would be deleted with your saved settings.';
-            box.appendChild(snapTitle);
+            playthroughTitle.textContent = 'Playthroughs: none would be deleted with your saved settings.';
+            box.appendChild(playthroughTitle);
         }
 
         if (p.events) {
@@ -338,7 +338,7 @@
         previewOut.appendChild(box);
     }
 
-    function pinSnapshot(id, pinned, name){
+    function pinPlaythrough(id, pinned, name){
         if (busy || !loaded) return;
         setBusy(true, (pinned === '1' ? 'Protecting' : 'Unprotecting') + ' playthrough "' + name + '"…');
         post({ action: 'pin', profile_id: String(id), pinned: pinned }).then(function(){
@@ -382,7 +382,7 @@
                 token: String(p.token || ''),
                 expiresMs: expiresMs,
                 diagnostics: Array.isArray(p.diagnostics) ? p.diagnostics : [],
-                snapshots: Array.isArray(p.snapshots) ? p.snapshots : [],
+                playthroughs: Array.isArray(p.playthroughs) ? p.playthroughs : [],
                 events: (p.events && typeof p.events === 'object') ? p.events : null,
                 message: (typeof p.message === 'string') ? p.message : ''
             };
@@ -392,7 +392,7 @@
                 invalidatePreview('it expired after 5 minutes');
                 setStatus('The preview expired. Run a new preview before cleaning up.', 'error');
             }, Math.max(0, expiresMs - Date.now()));
-            var hasWork = preview.snapshots.length || preview.diagnostics.some(function(d){ return Number(d.rows) > 0; });
+            var hasWork = preview.playthroughs.length || preview.diagnostics.some(function(d){ return Number(d.rows) > 0; });
             setStatus(preview.token
                 ? (hasWork ? 'Preview ready. Review it, then use "Run cleanup now" within 5 minutes.' : 'Preview ready. Nothing needs deleting with your saved settings.')
                 : 'Preview ready, but the server did not send back a confirmation code, so "Run cleanup now" stays locked.',
@@ -406,12 +406,12 @@
         if (busy || !previewValid()) return;
         var totRows = 0;
         preview.diagnostics.forEach(function(d){ totRows += Number(d.rows || 0); });
-        var snapNames = preview.snapshots.map(function(s){ return String(s.name || ('#' + s.id)); });
+        var playthroughNames = preview.playthroughs.map(function(s){ return String(s.name || ('#' + s.id)); });
         var msg = 'Run cleanup now?\n\n' +
             'This will permanently delete:\n' +
             '- ' + totRows.toLocaleString() + ' debug log rows (this round)\n' +
-            '- ' + (snapNames.length
-                ? snapNames.length + ' automatic playthrough(s): ' + snapNames.join(', ')
+            '- ' + (playthroughNames.length
+                ? playthroughNames.length + ' automatic playthrough(s): ' + playthroughNames.join(', ')
                 : 'no playthroughs') + '\n\n' +
             'Selected playthroughs will be deleted with all their contents. Your current playthrough, including events and NPC memories, and your files will stay intact.\n\n' +
             'This cannot be undone. Choose Cancel to keep everything.';
@@ -438,9 +438,9 @@
         post({ action: 'run', preview_token: token }).then(function(j){
             var r = (j && j.result && typeof j.result === 'object') ? j.result : {};
             invalidatePreview('cleanup ran');
-            renderLastRun({ at: r.at, rows: r.rows, snapshots: r.snapshots, message: r.message });
+            renderLastRun({ at: r.at, rows: r.rows, playthroughs: r.playthroughs, message: r.message });
             var txt = 'Cleanup finished: ' + Number(r.rows || 0).toLocaleString() + ' log rows and ' +
-                Number(r.snapshots || 0).toLocaleString() + ' playthroughs deleted';
+                Number(r.playthroughs || 0).toLocaleString() + ' playthroughs deleted';
             if (r.message) txt += '. ' + String(r.message);
             setStatus(txt, 'success');
             return refresh(false).catch(function(){});

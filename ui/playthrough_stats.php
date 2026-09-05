@@ -79,34 +79,34 @@ if ($totRes && ($tr = @pg_fetch_assoc($totRes)) && isset($tr['b']) && $tr['b'] !
     $publicBytes = ptm_stats_sum_schema($adminConn, 'public');
     $diagBytes = ptm_stats_sum_public_tables($adminConn, ['log', 'audit_request', 'responselog']);
 
-    // All chim_profile_* snapshot schemas (schema-cloned snapshots)
-    $snapBytes = null;
-    $snapSchemas = 0;
-    $snapRes = @pg_query(
+    // All chim_profile_* playthrough schemas (schema-cloned playthroughs)
+    $savedPlaythroughBytes = null;
+    $playthroughSchemas = 0;
+    $savedRes = @pg_query(
         $adminConn,
         "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)),0)::bigint AS b, COUNT(DISTINCT n.nspname) AS s FROM pg_catalog.pg_namespace n LEFT JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relkind IN ('r','m') WHERE left(n.nspname, 13) = 'chim_profile_'"
     );
-    if ($snapRes && ($sr = @pg_fetch_assoc($snapRes)) && isset($sr['b']) && $sr['b'] !== null) {
-        $snapBytes = max(0, (int)$sr['b']);
-        $snapSchemas = (int)($sr['s'] ?? 0);
+    if ($savedRes && ($sr = @pg_fetch_assoc($savedRes)) && isset($sr['b']) && $sr['b'] !== null) {
+        $savedPlaythroughBytes = max(0, (int)$sr['b']);
+        $playthroughSchemas = (int)($sr['s'] ?? 0);
     }
-    // Inline legacy dumps are also snapshot storage. Large-object dumps share
+    // Inline legacy dumps are also saved-playthrough storage. Large-object dumps share
     // PostgreSQL's system storage and remain in Other; disclose that distinction.
     $blobRes = @pg_query($adminConn, "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)),0)::bigint AS bytes FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='chim_meta' AND c.relname='playthrough_blobs' AND c.relkind='r'");
     $blobRow = $blobRes ? pg_fetch_assoc($blobRes) : null;
-    if ($snapBytes !== null && $blobRow) $snapBytes += (int)$blobRow['bytes'];
+    if ($savedPlaythroughBytes !== null && $blobRow) $savedPlaythroughBytes += (int)$blobRow['bytes'];
 
-    if ($publicBytes !== null && $diagBytes !== null && $snapBytes !== null) {
+    if ($publicBytes !== null && $diagBytes !== null && $savedPlaythroughBytes !== null) {
         $playthroughBytes = max(0, $publicBytes - $diagBytes);
-        $otherBytes = max(0, $totalBytes - $diagBytes - $playthroughBytes - $snapBytes);
+        $otherBytes = max(0, $totalBytes - $diagBytes - $playthroughBytes - $savedPlaythroughBytes);
         $storage = [
             'total_bytes' => $totalBytes,
             'playthrough_bytes' => $playthroughBytes,
             'diagnostics_bytes' => $diagBytes,
-            'snapshots_bytes' => $snapBytes,
+            'playthroughs_bytes' => $savedPlaythroughBytes,
             'other_bytes' => $otherBytes,
-            'snapshot_schemas' => $snapSchemas,
-            'snapshot_note' => 'Playthrough sizes include schema copies and inline legacy dumps. Legacy large-object dumps are included in Other.',
+            'playthrough_schemas' => $playthroughSchemas,
+            'playthrough_note' => 'Playthrough sizes include schema copies and inline legacy dumps. Legacy large-object dumps are included in Other.',
         ];
     }
 }

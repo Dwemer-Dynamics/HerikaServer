@@ -178,7 +178,7 @@ function ptm_run_setup_migrations($adminConn): void {
     }
 }
 
-// Snapshot the live public schema's descriptive metadata (counts run on the live DB).
+// Capture the live public schema's descriptive metadata (counts run on the live DB).
 function ptm_collect_live_metadata($adminConn, string $schema): array {
     $meta = [
         'player_name' => (string)($GLOBALS['PLAYER_NAME'] ?? 'Unknown'),
@@ -199,8 +199,8 @@ function ptm_collect_live_metadata($adminConn, string $schema): array {
     return $meta;
 }
 
-// First-run capture of the current database as the 'default' snapshot (POST only).
-function ptm_create_default_snapshot($adminConn, string $schema): array {
+// First-run capture of the current database as the 'default' playthrough (POST only).
+function ptm_create_default_playthrough($adminConn, string $schema): array {
     // Guard against partial states: skip if any profile (or a 'default' row) already exists.
     $cntRes = @pg_query($adminConn, "SELECT COUNT(*) AS c FROM chim_meta.playthrough_profiles");
     if ($cntRes && ($c = pg_fetch_assoc($cntRes)) && intval($c['c']) > 0) {
@@ -248,7 +248,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
 
     if ($action === 'setup') {
-        $res = ptm_create_default_snapshot($adminConn, $schema);
+        $res = ptm_create_default_playthrough($adminConn, $schema);
         if ($res['success']) {
             $message .= !empty($res['existing'])
                 ? '<p>Playthrough management is already set up. Existing playthroughs were preserved.</p>'
@@ -264,7 +264,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($name === '') {
             $message .= '<p><strong>Error:</strong> Name is required.</p>';
         } else {
-            // Use schema-based storage for instant snapshots
+            // Use schema-based storage for instant playthroughs
             $schemaName = pts_sanitize_profile_name($name);
 
             // Check if schema already exists
@@ -381,7 +381,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     goto SWITCH_ABORT;
                 }
 
-                // Keep the live public schema intact if recreating or cloning the snapshot fails.
+                // Keep the live public schema intact if recreating or cloning the playthrough fails.
                 if (!@pg_query($adminConn, 'BEGIN')) {
                     $message .= '<p><strong>Error:</strong> Failed to start restore.</p>';
                     goto SWITCH_ABORT;
@@ -429,7 +429,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 // Legacy dump-based: slow restore
                 $tmpFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . ('playthrough_restore_'.time().'_'.mt_rand(1000,9999).'.sql');
-                $ff = ptm_fetch_snapshot_to_file($adminConn, $profileId, $tmpFile);
+                $ff = ptm_fetch_playthrough_to_file($adminConn, $profileId, $tmpFile);
                 if (!$ff['success']) {
                     $message .= '<p><strong>Error:</strong> Failed to materialize playthrough.</p><pre>'.h($ff['error']).'</pre>';
                     goto SWITCH_ABORT;
@@ -496,7 +496,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 ptr_query($adminConn, 'BEGIN');
                 ptr_query($adminConn, "SET LOCAL lock_timeout='2s'");
-                ptr_delete_snapshot($adminConn, $profileId);
+                ptr_delete_playthrough($adminConn, $profileId);
                 ptr_query($adminConn, 'COMMIT');
                 $message .= '<p><strong>✅ Deleted:</strong> '.h($row['name']).'</p>';
             }
@@ -512,7 +512,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// API callers reuse the operation above, never the legacy layout or full snapshot list.
+// API callers reuse the operation above, never the legacy layout or full playthrough list.
 if (defined('DWEMER_STORAGE_ACTIONS_ONLY')) {
     return ['ok' => !str_contains($message, 'Error:'), 'message' => $message];
 }
@@ -529,7 +529,7 @@ if ($ptmInitialized) {
 $ptmNeedsSetup = (!$ptmInitialized || count($profiles) === 0);
 
 // Live stats for currently loaded (active) playthrough; initial values come from
-// snapshot metadata (fast) and are refreshed asynchronously.
+// playthrough metadata (fast) and are refreshed asynchronously.
 $activeProfileName = '';
 $livePlayerName = (string)($GLOBALS['PLAYER_NAME'] ?? 'Unknown');
 $liveGameName = 'Skyrim';
@@ -665,10 +665,10 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     /* Dragon Break styling */
     .backup-item.dragonbreak { background-color: #1e2a3a; }
     .backup-item.dragonbreak:hover { background-color: #223044; }
-    /* Snapshot list */
+    /* Playthrough list */
     .backup-list { max-height: 420px; overflow-y: auto; padding: 0; margin: 0; border: 1px solid #333333; border-radius: 8px; background-color: #1a1a1a; }
     .backup-item { padding: 12px; border-bottom: 1px solid #333333; }
-    .backup-item.active-snapshot { background: rgba(74, 222, 128, 0.1); border-left: 4px solid #4ade80; }
+    .backup-item.active-playthrough { background: rgba(74, 222, 128, 0.1); border-left: 4px solid #4ade80; }
     .backup-row { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
     .backup-info { flex: 1; min-width: 220px; }
     .backup-actions { display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; }
@@ -705,7 +705,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     .storage-bar { display:flex; height: 22px; border-radius: 6px; overflow:hidden; border:1px solid #444; background:#111; }
     .storage-bar .seg { display:block; min-width: 2px; }
     .seg-playthrough { background: #2ea8ff; }
-    .seg-snapshots { background: repeating-linear-gradient(45deg, #f27c11, #f27c11 6px, #a85408 6px, #a85408 12px); }
+    .seg-playthroughs { background: repeating-linear-gradient(45deg, #f27c11, #f27c11 6px, #a85408 6px, #a85408 12px); }
     .seg-diagnostics { background: repeating-linear-gradient(-45deg, #9fb1c9, #9fb1c9 6px, #64748c 6px, #64748c 12px); }
     .seg-other { background: repeating-linear-gradient(90deg, #555, #555 4px, #2e2e2e 4px, #2e2e2e 8px); }
     .storage-legend { list-style: none; margin: 10px 0 0 0; padding: 0; display:flex; gap: 6px 18px; flex-wrap: wrap; font-size: 13px; color:#ccc; }
@@ -735,9 +735,9 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     .retention-preview-table td.num, .retention-preview-table th.num { text-align: right; }
     .retention-preview-box { border: 1px solid #3a3a3a; border-radius: 8px; background: rgba(0,0,0,0.25); padding: 10px 12px; margin-top: 12px; }
     .retention-preview-box h3 { font-size: 14px; color: #ffb862; margin: 0 0 6px 0; }
-    .retention-snap-list { list-style: none; margin: 8px 0 0 0; padding: 0; border: 1px solid #333; border-radius: 8px; background: #1a1a1a; }
-    .retention-snap-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #2c2c2c; flex-wrap: wrap; font-size: 13px; color: #e0e0e0; }
-    .retention-snap-list li:last-child { border-bottom: none; }
+    .retention-playthrough-list { list-style: none; margin: 8px 0 0 0; padding: 0; border: 1px solid #333; border-radius: 8px; background: #1a1a1a; }
+    .retention-playthrough-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #2c2c2c; flex-wrap: wrap; font-size: 13px; color: #e0e0e0; }
+    .retention-playthrough-list li:last-child { border-bottom: none; }
     .retention-badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 4px; margin-left: 6px; border: 1px solid #444; color: #ccc; white-space: nowrap; }
     .retention-badge.b-active { background: #14532d; color: #bbf7d0; border-color: #166534; }
     .retention-badge.b-default { background: #1e3a5f; color: #bfdbfe; border-color: #1d4ed8; }
@@ -889,7 +889,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                             $isDefault = ($nm === 'default');
                             $sizeText = formatFileSize((int)$p['size_bytes']);
                         ?>
-                        <div class="backup-item<?php echo $isDragon ? ' dragonbreak' : ''; ?><?php echo $isActive ? ' active-snapshot' : ''; ?>">
+                        <div class="backup-item<?php echo $isDragon ? ' dragonbreak' : ''; ?><?php echo $isActive ? ' active-playthrough' : ''; ?>">
                             <div class="backup-row">
                                 <div class="backup-info">
                                     <div style="font-weight:bold; font-size: 14px; word-break: break-all;">
@@ -1016,15 +1016,15 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                 <fieldset class="retention-fieldset">
                     <legend>Automatic playthroughs (Dragon Breaks)</legend>
                     <div class="retention-row">
-                        <input type="checkbox" id="ret-snap-enabled" name="snapshots_enabled" disabled>
-                        <label for="ret-snap-enabled">Delete old automatic playthroughs</label>
+                        <input type="checkbox" id="ret-pt-enabled" name="playthroughs_enabled" disabled>
+                        <label for="ret-pt-enabled">Delete old automatic playthroughs</label>
                     </div>
                     <div class="retention-row">
-                        <label for="ret-snap-keep">Keep the newest</label>
-                        <input type="number" id="ret-snap-keep" name="snapshot_keep" inputmode="numeric" min="1" max="100" step="1" value="5" disabled aria-describedby="ret-snap-help">
+                        <label for="ret-pt-keep">Keep the newest</label>
+                        <input type="number" id="ret-pt-keep" name="playthrough_keep" inputmode="numeric" min="1" max="100" step="1" value="5" disabled aria-describedby="ret-pt-help">
                         <span>automatic playthroughs (1–100)</span>
                     </div>
-                    <p class="retention-note" id="ret-snap-help">
+                    <p class="retention-note" id="ret-pt-help">
                         Keeps the active and default playthroughs, protected copies, playthroughs you saved yourself, and copies made before this cleanup feature.
                     </p>
                 </fieldset>
@@ -1061,7 +1061,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
             <p class="retention-note">
                 Protected playthroughs cannot be deleted, even manually, until you unprotect them.
             </p>
-            <ul class="retention-snap-list" id="ret-snap-list">
+            <ul class="retention-playthrough-list" id="ret-pt-list">
                 <li><span>Loading playthrough list…</span></li>
             </ul>
         </div>
@@ -1389,7 +1389,7 @@ if (!$ptmFragment) {
         const total = Math.max(0, s.total_bytes);
         const segs = [
             { label: 'Active playthrough and settings', bytes: Math.max(0, s.playthrough_bytes || 0), cls: 'seg-playthrough' },
-            { label: 'Saved playthroughs' + (s.snapshot_schemas ? ' (' + s.snapshot_schemas + ')' : ''), bytes: Math.max(0, s.snapshots_bytes || 0), cls: 'seg-snapshots' },
+            { label: 'Saved playthroughs' + (s.playthrough_schemas ? ' (' + s.playthrough_schemas + ')' : ''), bytes: Math.max(0, s.playthroughs_bytes || 0), cls: 'seg-playthroughs' },
             { label: 'Diagnostics logs', bytes: Math.max(0, s.diagnostics_bytes || 0), cls: 'seg-diagnostics' },
             { label: 'Other', bytes: Math.max(0, s.other_bytes || 0), cls: 'seg-other' }
         ];
@@ -1427,10 +1427,10 @@ if (!$ptmFragment) {
             legend.appendChild(li);
         });
         host.appendChild(legend);
-        if (s.snapshot_note) {
+        if (s.playthrough_note) {
             const note = document.createElement('p');
             note.className = 'retention-note';
-            note.textContent = s.snapshot_note;
+            note.textContent = s.playthrough_note;
             host.appendChild(note);
         }
     }

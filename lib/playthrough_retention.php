@@ -2,11 +2,11 @@
 
 require_once __DIR__ . '/playthrough_schema.php';
 
-// Retention is opt-in. This metadata lives outside snapshots so restoring a game
+// Retention is opt-in. This metadata lives outside saved playthroughs so restoring a game
 // cannot silently re-enable an old cleanup policy.
 function ptr_defaults(): array {
     return ['automatic' => false, 'diagnostics_enabled' => false, 'diagnostic_days' => 7,
-        'diagnostic_max_mb' => 500, 'snapshots_enabled' => false, 'snapshot_keep' => 5, 'event_days' => 0];
+        'diagnostic_max_mb' => 500, 'playthroughs_enabled' => false, 'playthrough_keep' => 5, 'event_days' => 0];
 }
 
 function ptr_query($conn, string $sql, array $params = []) {
@@ -46,12 +46,12 @@ function ptr_settings($conn): array {
 
 function ptr_validate(array $input): array {
     $settings = ptr_defaults();
-    foreach (['automatic', 'diagnostics_enabled', 'snapshots_enabled'] as $key) {
+    foreach (['automatic', 'diagnostics_enabled', 'playthroughs_enabled'] as $key) {
         if (!array_key_exists($key, $input)) continue;
         if (!in_array($input[$key], [true, false, 0, 1, '0', '1'], true)) throw new InvalidArgumentException('That cleanup on/off value was not valid.');
         $settings[$key] = in_array($input[$key], [true, 1, '1'], true);
     }
-    foreach (['diagnostic_days' => [1,3650], 'diagnostic_max_mb' => [0,102400], 'snapshot_keep' => [1,100], 'event_days' => [0,3650]] as $key => [$min,$max]) {
+    foreach (['diagnostic_days' => [1,3650], 'diagnostic_max_mb' => [0,102400], 'playthrough_keep' => [1,100], 'event_days' => [0,3650]] as $key => [$min,$max]) {
         if (!array_key_exists($key, $input)) continue;
         $number = filter_var($input[$key], FILTER_VALIDATE_INT);
         if ($number === false || $number < $min || $number > $max) throw new InvalidArgumentException('That cleanup value is outside its allowed range.');
@@ -60,8 +60,8 @@ function ptr_validate(array $input): array {
     return $settings;
 }
 
-// Manager actions and maintenance yield to a busy snapshot. Dragon Break capture
-// waits on this same lock so cleanup cannot make a recovery snapshot disappear.
+// Manager actions and maintenance yield to a busy playthrough operation. Dragon Break capture
+// waits on this same lock so cleanup cannot make a recovery playthrough disappear.
 function ptr_lock($conn): bool {
     return pg_fetch_result(ptr_query($conn, "SELECT pg_try_advisory_lock(hashtext('chim_playthrough_retention'))"), 0, 0) === 't';
 }
@@ -90,7 +90,7 @@ function ptr_profiles($conn): array {
     return $rows;
 }
 
-// A preview cannot be applied to a restored schema or changed snapshot set.
+// A preview cannot be applied to a restored schema or changed playthrough set.
 function ptr_identity($conn): string {
     $relations = pg_fetch_all(ptr_query($conn, "SELECT n.nspname,c.relname,c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
         WHERE n.nspname='public' AND c.relname IN ('eventlog','log','audit_request','responselog') ORDER BY c.relname")) ?: [];
@@ -98,9 +98,9 @@ function ptr_identity($conn): string {
 }
 
 // Each preview is limited to 1,000 diagnostics rows per table and three automatic
-// snapshots. Row versions pin the exact data the user agreed to remove.
+// playthroughs. Row versions pin the exact data the user agreed to remove.
 function ptr_preview($conn, array $settings): array {
-    $plan = ['identity' => ptr_identity($conn), 'created' => time(), 'diagnostics' => [], 'snapshots' => [],
+    $plan = ['identity' => ptr_identity($conn), 'created' => time(), 'diagnostics' => [], 'playthroughs' => [],
         'events' => ['older_rows' => 0, 'cutoff_gamets' => null,
             'blocked_reason' => 'CHIM cannot yet confirm that these events have finished being turned into NPC memories.'],
         'message' => 'This is one cleanup round. Space from deleted rows becomes reusable inside the database, but the files on disk may not shrink.'];
@@ -129,16 +129,16 @@ function ptr_preview($conn, array $settings): array {
             $plan['diagnostics'][] = ['table' => $table, 'rows' => count($selected), 'bytes_estimate' => $size, 'selected' => $selected];
         }
     }
-    if ($settings['snapshots_enabled']) {
+    if ($settings['playthroughs_enabled']) {
         $seen = 0;
         foreach (ptr_profiles($conn) as $profile) {
             if (!$profile['automatic']) continue;
             $seen++;
-            if ($seen <= $settings['snapshot_keep'] || $profile['is_active'] || $profile['is_default'] || $profile['pinned']) continue;
-            // Automatic cleanup only operates on explicitly tagged schema snapshots.
+            if ($seen <= $settings['playthrough_keep'] || $profile['is_active'] || $profile['is_default'] || $profile['pinned']) continue;
+            // Automatic cleanup only operates on explicitly tagged schema playthroughs.
             if ($profile['storage_type'] !== 'schema' || !str_starts_with((string)$profile['schema_name'], 'chim_profile_')) continue;
-            $plan['snapshots'][] = ['id' => $profile['id'], 'name' => $profile['name'], 'bytes' => $profile['bytes']];
-            if (count($plan['snapshots']) >= 3) break;
+            $plan['playthroughs'][] = ['id' => $profile['id'], 'name' => $profile['name'], 'bytes' => $profile['bytes']];
+            if (count($plan['playthroughs']) >= 3) break;
         }
     }
     if ($settings['event_days'] > 0 && ptr_exists($conn, 'public.eventlog')) {
@@ -152,7 +152,7 @@ function ptr_preview($conn, array $settings): array {
 }
 
 // Caller owns the transaction. A failed schema drop must preserve its profile row.
-function ptr_delete_snapshot($conn, int $id): void {
+function ptr_delete_playthrough($conn, int $id): void {
     $row = pg_fetch_assoc(ptr_query($conn, 'SELECT *, to_jsonb(p)->>\'retention_pinned\' AS pinned FROM chim_meta.playthrough_profiles p WHERE id=$1 FOR UPDATE', [$id]));
     if (!$row || $row['is_active'] === 't' || strtolower($row['name']) === 'default' || $row['pinned'] === 'true') {
         throw new RuntimeException('That playthrough is missing, currently active, the default one, or protected.');
@@ -167,7 +167,7 @@ function ptr_delete_snapshot($conn, int $id): void {
 }
 
 // All mutations commit together; timeouts, changed row versions, or a restore
-// invalidate the entire batch, including snapshot drops.
+// invalidate the entire batch, including playthrough drops.
 function ptr_execute($conn, array $plan): array {
     if (time() - $plan['created'] >= 300) throw new RuntimeException('The preview expired. Run a new preview.');
     ptr_query($conn, 'BEGIN');
@@ -187,8 +187,8 @@ function ptr_execute($conn, array $plan): array {
             if (pg_affected_rows($res) !== count($group['selected'])) throw new RuntimeException('The debug logs changed since the preview. Run a new preview.');
             $deleted += pg_affected_rows($res);
         }
-        foreach ($plan['snapshots'] as $snapshot) ptr_delete_snapshot($conn, $snapshot['id']);
-        $result = ['at' => gmdate('c'), 'rows' => $deleted, 'snapshots' => count($plan['snapshots']),
+        foreach ($plan['playthroughs'] as $playthrough) ptr_delete_playthrough($conn, $playthrough['id']);
+        $result = ['at' => gmdate('c'), 'rows' => $deleted, 'playthroughs' => count($plan['playthroughs']),
             'message' => 'Cleanup finished. Your current playthrough and files were left alone.'];
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', $result);
         ptr_query($conn, 'COMMIT');
@@ -203,19 +203,19 @@ function ptr_execute($conn, array $plan): array {
 function ptr_tick($conn): void {
     if (!ptr_exists($conn, 'chim_meta.settings')) return;
     $settings = ptr_settings($conn);
-    if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && !$settings['snapshots_enabled'])) return;
+    if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && !$settings['playthroughs_enabled'])) return;
     $attempt = (int)ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', 0);
     if (time() - $attempt < 3600 || !ptr_lock($conn)) return;
     try {
         if (time() - (int)ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', 0) < 3600) return;
         $settings = ptr_settings($conn);
-        if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && !$settings['snapshots_enabled'])) return;
+        if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && !$settings['playthroughs_enabled'])) return;
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', time());
         ptr_query($conn, "SET statement_timeout='20s'");
         $plan = ptr_preview($conn, $settings);
         ptr_execute($conn, $plan);
     } catch (Throwable $e) {
-        ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', ['at' => gmdate('c'), 'rows' => 0, 'snapshots' => 0,
+        ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', ['at' => gmdate('c'), 'rows' => 0, 'playthroughs' => 0,
             'message' => 'Automatic cleanup did not finish, so nothing was deleted. You can try it yourself with Preview cleanup.']);
         Logger::error('Playthrough retention: ' . $e->getMessage());
     } finally {

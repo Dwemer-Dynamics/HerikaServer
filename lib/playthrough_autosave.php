@@ -7,15 +7,15 @@ require_once(__DIR__ . DIRECTORY_SEPARATOR . 'playthrough_schema.php');
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'playthrough_retention.php');
 
 /**
- * Dragon Break autosnapshot helper.
- * Creates a Playthrough Manager snapshot in chim_meta when a large rollback is detected.
+ * Dragon Break automatic playthrough save helper.
+ * Saves a playthrough in chim_meta when a large rollback is detected.
  */
 
 function dragon_break_is_enabled() {
-	if (!isset($GLOBALS["DRAGON_BREAK_AUTOSNAPSHOT"])) {
-		$GLOBALS["DRAGON_BREAK_AUTOSNAPSHOT"] = true;
+	if (!isset($GLOBALS["DRAGON_BREAK_AUTO_PLAYTHROUGH"])) {
+		$GLOBALS["DRAGON_BREAK_AUTO_PLAYTHROUGH"] = true;
 	}
-	return !!$GLOBALS["DRAGON_BREAK_AUTOSNAPSHOT"];
+	return !!$GLOBALS["DRAGON_BREAK_AUTO_PLAYTHROUGH"];
 }
 
 function dragon_break_min_days() {
@@ -60,10 +60,10 @@ function dragon_break_ensure_meta_schema($adminConn) {
 }
 
 /**
- * Create a snapshot profile using fast schema cloning.
+ * Create a playthrough profile using fast schema cloning.
  * Returns the created profile id, or existing id on name collision, or 0 on failure.
  */
-function dragon_break_create_snapshot($name, $notes) {
+function dragon_break_create_playthrough($name, $notes) {
 	$host = 'localhost';
 	$port = '5432';
 	$dbname = 'dwemer';
@@ -73,7 +73,7 @@ function dragon_break_create_snapshot($name, $notes) {
 
 	$adminConn = @pg_connect("host={$host} port={$port} dbname={$dbname} user={$username} password={$password}", PGSQL_CONNECT_FORCE_NEW);
 	if (!$adminConn) {
-		Logger::error("DragonBreak: Failed to connect to database for snapshot: " . @pg_last_error());
+		Logger::error("DragonBreak: Failed to connect to database for playthrough: " . @pg_last_error());
 		return 0;
 	}
 
@@ -96,7 +96,7 @@ function dragon_break_create_snapshot($name, $notes) {
 		}
 	}
 
-	// Use schema-based storage for fast snapshots
+	// Use schema-based storage for fast playthroughs
 	$schemaName = pts_sanitize_profile_name($finalName);
 	
 	// Check if schema already exists (unlikely but possible)
@@ -142,7 +142,7 @@ function dragon_break_create_snapshot($name, $notes) {
 		$row = pg_fetch_assoc($q1);
 		$profileId = $row ? (int)$row['id'] : 0;
 		@pg_query($adminConn, 'COMMIT');
-		Logger::info("DragonBreak: Schema-based snapshot created with id {$profileId} and name '{$finalName}'");
+		Logger::info("DragonBreak: Schema-based playthrough created with id {$profileId} and name '{$finalName}'");
 		return $profileId;
 	}
 	
@@ -156,10 +156,10 @@ function dragon_break_create_snapshot($name, $notes) {
 }
 
 /**
- * Compose a Dragon Break snapshot name and create it if not present.
- * Returns snapshot id (existing or newly created), or 0.
+ * Compose a Dragon Break playthrough name and create it if not present.
+ * Returns playthrough id (existing or newly created), or 0.
  */
-function dragon_break_snapshot_if_needed($prevGamets, $incomingGamets) {
+function dragon_break_playthrough_if_needed($prevGamets, $incomingGamets) {
 	if (!dragon_break_is_enabled()) {
 		return 0;
 	}
@@ -179,7 +179,7 @@ function dragon_break_snapshot_if_needed($prevGamets, $incomingGamets) {
 	$dateOld = convert_gamets2skyrim_long_date_no_time($prev);
 	$name = "Dragon Break (" . $dateOld . " -> " . $dateNew . ")";
 	$notes = "Automatic playthrough save due to rollback of {$daysRollback} in-game days ({$incoming} -> {$prev}).";
-	return dragon_break_create_snapshot($name, $notes);
+	return dragon_break_create_playthrough($name, $notes);
 }
 
 ?>

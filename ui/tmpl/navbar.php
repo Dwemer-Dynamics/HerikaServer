@@ -391,7 +391,7 @@ $serverLogoFile = $isDevBuild ? 'serverlogodev.png' : 'serverlogo.png';
                     <li><hr class="dropdown-divider"></li>
                     <li><h6 class="dropdown-header">Database Controls</h6></li> <li>
                     <?php
-                    // One entry point for snapshots, storage and database tools.
+                    // One entry point for playthroughs, storage and database tools.
                     $navStorageDashboardFile = dirname(__DIR__, 3) . DIRECTORY_SEPARATOR . 'Dwemer-Dashboard'
                         . DIRECTORY_SEPARATOR . 'data_manager.php';
                     $navStorageAvailable = is_file($navStorageDashboardFile) && is_file(dirname($navStorageDashboardFile) . '/lib/storage_fragment.php');
