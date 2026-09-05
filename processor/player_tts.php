@@ -40,6 +40,7 @@ if (!class_exists('Player')) {
 if (!class_exists('TTSConnector')) {
     require_once(__DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_connector.class.php");
 }
+require_once(__DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_filter_presets.php");
 
 $origTTS = $GLOBALS["TTSFUNCTION"] ?? '';
 $hadTtsFunctionAlias = array_key_exists("TTS_FUNCTION", $GLOBALS);
@@ -55,6 +56,8 @@ $oldPatchOverrideVoice = $GLOBALS["PATCH_OVERRIDE_VOICE"] ?? null;
 $oldPatchOverrideVoiceId = $GLOBALS["PATCH_OVERRIDE_VOICE_ID"] ?? null;
 $oldPatchOverrideLanguage = $GLOBALS["PATCH_OVERRIDE_TTS_LANGUAGE"] ?? null;
 $oldPatchOverrideTtsOptions = $GLOBALS["PATCH_OVERRIDE_TTS_OPTIONS"] ?? null;
+$hadActiveTtsFilterPreset = array_key_exists('CHIM_TTS_FILTER_PRESET_ID', $GLOBALS);
+$oldActiveTtsFilterPreset = $GLOBALS['CHIM_TTS_FILTER_PRESET_ID'] ?? null;
 
 try {
     $player = new Player();
@@ -64,6 +67,7 @@ try {
     $connectorId = intval($player->get('tts_connector_id') ?? 0);
     $currentConnector = $connectorId > 0 ? $ttsConnector->getById($connectorId) : null;
     $hasPlayerTtsConnector = $currentConnector && strtolower(trim(strval($currentConnector['driver'] ?? 'none'))) !== 'none';
+    setActiveTtsFilterPreset($player->get('tts_filter_preset') ?? 'none');
 
     if ($hasPlayerTtsConnector) {
         $ttsConnector->setOldGlobals($currentConnector);
@@ -171,6 +175,12 @@ try {
         $GLOBALS["PATCH_OVERRIDE_TTS_OPTIONS"] = $oldPatchOverrideTtsOptions;
     } else {
         unset($GLOBALS["PATCH_OVERRIDE_TTS_OPTIONS"]);
+    }
+
+    if ($hadActiveTtsFilterPreset) {
+        setActiveTtsFilterPreset($oldActiveTtsFilterPreset, true);
+    } else {
+        clearActiveTtsFilterPreset();
     }
 
     $GLOBALS["TTSFUNCTION"] = $origTTS;

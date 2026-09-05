@@ -14,6 +14,7 @@ require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPA
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "llm_connector.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "player.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_connector.class.php");
+require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_filter_presets.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "data_functions.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "player_diary_connector.php");
 
@@ -68,6 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_player'])) {
         $player->set('tts_voice_override', trim(strval($_POST['tts_voice_override'] ?? '')));
         $player->set('tts_voice_id_override', trim(strval($_POST['tts_voice_id_override'] ?? '')));
         $player->set('tts_language_override', trim(strval($_POST['tts_language_override'] ?? '')));
+        $player->set('tts_filter_preset', normalizeTtsFilterPresetId($_POST['tts_filter_preset'] ?? 'none'));
         $player->set('tts_elevenlabs_model_id', trim(strval($_POST['tts_elevenlabs_model_id'] ?? '')));
         $player->set('tts_elevenlabs_speed', trim(strval($_POST['tts_elevenlabs_speed'] ?? '')));
         $player->set('tts_elevenlabs_stability', trim(strval($_POST['tts_elevenlabs_stability'] ?? '')));
@@ -108,6 +110,15 @@ $playerTtsConnectorId = trim(strval($allPlayerData['tts_connector_id'] ?? ''));
 $playerTtsVoiceId = strval($allPlayerData['tts_voice_override'] ?? '');
 $playerTtsVoiceIdOverride = strval($allPlayerData['tts_voice_id_override'] ?? '');
 $playerTtsLanguageOverride = strval($allPlayerData['tts_language_override'] ?? '');
+$playerTtsFilterPresets = ttsFilterPresetOptions(true);
+if (!is_array($playerTtsFilterPresets)) {
+    $playerTtsFilterPresets = [];
+}
+$playerTtsFilterPreset = normalizeTtsFilterPresetId($allPlayerData['tts_filter_preset'] ?? 'none');
+if (!isset($playerTtsFilterPresets[$playerTtsFilterPreset])) {
+    $playerTtsFilterPreset = 'none';
+}
+$playerTtsFilterPresetDesc = strval($playerTtsFilterPresets[$playerTtsFilterPreset]['description'] ?? '');
 $playerTtsElevenModelId = strval($allPlayerData['tts_elevenlabs_model_id'] ?? '');
 $playerTtsElevenSpeed = strval($allPlayerData['tts_elevenlabs_speed'] ?? '');
 $playerTtsElevenStability = strval($allPlayerData['tts_elevenlabs_stability'] ?? '');
@@ -1234,6 +1245,179 @@ if (!$isEmbed) {
                 <label for="tts_voice_override">VoiceID</label>
                 <input type="text" id="tts_voice_override" name="tts_voice_override" value="<?php echo htmlspecialchars($playerTtsVoiceId); ?>" placeholder="TheNarrator">
                 <span class="hint">Dedicated voice identifier used for Player TTS.</span>
+
+                <label for="tts_filter_preset">Voice Filter</label>
+                <div class="voice-filter-row">
+                    <select id="tts_filter_preset" name="tts_filter_preset" aria-describedby="tts_filter_preset_hint tts_filter_preset_desc">
+                        <?php foreach ($playerTtsFilterPresets as $presetKey => $presetRow): ?>
+                            <?php
+                                $presetOptionId = strval(is_array($presetRow) ? ($presetRow['id'] ?? $presetKey) : $presetKey);
+                                $presetOptionLabel = trim(strval(is_array($presetRow) ? ($presetRow['label'] ?? '') : ''));
+                                if ($presetOptionLabel === '') { $presetOptionLabel = $presetOptionId; }
+                                $presetOptionDesc = strval(is_array($presetRow) ? ($presetRow['description'] ?? '') : '');
+                            ?>
+                            <option value="<?php echo htmlspecialchars($presetOptionId); ?>" data-filter-desc="<?php echo htmlspecialchars($presetOptionDesc); ?>" <?php echo ($playerTtsFilterPreset === $presetOptionId) ? 'selected' : ''; ?>>
+                                <?php echo htmlspecialchars($presetOptionLabel); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button type="button" id="tts_filter_preview_btn" class="voice-filter-play" title="Play the sample line with this voice filter" aria-label="Play the sample line with this voice filter" aria-describedby="tts_filter_preview_status">
+                        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+                            <path d="M8.52 2.18 4.93 5.05H2.32a.8.8 0 0 0-.8.8v4.3c0 .44.36.8.8.8h2.61l3.59 2.87a.6.6 0 0 0 .98-.47V2.65a.6.6 0 0 0-.98-.47z"/>
+                            <path d="M11.66 5.36a.7.7 0 0 0-.9 1.07 2.03 2.03 0 0 1 0 3.14.7.7 0 0 0 .9 1.07 3.43 3.43 0 0 0 0-5.28z"/>
+                        </svg>
+                        <span class="voice-filter-spinner" aria-hidden="true"></span>
+                    </button>
+                </div>
+                <audio id="tts_filter_preview_audio" class="voice-filter-audio" controls preload="none" aria-label="Voice filter sample"></audio>
+                <span class="hint" id="tts_filter_preset_hint">Effect applied to everything the Player speaks. Presets are fixed and cannot be edited.</span>
+                <span class="hint voice-filter-desc" id="tts_filter_preset_desc" role="status" aria-live="polite"><?php echo htmlspecialchars($playerTtsFilterPresetDesc); ?></span>
+                <span class="hint voice-filter-status" id="tts_filter_preview_status" role="status" aria-live="polite"></span>
+                <script>
+                (function () {
+                    const select = document.getElementById('tts_filter_preset');
+                    const desc = document.getElementById('tts_filter_preset_desc');
+                    const playBtn = document.getElementById('tts_filter_preview_btn');
+                    const statusLine = document.getElementById('tts_filter_preview_status');
+                    const audio = document.getElementById('tts_filter_preview_audio');
+                    const connectorSelect = document.getElementById('tts_connector_id');
+                    const voiceInput = document.getElementById('tts_voice_override');
+                    if (!select || !desc || !playBtn || !statusLine || !audio) return;
+                    if (select.dataset.voiceFilterBound === '1') return;
+                    select.dataset.voiceFilterBound = '1';
+
+                    const PREVIEW_ENDPOINT = <?php echo json_encode($webRoot . '/ui/api/npc_voice_filter_preview.php'); ?>;
+                    let previewKey = '';
+                    let requestToken = 0;
+                    let pending = false;
+
+                    function syncDescription() {
+                        const option = select.options[select.selectedIndex];
+                        desc.textContent = option ? (option.getAttribute('data-filter-desc') || '') : '';
+                    }
+
+                    function currentFields() {
+                        return {
+                            tts_connector_id: connectorSelect ? String(connectorSelect.value || '') : '',
+                            voiceid: voiceInput ? String(voiceInput.value || '').trim() : '',
+                            tts_filter_preset: String(select.value || '')
+                        };
+                    }
+
+                    function fieldsKey(fields) {
+                        return JSON.stringify([fields.tts_connector_id, fields.voiceid, fields.tts_filter_preset]);
+                    }
+
+                    function setStatus(message, isError) {
+                        statusLine.textContent = message;
+                        statusLine.classList.toggle('is-error', !!isError);
+                    }
+
+                    function setBusy(busy) {
+                        pending = busy;
+                        playBtn.disabled = busy;
+                        playBtn.classList.toggle('is-loading', busy);
+                        playBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
+                    }
+
+                    // A generated sample only matches the connector, VoiceID and filter it was made from.
+                    function discardPreview() {
+                        try { audio.pause(); } catch (err) {}
+                        audio.removeAttribute('src');
+                        audio.classList.remove('is-ready');
+                        previewKey = '';
+                        requestToken++;
+                        setStatus('', false);
+                    }
+
+                    [connectorSelect, voiceInput, select].forEach(function (field) {
+                        if (!field) return;
+                        field.addEventListener('change', discardPreview);
+                        field.addEventListener('input', discardPreview);
+                    });
+                    select.addEventListener('change', syncDescription);
+                    syncDescription();
+
+                    // Reveal the player once there is a generated sample to start, pause and seek.
+                    function playPreview() {
+                        audio.classList.add('is-ready');
+                        try { audio.currentTime = 0; } catch (err) {}
+                        const started = audio.play();
+                        if (!started || typeof started.then !== 'function') {
+                            setStatus('Playing sample.', false);
+                            return;
+                        }
+                        started.then(function () {
+                            setStatus('Playing sample.', false);
+                        }).catch(function () {
+                            if (audio.error) {
+                                setStatus('The sample audio could not be played.', true);
+                                return;
+                            }
+                            // Autoplay was blocked: the sample is loaded, so the player below can start it.
+                            setStatus('Sample ready. Use the player to listen.', false);
+                        });
+                    }
+
+                    playBtn.addEventListener('click', function () {
+                        if (pending) return;
+                        const fields = currentFields();
+                        if (fields.tts_connector_id === '') {
+                            setStatus('Select a TTS connector before playing a sample.', true);
+                            return;
+                        }
+                        if (fields.voiceid === '') {
+                            setStatus('Enter a VoiceID before playing a sample.', true);
+                            return;
+                        }
+                        if (previewKey !== '' && previewKey === fieldsKey(fields) && audio.getAttribute('src')) {
+                            playPreview();
+                            return;
+                        }
+                        discardPreview();
+                        const token = ++requestToken;
+                        setBusy(true);
+                        setStatus('Generating sample…', false);
+                        const body = new FormData();
+                        body.append('tts_connector_id', fields.tts_connector_id);
+                        body.append('voiceid', fields.voiceid);
+                        body.append('tts_filter_preset', fields.tts_filter_preset);
+                        fetch(PREVIEW_ENDPOINT, { method: 'POST', body: body, credentials: 'same-origin' })
+                            .then(function (response) {
+                                return response.json().catch(function () {
+                                    throw new Error('The sample could not be generated. Try again.');
+                                }).then(function (data) {
+                                    if (!response.ok || !data || data.ok !== true || !data.audio_url) {
+                                        throw new Error((data && data.error) ? String(data.error) : 'The sample could not be generated. Try again.');
+                                    }
+                                    return data;
+                                });
+                            })
+                            .then(function (data) {
+                                if (token !== requestToken) return;
+                                previewKey = fieldsKey(fields);
+                                audio.src = String(data.audio_url);
+                                playPreview();
+                            })
+                            .catch(function (err) {
+                                if (token !== requestToken) return;
+                                previewKey = '';
+                                audio.removeAttribute('src');
+                                audio.classList.remove('is-ready');
+                                setStatus(err && err.message ? err.message : 'The sample could not be generated. Try again.', true);
+                            })
+                            .then(function () {
+                                setBusy(false);
+                            });
+                    });
+
+                    audio.addEventListener('error', function () {
+                        if (audio.getAttribute('src')) {
+                            setStatus('The sample audio could not be played.', true);
+                        }
+                    });
+                })();
+                </script>
 
                 <div id="player_tts_elevenlabs_panel" class="player-provider-panel" style="display:none;">
                     <h3>ElevenLabs Player Overrides</h3>

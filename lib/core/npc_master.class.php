@@ -3,6 +3,7 @@
 if (!function_exists('chimParseStableFormReference')) {
     require_once(__DIR__ . DIRECTORY_SEPARATOR . "game_plugins.php");
 }
+require_once(__DIR__ . DIRECTORY_SEPARATOR . "tts_filter_presets.php");
 
 if (!function_exists('herikaRolemasterStateToBool')) {
     function herikaRolemasterStateToBool($value)
@@ -738,7 +739,29 @@ class NpcMaster
         }
 
         if (isset($data['metadata']) && is_array($data['metadata'])) {
-            $data['metadata'] = json_encode($data['metadata'], JSON_UNESCAPED_UNICODE);
+            $presetValue = null;
+            $hasPreset = false;
+            foreach ($data['metadata'] as $metadataKey => $metadataValue) {
+                if (strcasecmp(strval($metadataKey), 'tts_filter_preset') === 0) {
+                    $presetValue = $metadataValue;
+                    $hasPreset = true;
+                    break;
+                }
+            }
+
+            $data['metadata'] = $hasPreset
+                ? mergeTtsFilterPresetIntoMetadata($data['metadata'], $presetValue)
+                : json_encode($data['metadata'], JSON_UNESCAPED_UNICODE);
+        } elseif (isset($data['metadata']) && is_string($data['metadata'])) {
+            $decodedMetadata = json_decode($data['metadata'], true);
+            if (is_array($decodedMetadata)) {
+                foreach ($decodedMetadata as $metadataKey => $metadataValue) {
+                    if (strcasecmp(strval($metadataKey), 'tts_filter_preset') === 0) {
+                        $data['metadata'] = mergeTtsFilterPresetIntoMetadata($decodedMetadata, $metadataValue);
+                        break;
+                    }
+                }
+            }
         }
 
         return $data;
@@ -1022,6 +1045,7 @@ class NpcMaster
 
     public function setOldGlobalsFromCurrentNpcData($currentNpcData)
     {
+        clearActiveTtsFilterPreset();
 
         if (isset($currentNpcData['npc_name'])) {
             $GLOBALS['HERIKA_NAME'] = $currentNpcData['npc_name'];
@@ -1106,6 +1130,8 @@ class NpcMaster
 
         // Decode metadata and extended_data if available
         $metadata = json_decode($currentNpcData['metadata'] ?? '{}', true);
+        $presetId = is_array($metadata) ? ($metadata['tts_filter_preset'] ?? '') : '';
+        setActiveTtsFilterPreset($presetId);
         $narratorManagedKeys = [
             'REMOVE_ASTERISKS_FROM_OUTPUT',
             'REMOVE_ASTERISKS_FROM_PLAYER_INPUT',
@@ -1118,6 +1144,9 @@ class NpcMaster
         ];
         if (is_array($metadata)) {
             foreach ($metadata as $key => $value) {
+                if (strcasecmp(strval($key), 'tts_filter_preset') === 0) {
+                    continue;
+                }
                 if (in_array(strtoupper((string)$key), $narratorManagedKeys, true)) {
                     continue;
                 }
