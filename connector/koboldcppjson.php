@@ -340,13 +340,12 @@ class koboldcppjson
                     }
                 }
                 // workaround for some LLMs that return an array of strings for the dialogue in the JSON response.
-                if (is_array($partialResult[0]["message"])) {
-                    $mangledBuffer = str_replace($this->_extractedbuffer, "", implode(" ",$partialResult[0]["message"]));
-                } else {
-                    $mangledBuffer = str_replace($this->_extractedbuffer, "", $partialResult[0]["message"]);
-                }
+                $currentMessage = is_array($partialResult[0]["message"])
+                    ? implode(" ", $partialResult[0]["message"])
+                    : $partialResult[0]["message"];
+                $mangledBuffer = __jpd_extract_incremental_message($this->_extractedbuffer, $currentMessage);
                 // echo "*{$this->_jsonBuffer}".PHP_EOL;
-                $this->_extractedbuffer=$partialResult[0]["message"];
+                $this->_extractedbuffer=$currentMessage;
                 if (isset($partialResult[0]["listener"])) {
                     if (isset($partialResult[0]["action"])&&($partialResult[0]["action"]=="Talk")&& lazyEmpty($partialResult[0]["listener"]) && !lazyEmpty($partialResult[0]["target"]))
                         $GLOBALS["SCRIPTLINE_LISTENER"]=$partialResult[0]["target"];
