@@ -4,8 +4,126 @@ use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../../lib/rolemaster_bored.php';
 
+final class RolemasterBoredActivityDb
+{
+    public array $queries = [];
+    private array $results;
+
+    public function __construct(array $results)
+    {
+        $this->results = $results;
+    }
+
+    public function fetchOne(string $query)
+    {
+        $this->queries[] = $query;
+        return array_shift($this->results) ?? false;
+    }
+}
+
 final class RolemasterBoredRoutingTest extends TestCase
 {
+    public function testActivitySnapshotUsesLatestEventAndSpeechPositions(): void
+    {
+        $db = new RolemasterBoredActivityDb([[
+            'event_rowid' => '42',
+            'speech_rowid' => '900',
+        ]]);
+
+        $this->assertSame(
+            ['event_rowid' => 42, 'speech_rowid' => 900],
+            chimBoredEventCaptureActivitySnapshot($db)
+        );
+        $this->assertStringContainsString('MAX(rowid)', $db->queries[0]);
+        $this->assertStringContainsString('FROM speech', $db->queries[0]);
+        $this->assertStringContainsString('AS speech_rowid', $db->queries[0]);
+    }
+
+    public function testActivitySnapshotRejectsFailedQuery(): void
+    {
+        $db = new RolemasterBoredActivityDb([false]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Unable to capture a valid bored activity snapshot');
+
+        chimBoredEventCaptureActivitySnapshot($db);
+    }
+
+    public function testActivitySnapshotRejectsIncompleteResult(): void
+    {
+        $db = new RolemasterBoredActivityDb([[
+            'event_rowid' => '42',
+        ]]);
+
+        $this->expectException(RuntimeException::class);
+
+        chimBoredEventCaptureActivitySnapshot($db);
+    }
+
+    public function testSupersedingConversationActivityIsReturned(): void
+    {
+        $db = new RolemasterBoredActivityDb([[
+            'activity_rowid' => '45',
+            'activity_type' => 'chat',
+        ]]);
+
+        $this->assertSame(
+            ['rowid' => 45, 'type' => 'chat'],
+            chimBoredEventFindSupersedingActivity($db, [
+                'event_rowid' => 42,
+                'speech_rowid' => 900,
+            ])
+        );
+        $this->assertStringContainsString('rowid > 42', $db->queries[0]);
+        $this->assertStringContainsString("type = 'user_input'", $db->queries[0]);
+        $this->assertStringContainsString("type = 'chat'", $db->queries[0]);
+        $this->assertStringContainsString("IN ('emitted', 'spoken')", $db->queries[0]);
+        $this->assertStringContainsString('FROM speech', $db->queries[0]);
+        $this->assertStringContainsString('rowid > 900', $db->queries[0]);
+    }
+
+    public function testSupersedingSpeechActivityIsReturned(): void
+    {
+        $db = new RolemasterBoredActivityDb([[
+            'activity_rowid' => '91',
+            'activity_type' => 'speech',
+        ]]);
+
+        $this->assertSame(
+            ['rowid' => 91, 'type' => 'speech'],
+            chimBoredEventFindSupersedingActivity($db, [
+                'event_rowid' => 42,
+                'speech_rowid' => 900,
+            ])
+        );
+    }
+
+    public function testMissingSupersedingActivityReturnsNull(): void
+    {
+        $db = new RolemasterBoredActivityDb([[
+            'activity_rowid' => null,
+            'activity_type' => null,
+        ]]);
+
+        $this->assertNull(chimBoredEventFindSupersedingActivity($db, [
+            'event_rowid' => 42,
+            'speech_rowid' => 900,
+        ]));
+    }
+
+    public function testActivityValidationRejectsFailedQuery(): void
+    {
+        $db = new RolemasterBoredActivityDb([false]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Unable to validate the bored activity snapshot');
+
+        chimBoredEventFindSupersedingActivity($db, [
+            'event_rowid' => 42,
+            'speech_rowid' => 900,
+        ]);
+    }
+
     public function testBoredEventChanceUsesZeroBasedPercentageBoundary(): void
     {
         $this->assertFalse(chimBoredEventChancePasses(0, 0));
