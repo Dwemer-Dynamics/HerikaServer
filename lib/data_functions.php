@@ -5731,7 +5731,7 @@ function snapshot_response_prompt_debug_data($connectorData = null) {
     }
 }
 
-function chimFindSupersedingUserInput($db, $requestTimestamp)
+function chimFindSupersedingUserInput($db, $requestTimestamp, $currentRequestType = '')
 {
     $requestTimestamp = trim((string)$requestTimestamp);
     if (!is_object($db) || !preg_match('/^\d+$/', $requestTimestamp)) {
@@ -5743,12 +5743,23 @@ function chimFindSupersedingUserInput($db, $requestTimestamp)
         $requestTimestamp = '0';
     }
 
+    $currentRequestType = trim((string)$currentRequestType);
+    $isDirectPlayerInput = in_array(
+        $currentRequestType,
+        ['inputtext', 'inputtext_s', 'ginputtext', 'ginputtext_s', 'narrator_inputtext'],
+        true
+    );
+    $instructionFilter = $isDirectPlayerInput
+        ? "AND COALESCE(data, '')<>'instruction' "
+        : '';
+
     try {
         $rows = $db->fetchAll(
             "SELECT rowid, ts FROM ("
-            . "SELECT rowid, type, ts FROM eventlog ORDER BY rowid DESC LIMIT 100"
+            . "SELECT rowid, type, ts, data FROM eventlog ORDER BY rowid DESC LIMIT 100"
             . ") AS recent_events "
             . "WHERE type='user_input' AND ts>{$requestTimestamp} "
+            . $instructionFilter
             . "ORDER BY rowid DESC LIMIT 1"
         );
     } catch (Throwable $e) {
@@ -5805,7 +5816,11 @@ function call_llm_internal() {
         $connectionHandler,
         &$connectionOpened
     ) {
-        $supersedingInput = chimFindSupersedingUserInput($db, $gameRequest[1] ?? '');
+        $supersedingInput = chimFindSupersedingUserInput(
+            $db,
+            $gameRequest[1] ?? '',
+            $gameRequest[0] ?? ''
+        );
         if ($supersedingInput === null) {
             return;
         }

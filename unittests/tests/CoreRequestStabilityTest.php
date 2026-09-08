@@ -146,15 +146,25 @@ final class CoreRequestStabilityTest extends TestCase
     public function testSupersedingUserInputLookupUsesStrictRequestTimestamp(): void
     {
         $db = new SupersedingUserInputTestDb();
-        $db->rows = [['rowid' => '42', 'ts' => '1002']];
+        $db->rows = [['rowid' => '42', 'ts' => '1002', 'data' => 'inputtext']];
 
-        $result = chimFindSupersedingUserInput($db, '1001');
+        $result = chimFindSupersedingUserInput($db, '1001', 'instruction');
 
         $this->assertSame(['rowid' => '42', 'ts' => '1002'], $result);
         $this->assertCount(1, $db->queries);
         $this->assertStringContainsString('FROM eventlog ORDER BY rowid DESC LIMIT 100', $db->queries[0]);
         $this->assertStringContainsString("type='user_input' AND ts>1001", $db->queries[0]);
+        $this->assertStringNotContainsString("COALESCE(data, '')<>'instruction'", $db->queries[0]);
         $this->assertStringContainsString('ORDER BY rowid DESC LIMIT 1', $db->queries[0]);
+    }
+
+    public function testDirectPlayerInputLookupExcludesAutomaticInstruction(): void
+    {
+        $db = new SupersedingUserInputTestDb();
+        $db->rows = [['rowid' => '42', 'ts' => '1002']];
+
+        $this->assertSame(['rowid' => '42', 'ts' => '1002'], chimFindSupersedingUserInput($db, '1001', 'inputtext'));
+        $this->assertStringContainsString("COALESCE(data, '')<>'instruction'", $db->queries[0]);
     }
 
     public function testSupersedingUserInputLookupRejectsInvalidTimestampWithoutQuery(): void
