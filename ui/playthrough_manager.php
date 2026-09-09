@@ -776,7 +776,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     </div>
 
     <div class="page-header">
-        <?php if ($ptmFragment): ?><h2>Playthroughs and cleanup</h2><?php else: ?><h1>Playthrough Manager</h1><?php endif; ?>
+        <?php if ($ptmFragment): ?><h2>Playthroughs and cleanup</h2><?php else: ?><h1>Playthrough Management</h1><?php endif; ?>
         <div style="font-size: 0.95em; color: #ccc; margin-bottom: 10px;">Save or restore playthroughs. Restoring first saves your current progress over the active playthrough.</div>
 
         <details class="storage-help"><summary>How playthroughs work</summary>
@@ -854,7 +854,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
 
     <div class="content-grid">
         <div class="content-section">
-            <h2>📦 Save playthrough</h2>
+            <h2>📦 Save current playthrough</h2>
             <div class="help-text" style="margin-bottom: 12px;">
                 Saves a copy of the active playthrough as a new saved playthrough. The active playthrough keeps running unchanged.
             </div>
@@ -866,7 +866,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                     <label for="notes">Notes (optional)</label><br>
                     <input type="text" id="notes" name="notes" style="width: 100%; margin: 6px 0;" placeholder="e.g., Level 25, just finished main quest">
                     <div class="button-group">
-                        <button type="submit" class="button" style="background-color: rgb(1 53 166 / 90%); color: #fff;">💾 Save Playthrough</button>
+                        <button type="submit" class="button" style="background-color: rgb(1 53 166 / 90%); color: #fff;">💾 Save current playthrough</button>
                     </div>
                 </form>
         </div>
@@ -972,7 +972,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         </div>
         <div class="retention-note" style="margin-bottom: 4px;">
             Your current playthrough's memories, relationships, diaries, quests and files stay intact.
-            Playthroughs are saved copies of CHIM data — not Skyrim saves. Deleting one removes that whole copy.
+            A playthrough is a saved copy of CHIM data. Restore it alongside the matching Skyrim save. Deleting a copy permanently removes its stored data.
         </div>
 
         <div id="retention-status" role="status" aria-live="polite" class="retention-status"></div>
@@ -1017,7 +1017,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                     <legend>Automatic playthroughs (Dragon Breaks)</legend>
                     <div class="retention-row">
                         <input type="checkbox" id="ret-pt-enabled" name="playthroughs_enabled" disabled>
-                        <label for="ret-pt-enabled">Delete old automatic playthroughs</label>
+                        <label for="ret-pt-enabled">Delete old automatic recovery copies</label>
                     </div>
                     <div class="retention-row">
                         <label for="ret-pt-keep">Keep the newest</label>

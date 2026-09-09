@@ -100,7 +100,7 @@ function ptr_identity($conn): string {
 // Each preview is limited to 1,000 diagnostics rows per table and three automatic
 // playthroughs. Row versions pin the exact data the user agreed to remove.
 function ptr_preview($conn, array $settings): array {
-    $plan = ['identity' => ptr_identity($conn), 'created' => time(), 'diagnostics' => [], 'playthroughs' => [],
+    $plan = ['identity' => ptr_identity($conn), 'created' => time(), 'diagnostics' => [], 'playthroughs' => [], 'more_possible' => false,
         'events' => ['older_rows' => 0, 'cutoff_gamets' => null,
             'blocked_reason' => 'CHIM cannot yet confirm that these events have finished being turned into NPC memories.'],
         'message' => 'This is one cleanup round. Space from deleted rows becomes reusable inside the database, but the files on disk may not shrink.'];
@@ -111,14 +111,16 @@ function ptr_preview($conn, array $settings): array {
             $stamp = $column === 'created_at' ? 'EXTRACT(EPOCH FROM created_at)' : $column;
             // responselog is also a delivery queue: unsent entries are never eligible.
             $delivered = $table === 'responselog' ? 'AND sent > 0' : '';
-            $excess = 0;
-            if ($settings['diagnostic_max_mb'] > 0) {
-                $bytes = pg_fetch_result(ptr_query($conn, "SELECT COALESCE(SUM(pg_column_size(t)),0) FROM public.{$table} t"), 0, 0);
-                $excess = max(0, (int)$bytes - $settings['diagnostic_max_mb'] * 1048576);
-            }
             $rows = pg_fetch_all(ptr_query($conn, "SELECT rowid, xmin::text AS version, pg_column_size(t) AS bytes, {$stamp} AS stamp
                 FROM public.{$table} t WHERE {$stamp} > 0 AND {$stamp} < $1 {$delivered}
                 ORDER BY {$column}, rowid LIMIT 1000", [time() - 86400])) ?: [];
+            $excess = 0;
+            // If age already selects this entire batch, measuring the whole table
+            // cannot change the result. Empty batches need no size scan either.
+            if ($settings['diagnostic_max_mb'] > 0 && $rows && (float)$rows[count($rows) - 1]['stamp'] >= $cutoff) {
+                $bytes = pg_fetch_result(ptr_query($conn, "SELECT COALESCE(SUM(pg_column_size(t)),0) FROM public.{$table} t"), 0, 0);
+                $excess = max(0, (int)$bytes - $settings['diagnostic_max_mb'] * 1048576);
+            }
             $selected = []; $size = 0;
             foreach ($rows as $row) {
                 if ((float)$row['stamp'] >= $cutoff && $excess <= 0) break;
@@ -127,6 +129,7 @@ function ptr_preview($conn, array $settings): array {
                 $excess -= (int)$row['bytes'];
             }
             $plan['diagnostics'][] = ['table' => $table, 'rows' => count($selected), 'bytes_estimate' => $size, 'selected' => $selected];
+            if (count($selected) === 1000) $plan['more_possible'] = true;
         }
     }
     if ($settings['playthroughs_enabled']) {
@@ -138,7 +141,10 @@ function ptr_preview($conn, array $settings): array {
             // Automatic cleanup only operates on explicitly tagged schema playthroughs.
             if ($profile['storage_type'] !== 'schema' || !str_starts_with((string)$profile['schema_name'], 'chim_profile_')) continue;
             $plan['playthroughs'][] = ['id' => $profile['id'], 'name' => $profile['name'], 'bytes' => $profile['bytes']];
-            if (count($plan['playthroughs']) >= 3) break;
+            if (count($plan['playthroughs']) >= 3) {
+                $plan['more_possible'] = true;
+                break;
+            }
         }
     }
     if ($settings['event_days'] > 0 && ptr_exists($conn, 'public.eventlog')) {
@@ -188,8 +194,10 @@ function ptr_execute($conn, array $plan): array {
             $deleted += pg_affected_rows($res);
         }
         foreach ($plan['playthroughs'] as $playthrough) ptr_delete_playthrough($conn, $playthrough['id']);
-        $result = ['at' => gmdate('c'), 'rows' => $deleted, 'playthroughs' => count($plan['playthroughs']),
-            'message' => 'Cleanup finished. Your current playthrough and files were left alone.'];
+        $changed = $deleted > 0 || count($plan['playthroughs']) > 0;
+        $result = ['at' => gmdate('c'), 'status' => $changed ? 'succeeded' : 'no_work',
+            'rows' => $deleted, 'playthroughs' => count($plan['playthroughs']), 'more_possible' => $plan['more_possible'] ?? false,
+            'message' => $changed ? 'Cleanup finished. Events, NPC memories and your active playthrough were kept.' : 'Nothing is eligible for cleanup under the saved rules.'];
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', $result);
         ptr_query($conn, 'COMMIT');
         return $result;
@@ -215,8 +223,8 @@ function ptr_tick($conn): void {
         $plan = ptr_preview($conn, $settings);
         ptr_execute($conn, $plan);
     } catch (Throwable $e) {
-        ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', ['at' => gmdate('c'), 'rows' => 0, 'playthroughs' => 0,
-            'message' => 'Automatic cleanup did not finish, so nothing was deleted. You can try it yourself with Preview cleanup.']);
+        ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', ['at' => gmdate('c'), 'status' => 'failed', 'rows' => 0, 'playthroughs' => 0,
+            'message' => 'Cleanup failed. Nothing was deleted. Use Preview cleanup to try again.']);
         Logger::error('Playthrough retention: ' . $e->getMessage());
     } finally {
         @pg_query($conn, 'RESET statement_timeout');

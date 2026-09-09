@@ -145,8 +145,11 @@
         if (!lastRunEl) return;
         if (!lr || typeof lr !== 'object') { lastRunEl.textContent = 'No cleanup has run yet.'; return; }
         var txt = lr.at ? String(lr.at) + ' — ' : '';
+        var outcomes = {succeeded: 'Cleanup finished', failed: 'Cleanup failed', no_work: 'Nothing eligible to remove'};
+        txt += (outcomes[lr.status] || 'Previous cleanup result') + '. ';
         txt += Number(lr.rows || 0).toLocaleString() + ' log rows and ' + Number(lr.playthroughs || 0).toLocaleString() + ' playthroughs deleted';
         if (lr.message) txt += '. ' + String(lr.message);
+        if (lr.more_possible) txt += ' Another cleanup round may be needed.';
         lastRunEl.textContent = txt;
     }
 
@@ -186,7 +189,7 @@
                 var btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'button btn-pin';
-                btn.textContent = isPinned ? 'Unprotect' : 'Protect';
+                btn.textContent = isPinned ? 'Remove protection' : 'Protect from deletion';
                 btn.setAttribute('aria-label', (isPinned ? 'Remove protection from playthrough ' : 'Protect playthrough ') + String(sn.name || sn.id));
                 btn.style.backgroundColor = isPinned ? '#333' : 'rgb(1 53 166 / 90%)';
                 btn.style.color = '#fff';
