@@ -218,110 +218,6 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
         width: 20%;
     }
 
-    /* Relationship history rows: compact per-change presentation.
-       Same palette and density as the CHIM home dashboard widget. */
-    .relationship-change-cell {
-        display: grid;
-        gap: 5px;
-        margin: 0;
-        padding: 0;
-        list-style: none;
-    }
-
-    .relationship-change-entry {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
-        gap: 8px;
-        align-items: baseline;
-        min-width: 0;
-    }
-
-    .relationship-change-delta {
-        min-width: 3.1em;
-        padding: 1px 6px;
-        border-radius: 4px;
-        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-        font-size: 0.92em;
-        font-weight: 700;
-        font-variant-numeric: tabular-nums;
-        text-align: center;
-        white-space: nowrap;
-    }
-
-    /* The sign carries the meaning, so colour is reinforcement only. */
-    .relationship-change-delta.is-up {
-        color: #7ee08a;
-        background: rgba(76, 175, 80, 0.14);
-        border: 1px solid rgba(126, 224, 138, 0.35);
-    }
-
-    .relationship-change-delta.is-down {
-        color: #ff8a80;
-        background: rgba(244, 67, 54, 0.14);
-        border: 1px solid rgba(255, 138, 128, 0.35);
-    }
-
-    .relationship-change-delta.is-type {
-        color: #f2bd7f;
-        background: rgba(242, 124, 17, 0.14);
-        border: 1px solid rgba(242, 189, 127, 0.35);
-        font-family: inherit;
-        font-size: 0.72em;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-    }
-
-    .relationship-change-entry-body {
-        display: block;
-        min-width: 0;
-    }
-
-    .relationship-change-reason {
-        display: block;
-        color: #e2e2e2;
-        line-height: 1.35;
-        overflow-wrap: anywhere;
-    }
-
-    .relationship-change-entry-meta {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        gap: 3px 6px;
-        margin-top: 2px;
-        font-size: 0.85em;
-        color: #929292;
-    }
-
-    .relationship-change-target {
-        color: #bdbdbd;
-        overflow-wrap: anywhere;
-    }
-
-    .relationship-change-arrow {
-        color: #6f6f6f;
-    }
-
-    .relationship-change-tier {
-        padding: 0 4px;
-        border: 1px solid #4a4033;
-        border-radius: 3px;
-        color: #d9c39a;
-    }
-
-    .relationship-change-sr {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        margin: -1px;
-        padding: 0;
-        overflow: hidden;
-        clip: rect(0 0 0 0);
-        clip-path: inset(50%);
-        white-space: nowrap;
-        border: 0;
-    }
-
     /* Responsive Table */
     @media (max-width: 768px) {
         .table-container {
@@ -441,6 +337,269 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
     }
 </style>
 <link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/hub-navigation.css?v=<?php echo filemtime(__DIR__ . DIRECTORY_SEPARATOR . 'css' . DIRECTORY_SEPARATOR . 'hub-navigation.css'); ?>">
+<style>
+    /*
+     * Compact Memories workspace.
+     *
+     * The roleplay navigation is compacted by the shared hub-navigation.css,
+     * so everything below is scoped to the memory tab (#memory-tab) and its
+     * overview band, leaving the other tabs on this page untouched. Loaded
+     * after hub-navigation.css so these overrides win on source order as well
+     * as specificity.
+     */
+
+    /* --- Memory tab fills the remaining viewport -------------------------- */
+    #memory-tab .table-container {
+        box-sizing: border-box;
+        /* main.css gives .table-container a 20px bottom margin, which would
+           sit as dead space between the last row and the footer. */
+        margin: 8px 0 0;
+        padding-top: 0;
+        overflow: auto;
+    }
+
+    /* Only worth pinning the tab to the viewport where there is a viewport
+       worth filling. Narrow screens keep the ordinary document flow and the
+       shared max-height, so the page scrolls as it always has. */
+    @media (min-width: 901px) {
+        /* :has() keeps this flex chain tied to the memory tab, so the event,
+           quest and embedded tabs keep their normal document flow when they
+           are active. Browsers without :has() simply keep the old layout. */
+
+        /* body carries min-height:100vh on top of a 64px top padding, which
+           would leave the page scrollable by the height of the navbar even
+           once the tab itself fits. */
+        body.hub-page:has(#memory-tab.active) {
+            min-height: 0;
+        }
+
+        body.hub-page:has(#memory-tab.active) > .container-fluid {
+            display: flex;
+            flex-direction: column;
+            /* Viewport minus the fixed navbar and the 20px fixed footer. */
+            height: calc(100vh - var(--hub-navbar-offset, 64px) - 24px);
+            min-height: 0;
+        }
+
+        body.hub-page:has(#memory-tab.active) > .container-fluid > .tab-container {
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        #memory-tab.active {
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        /* The table absorbs whatever the overview band leaves and scrolls
+           internally instead of pushing rows past the bottom of the viewport. */
+        #memory-tab .table-container {
+            /* Basis 0 rather than auto: with `auto` the flex base size is the
+               full height of every row, so the shrink pass leaves the container
+               short of the space actually available. */
+            flex: 1 1 0;
+            min-height: 160px;
+            max-height: none !important;
+        }
+    }
+
+    #memory-tab .table-container thead th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #232323;
+    }
+
+    /* --- Dense memory overview band --------------------------------------- */
+    /* Intro, configuration statuses, settings link, TXT2VEC warning and the
+       sync/delete actions, previously four tall stacked blocks. */
+    .memory-overview {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin: 8px 0 0;
+        padding: 8px 12px;
+        background: #1f1f1f;
+        border: 1px solid #3a3a3a;
+        border-left: 4px solid rgb(242, 124, 17);
+        border-radius: 6px;
+        font-size: 0.86em;
+    }
+
+    /* Heading and description sit beside the actions rather than above them,
+       which costs no extra height: the two buttons are shorter than the two
+       lines of description they sit next to. */
+    .memory-overview-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 6px 16px;
+    }
+
+    .memory-overview-main {
+        flex: 1 1 340px;
+        min-width: 0;
+    }
+
+    /* Statuses and the settings link share one strip below. */
+    .memory-overview-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .memory-overview-title {
+        margin: 0 0 2px;
+        color: rgb(242, 124, 17);
+        font-size: 1.1em;
+        word-spacing: 5px;
+    }
+
+    .memory-overview-desc {
+        margin: 0;
+        color: #f8f9fa;
+        line-height: 1.4;
+    }
+
+    .memory-overview-term {
+        color: rgb(242, 124, 17);
+        font-weight: bold;
+    }
+
+    .memory-status {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 7px;
+        max-width: 100%;
+        padding: 4px 9px;
+        background: #2a2a2a;
+        border: 1px solid #3a3a3a;
+        border-radius: 5px;
+    }
+
+    .memory-status-label {
+        color: rgb(242, 124, 17);
+        font-weight: bold;
+        white-space: nowrap;
+    }
+
+    .memory-status-url {
+        color: #c9c9c9;
+        overflow-wrap: anywhere;
+    }
+
+    /* Sized to sit in the status row it configures rather than beside the
+       sync/delete actions, which keeps the description column wide. */
+    .memory-status-link {
+        flex: 0 0 auto;
+        margin: 0;
+        padding: 5px 11px;
+        font-size: 0.95em;
+        white-space: nowrap;
+    }
+
+    /* The word carries the meaning, so colour is reinforcement only. */
+    .memory-status-pill {
+        padding: 2px 9px;
+        border: 1px solid;
+        border-radius: 999px;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .memory-status-pill.is-on {
+        color: #7ee2a0;
+        background: rgba(76, 175, 80, 0.14);
+        border-color: rgba(76, 175, 80, 0.5);
+    }
+
+    .memory-status-pill.is-off {
+        color: #ff9189;
+        background: rgba(244, 67, 54, 0.14);
+        border-color: rgba(244, 67, 54, 0.55);
+    }
+
+    .memory-status-warning {
+        min-width: 0;
+        margin: 0;
+        padding: 4px 9px;
+        background: #2a2a2a;
+        border: 1px solid #3a3a3a;
+        border-left: 3px solid rgb(242, 124, 17);
+        border-radius: 5px;
+        color: #f8f9fa;
+        line-height: 1.35;
+    }
+
+    .memory-status-warning strong {
+        color: rgb(242, 124, 17);
+    }
+
+    .memory-actions {
+        flex: 0 0 auto;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-left: auto;
+    }
+
+    .memory-actions .btn-base {
+        margin: 0;
+        padding: 7px 13px;
+        font-size: 14px;
+        font-weight: bold;
+    }
+
+    /* .btn-base clears the default outline, so restore a visible focus ring. */
+    #memory-tab .btn-base:focus-visible {
+        outline: 2px solid rgb(242, 124, 17);
+        outline-offset: 2px;
+    }
+
+    .memory-notice {
+        margin: 8px 0 0;
+        padding: 8px 12px;
+        border-radius: 5px;
+        color: #fff;
+        font-size: 0.88em;
+    }
+
+    .memory-notice.is-success {
+        background: #28a745;
+    }
+
+    .memory-notice.is-deleted {
+        background: #dc3545;
+    }
+
+    @media (max-width: 768px) {
+        .memory-actions {
+            width: 100%;
+            margin-left: 0;
+        }
+
+        .memory-actions .btn-base {
+            flex: 1 1 auto;
+            width: 100%;
+            text-align: center;
+        }
+
+        /* Grows to a full-width touch target alongside the stacked actions
+           instead of staying a 30px-tall inline chip. */
+        .memory-status-link {
+            flex: 1 1 100%;
+            padding: 9px 12px;
+            text-align: center;
+        }
+    }
+</style>
 <?php
 
 include(__DIR__.DIRECTORY_SEPARATOR."tmpl/navbar.php");
@@ -711,7 +870,7 @@ function getTimeColor($time) {
             // Add subtitle description
             echo "<div class='event-log-intro'>";
             echo "<span style='color: rgb(242, 124, 17); font-weight: bold;'>📝 Events:</span> ";
-            echo "<span style='color: #f8f9fa;'>Combined timeline of in-game events and relationship changes. Relationship history remains stored separately and is not copied into the Event Log or AI event context.</span>";
+            echo "<span style='color: #f8f9fa;'>Raw log of in-game events for inspection and, where applicable, AI context. Events used in prompts are filtered by relevance.</span>";
             echo "</div>";
 
             // Keep context guidance directly below the description so both scan as one compact introduction.
@@ -763,23 +922,12 @@ function getTimeColor($time) {
             $page = $eventLogPage;
             $offset = ($page - 1) * $limit;
             
-            $sourceWindow = $limit + $offset;
-            $eventResults = $db->fetchAll(
+            $results = $db->fetchAll(
                 "SELECT type, data, people, gamets, localts, ts, rowid
                  FROM eventlog a
                  WHERE $eventLogVisibleWhereClause
                  ORDER BY gamets DESC, ts DESC, localts DESC, rowid DESC
-                 LIMIT $sourceWindow"
-            );
-            $showRelationshipHistory = !in_array('relationship', $eventLogHiddenTypes, true);
-            $relationshipResults = $showRelationshipHistory
-                ? chimFetchRelationshipHistoryTimelineRows($db, $sourceWindow, 0, 0, 0, true)
-                : [];
-            $results = chimMergeTimelineRows(
-                $eventResults,
-                $relationshipResults,
-                $limit,
-                $offset
+                 LIMIT $limit OFFSET $offset"
             );
             
             $columnHeaders = [
@@ -791,18 +939,10 @@ function getTimeColor($time) {
             
             $mappedResults = array_map(function ($row) use ($columnHeaders) {
                 $mappedRow = [];
-                $isRelationshipHistory = ($row['source'] ?? '') === 'relationship_history';
                 // Add checkbox column first (PostgreSQL returns rowid in lowercase)
-                $mappedRow['☑'] = $isRelationshipHistory
-                    ? ''
-                    : '<input type="checkbox" class="event-checkbox" data-rowid="' . htmlspecialchars($row['rowid'] ?? '') . '" style="cursor: pointer; width: 18px; height: 18px;">';
+                $mappedRow['☑'] = '<input type="checkbox" class="event-checkbox" data-rowid="' . htmlspecialchars($row['rowid'] ?? '') . '" style="cursor: pointer; width: 18px; height: 18px;">';
                 
                 foreach ($row as $key => $value) {
-                    if ($key === 'changes') {
-                        // Structured relationship details back the compact Events cell below;
-                        // they are not a column, and they are not a scalar to escape.
-                        continue;
-                    }
                     if ($key === 'data' && function_exists('chimRenderNarratorRoleplayText')) {
                         $value = chimRenderNarratorRoleplayText($value);
                     }
@@ -815,13 +955,8 @@ function getTimeColor($time) {
                         $value = $dt->format('d-m-Y H:i:s');
                     }
                     
-                    // Relationship history gets the compact per-change presentation in the
-                    // web view only; the stored prose still backs the API and AI consumers.
-                    if ($key === 'data' && $isRelationshipHistory) {
-                        $value = chimRenderRelationshipChangeCellHtml($row['changes'] ?? [], (string)$value);
-                    }
                     // Special handling for chat events
-                    else if ($row['type'] === 'chat' && ($key === 'data' || $key === 'type')) {
+                    if ($row['type'] === 'chat' && ($key === 'data' || $key === 'type')) {
                         $value = '<span style="color:rgb(255, 255, 255);">' . htmlspecialchars($value ?? '') . '</span>';
                     } else {
                         $value = htmlspecialchars($value ?? '');
@@ -852,11 +987,9 @@ function getTimeColor($time) {
                         }
                         $mappedRow['People Present'] = htmlspecialchars($peoplePresent);
                     } else if ($key === 'rowid') {
-                        $mappedRow['Record'] = $isRelationshipHistory
-                            ? 'Relationship #' . intval($row['relationship_history_id'] ?? 0)
-                            : '<a class="icon-link" href="#" style="color: red !important;" onclick="deleteRowAndRefresh(\'eventlog\', ' . intval($value) . '); return false;">'
-                                . intval($value) . ' <i class="bi-trash" style="color: red !important;"></i></a>';
-                    } else if (in_array($key, ['people', 'ts', 'source', 'relationship_history_id'], true)) {
+                        $mappedRow['Record'] = '<a class="icon-link" href="#" style="color: red !important;" onclick="deleteRowAndRefresh(\'eventlog\', ' . intval($value) . '); return false;">'
+                            . intval($value) . ' <i class="bi-trash" style="color: red !important;"></i></a>';
+                    } else if ($key === 'people' || $key === 'ts') {
                         // Skip rendering raw people column; we show only 'People Present'
                         continue;
                     } else {
@@ -873,12 +1006,11 @@ function getTimeColor($time) {
             $prevPage = max(1, $page - 1);
             $nextPage = $page + 1;
             
-            // Get total count for pagination
-            $countQuery = "SELECT COUNT(*) as total FROM eventlog WHERE $eventLogVisibleWhereClause";
-            $countResult = $db->fetchAll($countQuery);
-            $totalRecords = intval($countResult[0]['total'] ?? 0);
-            if ($showRelationshipHistory) {
-                $totalRecords += chimCountRelationshipHistoryTimelineRows($db);
+            // Get total count for pagination from the per-type counts already
+            // fetched for the filter dropdown, avoiding another eventlog scan.
+            $totalRecords = 0;
+            foreach ($eventLogTypeOptions as $eventLogTypeOption) {
+                $totalRecords += intval($eventLogTypeOption['total'] ?? 0);
             }
             $totalPages = ceil($totalRecords / $limit);
             
@@ -980,7 +1112,6 @@ function getTimeColor($time) {
             let autoRefreshIntervalEventLog = null;
             let isLiveModeEventLog = " . ($isAutoRefresh ? 'true' : 'false') . ";
             let lastRowIdEventLog = 0;
-            let lastRelationshipHistoryIdEventLog = " . chimGetLatestRelationshipHistoryId($db) . ";
             let totalNewEventsEventLog = 0;
             const currentPageEventLog = $page;
             const currentLimitEventLog = $limit;
@@ -1059,7 +1190,6 @@ function getTimeColor($time) {
 
                 const apiParams = new URLSearchParams();
                 apiParams.set('since_rowid', String(sinceRowId));
-                apiParams.set('since_relationship_id', String(lastRelationshipHistoryIdEventLog));
                 apiParams.set('use_saved_filters', '1');
 
                 fetch(eventLogApiBaseUrl + '?' + apiParams.toString())
@@ -1076,13 +1206,8 @@ function getTimeColor($time) {
                                 const newRow = document.createElement('tr');
                                 newRow.style.backgroundColor = '#2d5a2d';
                                 
-                                const isRelationshipHistory = String(row['ROWID'] || '').startsWith('relationship:');
-
-                                // Relationship history is read-only here; deleting events must not alter relationship state.
                                 const checkboxTd = document.createElement('td');
-                                checkboxTd.innerHTML = isRelationshipHistory
-                                    ? ''
-                                    : '<input type=\"checkbox\" class=\"event-checkbox\" data-rowid=\"' + (row['ROWID'] || '') + '\" style=\"cursor: pointer; width: 18px; height: 18px;\" onclick=\"updateDeleteButton()\">';
+                                checkboxTd.innerHTML = '<input type=\"checkbox\" class=\"event-checkbox\" data-rowid=\"' + (row['ROWID'] || '') + '\" style=\"cursor: pointer; width: 18px; height: 18px;\" onclick=\"updateDeleteButton()\">';
                                 newRow.appendChild(checkboxTd);
                                 
                                 // Add data cells
@@ -1109,9 +1234,7 @@ function getTimeColor($time) {
                                 
                                 const td6 = document.createElement('td');
                                 const rowId = row['ROWID'] || '';
-                                td6.innerHTML = isRelationshipHistory
-                                    ? 'Relationship #' + String(rowId).split(':').pop()
-                                    : '<a class=\"icon-link\" href=\"#\" style=\"color: red !important;\" onclick=\"deleteRowAndRefresh(\'eventlog\', ' + JSON.stringify(rowId) + '); return false;\">' + rowId + ' <i class=\"bi-trash\" style=\"color: red !important;\"></i></a>';
+                                td6.innerHTML = '<a class=\"icon-link\" href=\"#\" style=\"color: red !important;\" onclick=\"deleteRowAndRefresh(\'eventlog\', ' + JSON.stringify(rowId) + '); return false;\">' + rowId + ' <i class=\"bi-trash\" style=\"color: red !important;\"></i></a>';
                                 newRow.appendChild(td6);
                                 
                                 if (headerRow && headerRow.nextSibling) {
@@ -1134,11 +1257,6 @@ function getTimeColor($time) {
                             totalNewEventsEventLog += data.new_count;
                         }
 
-                        const latestRelationshipId = Number(data.latest_relationship_id || 0);
-                        if (Number.isFinite(latestRelationshipId) && latestRelationshipId > lastRelationshipHistoryIdEventLog) {
-                            lastRelationshipHistoryIdEventLog = latestRelationshipId;
-                        }
-                        
                         if (liveIndicator) {
                             liveIndicator.style.opacity = '1';
                         }
@@ -1689,14 +1807,16 @@ function getTimeColor($time) {
 
         
         <!-- Memory Summaries Tab -->
-        <div id="memory-tab" class="tab-content <?php echo $activeTab === 'memory' ? 'active' : ''; ?>">
+        <?php // Inactive tabs skip their queries and markup on event log loads; switchTab() visits them via href instead. ?>
+        <div id="memory-tab" class="tab-content <?php echo $activeTab === 'memory' ? 'active' : ''; ?>"<?php echo $activeTab === 'eventlog' ? ' data-deferred="true"' : ''; ?>>
+            <?php if ($activeTab !== 'eventlog'): ?>
             <?php
             // Show success/delete messages
             if (isset($_GET['updated'])) {
-                echo "<div style='background: #28a745; color: white; padding: 10px; border-radius: 5px; margin: 10px 0;'>Memory summary updated successfully!</div>";
+                echo "<div class='memory-notice is-success'>Memory summary updated successfully!</div>";
             }
             if (isset($_GET['deleted'])) {
-                echo "<div style='background: #dc3545; color: white; padding: 10px; border-radius: 5px; margin: 10px 0;'>Memory summary deleted successfully!</div>";
+                echo "<div class='memory-notice is-deleted'>Memory summary deleted successfully!</div>";
             }
 
             // Display Memory Configuration Status
@@ -1707,8 +1827,8 @@ function getTimeColor($time) {
 
             $statusIcon = function ($enabled) {
                 return $enabled
-                    ? "<span style='color: #4caf50;'>Enabled</span>"
-                    : "<span style='color: #f44336;'>Disabled</span>";
+                    ? "<span class='memory-status-pill is-on'>Enabled</span>"
+                    : "<span class='memory-status-pill is-off'>Disabled</span>";
             };
 
             $results = $db->fetchAll(
@@ -1718,45 +1838,38 @@ function getTimeColor($time) {
                  LIMIT 150"
             );
             ?>
-            <div style="background: #2a2a2a; border-left: 4px solid rgb(242, 124, 17); padding: 12px 15px; border-radius: 5px; margin: 15px 0; font-size: 0.9em;">
-                <span style="color: rgb(242, 124, 17); font-weight: bold;">🧠 Memories:</span>
-                <span style="color: #f8f9fa;">Complete log of memory summaries with scope, participants, and period coverage. Use this to verify memory continuity and long-term context quality.</span>
-            </div>
+            <section class="memory-overview" aria-labelledby="memory-overview-title">
+                <div class="memory-overview-head">
+                    <div class="memory-overview-main">
+                        <h3 class="memory-overview-title" id="memory-overview-title">Memory System Configuration</h3>
+                        <p class="memory-overview-desc"><span class="memory-overview-term">🧠 Memories:</span> Complete log of memory summaries with scope, participants, and period coverage. Use this to verify memory continuity and long-term context quality.</p>
+                    </div>
 
-            <div style="background: #1a1a1a; border: 1px solid #3a3a3a; border-radius: 8px; padding: 20px; margin: 15px 0;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; gap: 10px; flex-wrap: wrap;">
-                    <h3 style="margin: 0; color: rgb(242, 124, 17); word-spacing: 5px;">Memory System Configuration</h3>
-                    <a href="<?php echo $webRoot; ?>/ui/core/config_hub.php?tab=globals" target="_blank" class="btn-base btn-primary" style="font-size: 13px; padding: 6px 12px;">Configure Settings</a>
+                    <div class="memory-actions">
+                        <button type="button" onclick="syncMemoriesConfirm()" class="btn-base action-button add-new">Sync Memory Summaries Now</button>
+                        <button type="button" onclick="deleteAllMemoriesConfirm()" class="btn-base btn-danger" style="background-color: #dc2626;">Delete All Memory Summaries</button>
+                    </div>
                 </div>
 
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">
-                    <div style="background: #2a2a2a; padding: 15px; border-radius: 5px; border: 1px solid #3a3a3a;">
-                        <div style="font-weight: bold; margin-bottom: 8px; color: rgb(242, 124, 17); font-size: 14px;">Memory System</div>
-                        <div style="font-size: 14px;"><?php echo $statusIcon($memoryEnabled); ?></div>
+                <div class="memory-overview-bar">
+                    <div class="memory-status">
+                        <span class="memory-status-label">Memory System</span>
+                        <?php echo $statusIcon($memoryEnabled); ?>
                     </div>
 
-                    <div style="background: #2a2a2a; padding: 15px; border-radius: 5px; border: 1px solid #3a3a3a;">
-                        <div style="font-weight: bold; margin-bottom: 8px; color: rgb(242, 124, 17); font-size: 14px;">TXT2VEC (Embeddings)</div>
-                        <div style="font-size: 14px;"><?php echo $statusIcon($useText2Vec); ?></div>
-                        <div style="font-size: 12px; color: #aaa; margin-top: 4px;">URL: <?php echo htmlspecialchars($txtaiUrl); ?></div>
+                    <div class="memory-status">
+                        <span class="memory-status-label">TXT2VEC (Embeddings)</span>
+                        <?php echo $statusIcon($useText2Vec); ?>
+                        <span class="memory-status-url">URL: <?php echo htmlspecialchars($txtaiUrl); ?></span>
                     </div>
 
+                    <a href="<?php echo $webRoot; ?>/ui/core/config_hub.php?tab=globals" target="_blank" class="btn-base btn-primary memory-status-link">Configure Settings</a>
                 </div>
 
                 <?php if (!$useText2Vec): ?>
-                    <div style="background: #2a2a2a; border-left: 4px solid rgb(242, 124, 17); padding: 12px; margin-top: 15px; border-radius: 4px;">
-                        <strong style="color: rgb(242, 124, 17);">Warning:</strong>
-                        <span style="color: #f8f9fa;">TXT2VEC is disabled. Memory embeddings and vector search features are unavailable.</span>
-                    </div>
+                    <p class="memory-status-warning"><strong>Warning:</strong> TXT2VEC is disabled. Memory embeddings and vector search features are unavailable.</p>
                 <?php endif; ?>
-            </div>
-
-            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 15px 0; flex-wrap: wrap;">
-                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                    <button type="button" onclick="syncMemoriesConfirm()" class="btn-base action-button add-new" style="font-weight: bold;">Sync Memory Summaries Now</button>
-                </div>
-                <button type="button" onclick="deleteAllMemoriesConfirm()" class="btn-base btn-danger" style="background-color: #dc2626; font-weight: bold;">Delete All Memory Summaries</button>
-            </div>
+            </section>
 
             <style>
                 .edit-form {
@@ -1964,10 +2077,12 @@ function getTimeColor($time) {
                 }
             }
             </script>
+            <?php endif; ?>
         </div>
 
         <!-- Active Quests Tab -->
-        <div id="quests-tab" class="tab-content <?php echo $activeTab === 'quests' ? 'active' : ''; ?>">
+        <div id="quests-tab" class="tab-content <?php echo $activeTab === 'quests' ? 'active' : ''; ?>"<?php echo $activeTab === 'eventlog' ? ' data-deferred="true"' : ''; ?>>
+            <?php if ($activeTab !== 'eventlog'): ?>
             <?php
             $results = $db->fetchAll("SELECT name, id_quest, briefing, briefing2, data from quests");
             
@@ -2001,10 +2116,12 @@ function getTimeColor($time) {
                 echo "</div>";
             }
             ?>
+            <?php endif; ?>
         </div>
 
         <!-- Book Log Tab -->
-        <div id="books-tab" class="tab-content <?php echo $activeTab === 'books' ? 'active' : ''; ?>">
+        <div id="books-tab" class="tab-content <?php echo $activeTab === 'books' ? 'active' : ''; ?>"<?php echo $activeTab === 'eventlog' ? ' data-deferred="true"' : ''; ?>>
+            <?php if ($activeTab !== 'eventlog'): ?>
             <?php
             $results = $db->fetchAll("SELECT title, content, gamets, localts, ts, ROWID FROM books A ORDER BY gamets DESC, rowid DESC LIMIT 150 OFFSET 0");
             
@@ -2053,6 +2170,7 @@ function getTimeColor($time) {
                 echo "</div>";
             }
             ?>
+            <?php endif; ?>
         </div>
 
         <div id="adventure-tab" class="tab-content embed-tab <?php echo $activeTab === 'adventure' ? 'active' : ''; ?>">
@@ -2179,6 +2297,12 @@ function switchTab(tabName, updateHistory = true) {
     const target = document.getElementById(tabName + '-tab');
     const clickedButton = document.querySelector('.events-memories-navigation .tab-button[data-tab="' + tabName + '"]');
     if (!target || !clickedButton) return;
+
+    // Deferred tabs carry no server-rendered content on this load, so visit them directly.
+    if (target.dataset.deferred) {
+        window.location.href = clickedButton.href;
+        return;
+    }
 
     // Hide all tab contents
     const tabContents = document.querySelectorAll('.tab-content');

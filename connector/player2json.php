@@ -622,7 +622,7 @@ class player2json
 
                 if (isset($finalData["message"])) {
                     if (is_array($finalData)&&isset($finalData["message"])) {
-                        $mangledBuffer = str_replace($this->_extractedbuffer, "", $finalData["message"]);
+                        $mangledBuffer = __jpd_extract_incremental_message($this->_extractedbuffer, $finalData["message"]);
                         $this->_extractedbuffer=$finalData["message"];
                         if (isset($finalData["listener"])) {
                             $GLOBALS["SCRIPTLINE_LISTENER"]=$finalData["listener"];

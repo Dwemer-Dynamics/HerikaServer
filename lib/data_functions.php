@@ -2596,12 +2596,16 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
      or people like '%|$actorEscaped (in combat)|%'
      or people like '%|$actorEscaped (restrained)|%'
      or type='info_timeforward'
+     
     )
     " : " ").
     //((false)?" and gamets>".($currentGameTs-(60*60*60*60)):"").
     " {$ext_sqlfilter2} 
+    or (type='ext_held_item_pickup' or type='ext_held_item_drop')
     ORDER BY gamets desc, ts desc, rowid desc LIMIT {$nRecordsLimit} OFFSET 0 ";
     
+    // Note: Analyce this part: or (type='ext_held_item_pickup' or type='ext_held_item_drop')
+
     // error_log("[BGL] $query");   
     // Keep generic far-away actors out of historic context. Shared narrator rows are flattened on write.
     $results = $db->fetchAll($query);
@@ -5727,6 +5731,57 @@ function snapshot_response_prompt_debug_data($connectorData = null) {
     }
 }
 
+function chimFindSupersedingUserInput($db, $requestTimestamp, $currentRequestType = '')
+{
+    $requestTimestamp = trim((string)$requestTimestamp);
+    if (!is_object($db) || !preg_match('/^\d+$/', $requestTimestamp)) {
+        return null;
+    }
+
+    $requestTimestamp = ltrim($requestTimestamp, '0');
+    if ($requestTimestamp === '') {
+        $requestTimestamp = '0';
+    }
+
+    $currentRequestType = trim((string)$currentRequestType);
+    $isDirectPlayerInput = in_array(
+        $currentRequestType,
+        ['inputtext', 'inputtext_s', 'ginputtext', 'ginputtext_s', 'narrator_inputtext'],
+        true
+    );
+    $instructionFilter = $isDirectPlayerInput
+        ? "AND COALESCE(data, '')<>'instruction' "
+        : '';
+
+    try {
+        $rows = $db->fetchAll(
+            "SELECT rowid, ts FROM ("
+            . "SELECT rowid, type, ts, data FROM eventlog ORDER BY rowid DESC LIMIT 100"
+            . ") AS recent_events "
+            . "WHERE type='user_input' AND ts>{$requestTimestamp} "
+            . $instructionFilter
+            . "ORDER BY rowid DESC LIMIT 1"
+        );
+    } catch (Throwable $e) {
+        Logger::warn('[USER_INPUT_INTERRUPT] Unable to check for newer player input: ' . $e->getMessage());
+        return null;
+    }
+
+    if (!is_array($rows) || !isset($rows[0]) || !is_array($rows[0])) {
+        return null;
+    }
+
+    $rowId = trim((string)($rows[0]['rowid'] ?? ''));
+    if ($rowId === '' || !ctype_digit($rowId) || (int)$rowId <= 0) {
+        return null;
+    }
+
+    return [
+        'rowid' => $rowId,
+        'ts' => trim((string)($rows[0]['ts'] ?? '')),
+    ];
+}
+
 function call_llm() {
     global $contextData, $gameRequest, $receivedData, $startTime, $db;
     global $ERROR_TRIGGERED, $talkedSoFar, $alreadysent, $FUNCTIONS_ARE_ENABLED;
@@ -5754,6 +5809,41 @@ function call_llm_internal() {
         terminate();
     }
 
+    $connectionOpened = false;
+    $abortForSupersedingUserInput = static function ($phase = 'speech_boundary') use (
+        $db,
+        $gameRequest,
+        $connectionHandler,
+        &$connectionOpened
+    ) {
+        $supersedingInput = chimFindSupersedingUserInput(
+            $db,
+            $gameRequest[1] ?? '',
+            $gameRequest[0] ?? ''
+        );
+        if ($supersedingInput === null) {
+            return;
+        }
+
+        Logger::info(
+            "[USER_INPUT_INTERRUPT] Closing active {$gameRequest[0]} generation"
+            . " (phase={$phase}"
+            . ", request_ts=" . ($gameRequest[1] ?? '')
+            . ", user_input_rowid={$supersedingInput['rowid']}"
+            . ", user_input_ts={$supersedingInput['ts']})"
+        );
+        if ($connectionOpened) {
+            $connectionHandler->close();
+        }
+        if (function_exists('terminate')) {
+            terminate();
+        }
+        die('X-CUSTOM-CLOSE');
+    };
+
+    // Check once before opening the connector. Later checks run only at speech boundaries.
+    $abortForSupersedingUserInput('before_llm');
+
     /*
     Player TTS
 
@@ -5765,6 +5855,7 @@ function call_llm_internal() {
     }
 
     $connectionHandler->open($contextData,$overrideParameters);
+    $connectionOpened = $connectionHandler->primary_handler !== false;
     snapshot_response_prompt_debug_data();
     error_log("[FALLBACK DEBUG] Checking primary_handler status: " . ($connectionHandler->primary_handler === false ? "FALSE" : "OK"));
     
@@ -5846,7 +5937,7 @@ function call_llm_internal() {
             Translation::translate($GLOBALS["ERROR_OPENAI"]);
             Translation::$sentences = [Translation::$response];
         }        
-        returnLines([$GLOBALS["ERROR_OPENAI"]]);
+        returnLines([$GLOBALS["ERROR_OPENAI"]], true, $abortForSupersedingUserInput);
         
         $ERROR_TRIGGERED=true;
         @ob_end_flush();
@@ -5968,7 +6059,7 @@ function call_llm_internal() {
             $GLOBALS["DEBUG_DATA"]["perf"][]=(microtime(true) - $startTime)." secs in openai stream";
 
             if ($gameRequest[0] != "diary") {
-                returnLines($sentences);
+                returnLines($sentences, true, $abortForSupersedingUserInput);
                 $INCREMENTAL_SENTENCESIZE=MINIMUM_SENTENCE_SIZE;
             } else { //why is the diary talking? is this correct?
                 $talkedSoFar[md5(implode(" ", $sentences))]=implode(" ", $sentences);
@@ -5978,21 +6069,7 @@ function call_llm_internal() {
             $totalProcessedData.=$extractedData;
             $extractedData="";
             $buffer=$remainingData;
-            //$user_input_after=$GLOBALS["db"]->fetchAll("select count(*) as N from eventlog where type='user_input' and ts>$gameRequest[1]"); //9.0ms
-            
-
         }
-        // This is intended to stop the generation as soon as user input is detected, so we will attend new request instead of keeping generating this
-        $user_input_after=$GLOBALS["db"]->fetchAll("select rowid as N from eventlog where type='user_input' and ts>$gameRequest[1] LIMIT 1"); // 2.1ms, faster than count(*)
-        if (isset($user_input_after[0]))
-            if (isset($user_input_after[0]["N"]))
-                if ($user_input_after[0]["N"]>0) {
-                    Logger::info("Generation stopped because user_input. ".__FILE__." ".__LINE__." ".__FUNCTION__);
-                    error_log("Generation stopped because user_input. ".__FILE__." ".__LINE__." ".__FUNCTION__);
-                    $connectionHandler->close();
-                    die('X-CUSTOM-CLOSE');
-                    // Abort , user input detected
-                }
 
     } // --- end while
     
@@ -6014,7 +6091,7 @@ function call_llm_internal() {
         $GLOBALS["DEBUG_DATA"]["response"][]=["raw"=>$buffer,"processed"=>implode("|", $sentences)];
         $GLOBALS["DEBUG_DATA"]["perf"][]=(microtime(true) - $startTime)." secs in openai stream";
         if ($gameRequest[0] != "diary") {
-            returnLines($sentences);
+            returnLines($sentences, true, $abortForSupersedingUserInput);
         } else {
             $talkedSoFar[md5(implode(" ", $sentences))]=implode(" ", $sentences);
         }
@@ -6718,6 +6795,7 @@ function GetAnimationHex($mood)
 {
     $mood = extractFirstEmoteMood($mood);
     if ($mood === '') {
+        error_log("[ANIMATION] No mood found in input, returning empty string");
         return "";
     }
 
@@ -6768,7 +6846,7 @@ function GetAnimationHex($mood)
     foreach ($animationsDb as $an) {
         $candidates=explode(",", $an["animations"]);
         if (is_array($candidates)) {
-            error_log("[ANIMATION] {$an["animations"]}");
+            error_log("[ANIMATION CUSTOM] {$an["animations"]}");
             return $candidates[array_rand($candidates)];
         }
 
@@ -6778,13 +6856,13 @@ function GetAnimationHex($mood)
     foreach ($animationsDb as $an) {
         $candidates=explode(",", $an["animations"]);
         if (is_array($candidates)) {
-            // error_log("[ANIMATION] {$an["animations"]}");
+            error_log("[ANIMATION] {$an["animations"]}");
             return $candidates[array_rand($candidates)];
         }
 
     }
 
-
+    error_log("[ANIMATION] Checking for mood: $mood");
     if ($mood=="sarcastic") {
         return array_rand(array_flip([$ANIMATIONS["SarcasticMove"],$ANIMATIONS["CleanSweat"],$ANIMATIONS["Agitated"],$ANIMATIONS["ApplauseSarcastic"]]), 1);
         
@@ -6817,7 +6895,7 @@ function GetAnimationHex($mood)
         
         
     } else if ($mood=="amused") {
-        return $ANIMATIONS["ArmsRaised"];
+        return $ANIMATIONS["HandOnChinGesture"];
         
     } else if ($mood=="smirking") {
         return $ANIMATIONS["Nervous"];
@@ -6851,9 +6929,15 @@ function GetAnimationHex($mood)
         // No animation :(
         $GLOBALS["TTS_FFMPEG_FILTERS"]["tempo"]='atempo=1.45';
         
+    } else if ($mood=="lovely") {
+        return array_rand(array_flip([$ANIMATIONS["Positive"]]), 1);
+        
+    } else if ($mood=="happy") {
+        return array_rand(array_flip([$ANIMATIONS["HappyDialogue"]]), 1);
+        
     } 
                       
-    
+    error_log("[ANIMATION] no result found for mood: $mood");
     //error_log("Getting animation for mood: $mood, no result found");
     return "";
 

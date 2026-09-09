@@ -29,6 +29,7 @@ function chimPortablePlayerFields(): array
         'auto_diary_enabled' => 'boolean_10',
         'auto_diary_wait_enabled' => 'boolean_10',
         'tts_voice_override' => 'string',
+        'tts_filter_preset' => 'voice_filter_preset',
         'tts_voice_id_override' => 'string',
         'tts_language_override' => 'string',
         'tts_elevenlabs_model_id' => 'string',
@@ -132,6 +133,7 @@ function chimPortableNarratorFields(): array
         'dynamic_profile' => ['type' => 'boolean_10', 'default' => false],
         'dynamic_profile_fields' => ['type' => 'dynamic_profile_fields', 'default' => []],
         'voiceid' => ['type' => 'string', 'default' => 'TheNarrator'],
+        'tts_filter_preset' => ['type' => 'voice_filter_preset', 'default' => 'none'],
         'core' => ['type' => 'string', 'default' => ''],
         'background' => ['type' => 'string', 'default' => ''],
         'personality' => ['type' => 'string', 'default' => ''],
@@ -263,6 +265,15 @@ function chimPortableNormalize($value, string $type, bool &$valid)
         return $mode;
     }
 
+    if ($type === 'voice_filter_preset') {
+        $presetId = strtolower(trim(strval($value ?? '')));
+        if (!isset(ttsFilterPresetOptions(true)[$presetId])) {
+            $valid = false;
+            return null;
+        }
+        return $presetId;
+    }
+
     if ($type === 'dynamic_profile_fields') {
         if (!is_array($value)) {
             $valid = false;
@@ -313,6 +324,8 @@ function chimPortableDownload(string $scope, string $enginePath): void
             $raw = $allPlayerData[$name] ?? '';
             if (in_array($type, ['boolean_10', 'boolean_true_false'], true)) {
                 $export['settings'][$name] = in_array(strtolower(trim(strval($raw))), ['1', 'true', 'yes', 'on'], true);
+            } elseif ($type === 'voice_filter_preset') {
+                $export['settings'][$name] = normalizeTtsFilterPresetId($raw);
             } else {
                 $export['settings'][$name] = strval($raw);
             }
@@ -346,6 +359,8 @@ function chimPortableDownload(string $scope, string $enginePath): void
                 $export['settings'][$name] = intval($raw);
             } elseif ($type === 'dynamic_profile_fields') {
                 $export['settings'][$name] = $narrator->getDynamicProfileFields();
+            } elseif ($type === 'voice_filter_preset') {
+                $export['settings'][$name] = normalizeTtsFilterPresetId($raw);
             } else {
                 $export['settings'][$name] = strval($raw);
             }
@@ -373,7 +388,10 @@ function chimPortableDownload(string $scope, string $enginePath): void
                     : strval($promptRow['custom_prompt']);
             }
         }
-        $filename = 'chim_narration_settings.json';
+        $narratorSlug = chimPortableFilenameSlug($export['settings']['roleplay_name'] ?? '');
+        $filename = $narratorSlug !== ''
+            ? 'chim_narration_settings_' . $narratorSlug . '.json'
+            : 'chim_narration_settings.json';
     } else {
         foreach (chimPortableGlobalFields() as $name => $type) {
             $export['settings'][$name] = chimPortableTypedGlobalValue($name, $type);

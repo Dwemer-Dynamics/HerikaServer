@@ -440,23 +440,29 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
 		}
 
 
-		if (is_array($GLOBALS["TTS_FFMPEG_FILTERS"])) {
-			$GLOBALS["TTS_FFMPEG_FILTERS"]["adelay"]="adelay=150|150";
-			$FFMPEG_FILTER='-af "'.implode(",",$GLOBALS["TTS_FFMPEG_FILTERS"]).'"';
-			
-		} else {
-			$FFMPEG_FILTER='-filter:a "adelay=150|150"';
-		
-		}
-		
+		error_log(date("Ymd").'INSIDE TTS PID=' . getmypid());
+		error_log(date("Ymd").'INSIDE TTS FILTERS=' . print_r(
+			$GLOBALS['TTS_FFMPEG_FILTERS'] ?? 'MISSING',
+			true
+		));
 		// audio.cpp seems to ad a big silence at the beginnig
 		$isAudioCpp = pockettts_is_audio_cpp($endpoint);
 		if ($isAudioCpp) {
-			$FFMPEG_FILTER='-filter:a "atrim=start=0.3,asetpts=PTS-STARTPTS"';
+			//$FFMPEG_FILTER='-filter:a "atrim=start=0.3,asetpts=PTS-STARTPTS"';
 			//$FFMPEG_FILTER='-filter:a "atempo=0.8"';
 			$FFMPEG_FILTER='';
+		} else {
+			if (is_array($GLOBALS["TTS_FFMPEG_FILTERS"])) {
+				$GLOBALS["TTS_FFMPEG_FILTERS"]["adelay"]="adelay=150|150";
+				
+			} 
 		}
 
+		if (is_array($GLOBALS["TTS_FFMPEG_FILTERS"])) 
+			if (sizeof($GLOBALS["TTS_FFMPEG_FILTERS"])>0)
+				$FFMPEG_FILTER='-af "'.implode(",",$GLOBALS["TTS_FFMPEG_FILTERS"]).'"';
+			
+		
 
 		if (isset($GLOBALS["TTS"]["POCKETTTS"]["RESET"]) && $GLOBALS["TTS"]["POCKETTTS"]["RESET"]) {
 			pockettts_settings([]);
@@ -489,7 +495,10 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
 				}
 			} catch (RuntimeException $e) {
 				Logger::error("Audio processing failed for PocketTTS response. ".__FILE__." ".__LINE__." ".__FUNCTION__);
-				shell_exec("ffmpeg -y -i ".escapeshellarg($oname)."  $FFMPEG_FILTER ".escapeshellarg($fname)." 2>/dev/null >/dev/null");
+				$command = "ffmpeg -y -i ".escapeshellarg($oname)."  $FFMPEG_FILTER ".escapeshellarg($fname)." 2>/dev/null >/dev/null";
+				shell_exec($command);
+		        Logger::info("FFMPEG command executed: " . $command);
+
 			}
 			
 			//error_log("ffmpeg -y -i $oname  $FFMPEG_FILTER $fname ".__FILE__." ".__LINE__." ".__FUNCTION__);

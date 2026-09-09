@@ -1758,7 +1758,7 @@ body .settings-tabs .settings-tab.is-active {
                             if (($current === '' || $current === null) && isset($field['default'])) {
                                 $current = $field['default'];
                             }
-                            $label = pretty_label($fieldName);
+                            $label = strval($field['label'] ?? pretty_label($fieldName));
                             $help = current_description($fieldName, $generalSettingRowMap);
                             if ($help === '' && isset($field['help'])) {
                                 $help = strval($field['help']);
