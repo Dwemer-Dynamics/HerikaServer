@@ -86,11 +86,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION chim_meta.clone_schema(source_schema text, dest_schema text)
+CREATE OR REPLACE FUNCTION chim_meta.clone_selected_schema(source_schema text, dest_schema text, selected_tables text[])
 RETURNS void AS $$
 DECLARE
     obj RECORD;
     seq_val BIGINT;
+    copied_columns text;
 BEGIN
     -- Create destination schema
     EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', dest_schema);
@@ -98,22 +99,41 @@ BEGIN
     -- Clone all tables with structure and data
     FOR obj IN
         SELECT tablename FROM pg_tables WHERE schemaname = source_schema
+            AND (selected_tables IS NULL OR tablename = ANY(selected_tables)) ORDER BY tablename
     LOOP
         -- Create table structure (including indexes, constraints, defaults)
         EXECUTE format('CREATE TABLE IF NOT EXISTS %I.%I (LIKE %I.%I INCLUDING ALL)',
                        dest_schema, obj.tablename, source_schema, obj.tablename);
         
-        -- Copy all data, preserving values from GENERATED ALWAYS identity columns.
-        EXECUTE format('INSERT INTO %I.%I OVERRIDING SYSTEM VALUE SELECT * FROM %I.%I ON CONFLICT DO NOTHING',
-                       dest_schema, obj.tablename, source_schema, obj.tablename);
+        -- Generated columns recompute; identity columns retain the captured values.
+        SELECT string_agg(format('%I', attname), ', ' ORDER BY attnum) INTO copied_columns
+        FROM pg_attribute WHERE attrelid = format('%I.%I', source_schema, obj.tablename)::regclass
+            AND attnum > 0 AND NOT attisdropped AND attgenerated = '';
+        EXECUTE format('INSERT INTO %I.%I (%s) OVERRIDING SYSTEM VALUE SELECT %s FROM %I.%I',
+                       dest_schema, obj.tablename, copied_columns, copied_columns, source_schema, obj.tablename);
     END LOOP;
 
     -- Clone sequences with their current values
     -- Must happen AFTER table data is copied to ensure sync
     FOR obj IN
         SELECT sequencename, increment_by
-        FROM pg_sequences
+        FROM pg_sequences seq
         WHERE schemaname = source_schema
+          AND (selected_tables IS NULL OR EXISTS (
+              SELECT 1 FROM pg_depend dep
+              JOIN pg_class tbl ON tbl.oid = dep.refobjid
+              JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+              WHERE dep.classid = 'pg_class'::regclass
+                AND dep.objid = format('%I.%I', seq.schemaname, seq.sequencename)::regclass
+                AND dep.refclassid = 'pg_class'::regclass AND dep.deptype IN ('a','i')
+                AND ns.nspname = source_schema AND tbl.relname = ANY(selected_tables)
+          ) OR EXISTS (
+              SELECT 1 FROM pg_depend dep JOIN pg_attrdef def ON def.oid=dep.objid
+              JOIN pg_class tbl ON tbl.oid=def.adrelid JOIN pg_namespace ns ON ns.oid=tbl.relnamespace
+              WHERE dep.classid='pg_attrdef'::regclass AND dep.refclassid='pg_class'::regclass
+                AND dep.refobjid=format('%I.%I', seq.schemaname, seq.sequencename)::regclass
+                AND ns.nspname=source_schema AND tbl.relname=ANY(selected_tables)
+          ))
     LOOP
         DECLARE
             table_name text;
@@ -261,6 +281,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Preserve the generic cloning API for diagnostics and legacy callers.
+CREATE OR REPLACE FUNCTION chim_meta.clone_schema(source_schema text, dest_schema text)
+RETURNS void AS $$
+BEGIN
+    PERFORM chim_meta.clone_selected_schema(source_schema, dest_schema, NULL);
+END;
+$$ LANGUAGE plpgsql;
 -- Helper function to drop a schema and all its contents safely
 CREATE OR REPLACE FUNCTION chim_meta.drop_schema_safe(schema_name text)
 RETURNS boolean AS $$

@@ -106,7 +106,7 @@ function dragon_break_create_playthrough($name, $notes) {
 	}
 	
 	// Clone public schema to new profile schema
-	$cloneResult = pts_clone_schema($adminConn, 'public', $schemaName);
+	$cloneResult = pts_transfer_playthrough($adminConn, $schemaName);
 	if (!$cloneResult['success']) {
 		Logger::error("DragonBreak: Failed to clone schema: " . $cloneResult['error']);
 		return 0;

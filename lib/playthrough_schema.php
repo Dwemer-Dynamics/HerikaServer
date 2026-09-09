@@ -8,14 +8,14 @@
  */
 
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'logger.php');
+require_once(__DIR__ . DIRECTORY_SEPARATOR . 'playthrough_policy.php');
 
 /**
- * Check for identity/sequence support and the removal of playthrough view cloning.
+ * Detect the selective clone API required by the playthrough table policy.
  */
 function pts_clone_function_is_current($definition): bool {
     return is_string($definition)
-        && stripos($definition, 'OVERRIDING SYSTEM VALUE') !== false
-        && stripos($definition, 'sync_schema_sequences(dest_schema)') !== false
+        && stripos($definition, 'clone_selected_schema') !== false
         && stripos($definition, 'CREATE OR REPLACE VIEW') === false;
 }
 
@@ -24,13 +24,13 @@ function pts_clone_function_is_current($definition): bool {
  * Safe to call multiple times (idempotent).
  */
 function pts_ensure_functions($conn): bool {
-    // Refresh older definitions that mishandle identity values or copy views
-    // whose unqualified table references can point back to the live schema.
+    // Upgrade older installations to the selected-table capture and restore API.
     $checkQuery = "SELECT pg_get_functiondef(p.oid) AS function_definition FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'clone_schema' AND n.nspname = 'chim_meta' LIMIT 1";
     $checkResult = @pg_query($conn, $checkQuery);
     if ($checkResult && pg_num_rows($checkResult) > 0) {
         $row = pg_fetch_assoc($checkResult);
-        if (pts_clone_function_is_current($row['function_definition'] ?? null)) {
+        if (pts_clone_function_is_current($row['function_definition'] ?? null)
+            && pg_fetch_result(pg_query($conn, "SELECT to_regprocedure('chim_meta.restore_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.capture_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.clone_selected_schema(text,text,text[])') IS NOT NULL"), 0, 0) === 't') {
             return true;
         }
 
@@ -44,6 +44,13 @@ function pts_ensure_functions($conn): bool {
     }
     
     $sql = file_get_contents($sqlFile);
+    $selectionSql = file_get_contents(__DIR__ . '/playthrough_selection.sql');
+    if ($selectionSql === false) {
+        return false;
+    }
+    if ($sql !== false) {
+        $sql .= "\n" . $selectionSql;
+    }
     if ($sql === false) {
         Logger::error("Failed to read schema_clone_function.sql");
         return false;
@@ -115,6 +122,18 @@ function pts_schema_exists($conn, string $schemaName): bool {
     return pg_num_rows($result) > 0;
 }
 
+/** Capture or restore the explicit table policy in one atomic database statement. */
+function pts_transfer_playthrough($conn, string $schemaName, bool $restore = false): array {
+    if (!pts_ensure_functions($conn)) {
+        return ['success' => false, 'error' => 'Playthrough database functions are unavailable'];
+    }
+    $function = $restore ? 'restore_playthrough' : 'capture_playthrough';
+    $result = @pg_query_params($conn,
+        "SELECT chim_meta.{$function}($1, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)))",
+        [$schemaName, json_encode(pts_playthrough_tables())]);
+    return $result ? ['success' => true, 'error' => '']
+        : ['success' => false, 'error' => pg_last_error($conn)];
+}
 /**
  * Clone a schema (source) to another schema (destination).
  * Returns ['success' => bool, 'error' => string]
