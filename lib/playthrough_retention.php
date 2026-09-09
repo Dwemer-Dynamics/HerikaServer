@@ -155,7 +155,7 @@ function ptr_preview($conn, array $settings): array {
     $plan = ['identity' => ptr_identity($conn), 'created' => time(), 'diagnostics' => [], 'playthroughs' => [], 'more_possible' => false,
         'events' => ['older_rows' => 0, 'cutoff_gamets' => null,
             'blocked_reason' => 'Event history is kept because it supports NPC memories.'],
-        'message' => 'This is one cleanup round. Space from deleted rows becomes reusable inside the database, but the files on disk may not shrink.'];
+        'message' => 'Cleanup frees database space for reuse but may not reduce the files on disk.'];
     if ($settings['diagnostics_enabled']) {
         foreach (ptr_categories() as $key => $category) {
             if (!$settings[$key . '_enabled']) continue;
@@ -236,7 +236,7 @@ function ptr_execute($conn, array $plan): array {
         ptr_query($conn, "SET LOCAL lock_timeout='2s'");
         ptr_query($conn, "SET LOCAL statement_timeout='20s'");
         if (ptr_exists($conn, 'chim_meta.playthrough_profiles')) ptr_query($conn, 'LOCK TABLE chim_meta.playthrough_profiles IN SHARE ROW EXCLUSIVE MODE');
-        if (!hash_equals($plan['identity'], ptr_identity($conn))) throw new RuntimeException('Your playthrough or settings changed. Run a new preview.');
+        if (!hash_equals($plan['identity'], ptr_identity($conn))) throw new RuntimeException('Your Playthrough Save or settings changed. Preview again.');
         $deleted = 0;
         foreach ($plan['diagnostics'] as $group) {
             if (!in_array($group['table'], array_column(ptr_categories(), 'table'), true)) throw new RuntimeException('An unexpected log table was in the plan, so nothing was deleted.');
@@ -245,14 +245,14 @@ function ptr_execute($conn, array $plan): array {
             $queueGuard = $table === 'responselog' ? 'AND t.sent > 0' : '';
             $res = ptr_query($conn, "DELETE FROM public.{$table} t USING jsonb_to_recordset($1::jsonb) AS chosen(id text, version text)
                 WHERE t.ctid=chosen.id::tid AND t.xmin::text=chosen.version {$queueGuard}", [json_encode($group['selected'])]);
-            if (pg_affected_rows($res) !== count($group['selected'])) throw new RuntimeException('The debug logs changed since the preview. Run a new preview.');
+            if (pg_affected_rows($res) !== count($group['selected'])) throw new RuntimeException('The logs changed. Preview again before deleting.');
             $deleted += pg_affected_rows($res);
         }
         foreach ($plan['playthroughs'] as $playthrough) ptr_delete_playthrough($conn, $playthrough['id']);
         $changed = $deleted > 0 || count($plan['playthroughs']) > 0;
         $result = ['at' => gmdate('c'), 'status' => $changed ? 'succeeded' : 'no_work',
             'rows' => $deleted, 'playthroughs' => count($plan['playthroughs']), 'more_possible' => $plan['more_possible'] ?? false,
-            'message' => $changed ? 'Cleanup finished. Events, NPC memories and your active playthrough were kept.' : 'Nothing is eligible for cleanup under the saved rules.'];
+            'message' => $changed ? 'Cleanup finished. Current gameplay data and your active Playthrough Save were kept.' : 'Nothing matches these cleanup rules.'];
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', $result);
         ptr_query($conn, 'COMMIT');
         return $result;

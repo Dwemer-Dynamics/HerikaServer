@@ -734,17 +734,17 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     </div>
 
     <div class="page-header">
-        <?php if ($ptmFragment): ?><h2>Playthroughs and cleanup</h2><?php else: ?><h1>Playthrough Saves</h1><?php endif; ?>
-        <div style="font-size: 0.95em; color: #ccc; margin-bottom: 10px;">Save or restore playthroughs. Restoring first saves your current progress over the active playthrough.</div>
+        <?php if ($ptmFragment): ?><h2>Playthrough Saves and cleanup</h2><?php else: ?><h1>Playthrough Saves</h1><?php endif; ?>
+        <div style="font-size: 0.95em; color: #ccc; margin-bottom: 10px;">Save and restore CHIM data. Use each Playthrough Save with its matching Skyrim save.</div>
 
-        <details class="storage-help"><summary>How playthroughs work</summary>
+        <details class="storage-help"><summary>How saves work</summary>
         <div style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; border: 1px solid #444; margin-top: 15px; text-align: left;">
             <div style="font-size: 0.9em; color: #e0e0e0; line-height: 1.6;">
-                • <strong>Active playthrough</strong> = the live data CHIM is reading and writing right now.<br>
-                • <strong>Playthrough Saves</strong> = stored copies of a playthrough. They are not in use.<br>
-                • <strong>Restore</strong> = saves your current progress over the active playthrough first, then loads the selected playthrough as the new active playthrough. If the currently active playthrough cannot be determined, the restore is blocked so nothing is overwritten.<br>
-                • <strong>Automatic Rollback Saves</strong> = playthroughs saved automatically when you load a save at least the configured number of in-game days behind.<br>
-                <span class="help-text">Technical note: the active playthrough lives in the PostgreSQL <code>public</code> schema; saved playthroughs are cloned schemas in the same database.</span>
+                • <strong>Active playthrough</strong> = the CHIM data you are using now.<br>
+                • <strong>Playthrough Saves</strong> = saved copies of your CHIM data.<br>
+                • <strong>Restore</strong> = updates the active Playthrough Save with your current progress, then loads the selected save. Restoring is blocked if no active save is found.<br>
+                • <strong>Automatic Rollback Saves</strong> = copies made when you load an older game save. Choose how many game days behind below.<br>
+                <span class="help-text">Playthrough Saves contain mod data only. Keep the matching Skyrim saves too.</span>
             </div>
         </div>
         </details>
@@ -754,20 +754,19 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
 
     <?php if ($adminConn && $ptmNeedsSetup) { ?>
     <div class="content-section full-width-section" style="margin-bottom: 30px;">
-        <h2>🎮 Set up playthrough management</h2>
+        <h2>🎮 Set up Playthrough Saves</h2>
         <p style="margin: 0 0 10px 0;">
             Playthrough management is not set up yet<?php echo $ptmInitialized ? ' (no playthroughs exist)' : ''; ?>.
             Nothing has been changed by opening this page.
         </p>
         <p class="help-text" style="margin: 0 0 10px 0;">
-            Setting up creates the playthrough bookkeeping tables and saves your current data as the
-            <strong>default</strong> playthrough, which becomes the active playthrough. Your live data is not modified.
+            Save your current CHIM data as the protected <strong>default</strong> Playthrough Save. Your current progress stays unchanged.
         </p>
         <form method="post" class="setup-form">
             <?php echo $csrfField; ?>
             <input type="hidden" name="action" value="setup">
             <div class="button-group">
-                <button type="submit" class="button" style="background-color: rgb(1 53 166 / 90%); color: #fff;">🚀 Set up playthrough management</button>
+                <button type="submit" class="button" style="background-color: rgb(1 53 166 / 90%); color: #fff;">🚀 Set up Playthrough Saves</button>
             </div>
         </form>
     </div>
@@ -812,19 +811,19 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
 
     <div class="content-grid">
         <div class="content-section">
-            <h2>📦 Save current playthrough</h2>
+            <h2>📦 New Playthrough Save</h2>
             <div class="help-text" style="margin-bottom: 12px;">
-                Saves a copy of the active playthrough as a new saved playthrough. The active playthrough keeps running unchanged.
+                Create a new copy of your current CHIM data.
             </div>
                 <form method="post" class="create-form">
                     <?php echo $csrfField; ?>
                     <input type="hidden" name="action" value="create">
-                    <label for="name">Playthrough name</label><br>
+                    <label for="name">Save name</label><br>
                     <input type="text" id="name" name="name" required style="width: 100%; margin: 6px 0;" placeholder="e.g., Before Quest X">
                     <label for="notes">Notes (optional)</label><br>
                     <input type="text" id="notes" name="notes" style="width: 100%; margin: 6px 0;" placeholder="e.g., Level 25, just finished main quest">
                     <div class="button-group">
-                        <button type="submit" class="button" style="background-color: rgb(1 53 166 / 90%); color: #fff;">💾 Save current playthrough</button>
+                        <button type="submit" class="button" style="background-color: rgb(1 53 166 / 90%); color: #fff;">💾 New Playthrough Save</button>
                     </div>
                 </form>
         </div>
@@ -832,11 +831,10 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         <div class="content-section">
             <h2>💾 Playthrough Saves</h2>
             <div class="help-text" style="margin-bottom: 12px;">
-                Stored copies of playthroughs — they are not in use.
-                <strong>Restore</strong> loads one as the active playthrough; your current progress is saved over the active playthrough first.
+                Restore a copy to continue from an earlier point. Your current progress replaces the contents of the active Playthrough Save first.
             </div>
                 <?php if (empty($profiles)) { ?>
-                    <div style="text-align:center; color:#ccc; padding: 12px;">No playthroughs yet. Create one from the left panel.</div>
+                    <div style="text-align:center; color:#ccc; padding: 12px;">No Playthrough Saves yet. Use the save form to create one.</div>
                 <?php } else { ?>
                     <div class="backup-list">
                         <?php foreach ($profiles as $p) {
@@ -912,13 +910,13 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     <div class="content-section full-width-section">
         <h2>💽 Storage overview</h2>
         <div class="help-text" style="margin-bottom: 12px;">
-            Read-only summary of database disk usage. Sizes come from database metadata; no table contents are read.
+            See how much database space your saves and logs use.
         </div>
         <div id="storage-overview">Loading storage overview…</div>
         <div class="help-text" style="margin-top: 12px;">
             For backups, exports, and maintenance, use the
             <a href="<?php echo htmlspecialchars($ptmDatabaseToolsUrl, ENT_QUOTES, 'UTF-8'); ?>"<?php echo ($isEmbed && !$ptmFragment) ? ' target="_top"' : ''; ?> style="color:#ffb862;"><?php echo htmlspecialchars($ptmDatabaseToolsLabel, ENT_QUOTES, 'UTF-8'); ?></a>.
-            Optional cleanup of old debug logs and old automatic playthroughs is set up in the <a href="#retention-section" style="color:#ffb862;">Storage cleanup</a> panel below.
+            To remove old logs and extra automatic saves, use the <a href="#retention-section" style="color:#ffb862;">Cleanup</a> panel below.
         </div>
     </div>
 
@@ -969,20 +967,20 @@ if (!$ptmFragment) {
     function buildRestoreBody(name, size, activeName){
         const frag = document.createDocumentFragment();
         const p1 = el('p');
-        p1.appendChild(el('strong', 'Playthrough: '));
+        p1.appendChild(el('strong', 'Playthrough Save: '));
         const nm = el('span', name + (size ? ' (' + size + ')' : ''));
         nm.className = 'ptm-dialog-target';
         p1.appendChild(nm);
         frag.appendChild(p1);
         frag.appendChild(el('p', activeName
-            ? 'Before restoring, your current live progress is saved over the active playthrough "' + activeName + '" — its stored copy is replaced with the current live state.'
-            : 'Before restoring, the server saves your current live progress over the active playthrough. If the active playthrough cannot be determined, the restore is blocked and nothing is changed.'));
+            ? 'Your current progress replaces the contents of "' + activeName + '", your active Playthrough Save, before restoring.'
+            : 'Your current progress replaces the active Playthrough Save first. If no active save is found, the restore is blocked.'));
         frag.appendChild(el('p', 'Then "' + name + '" replaces the active playthrough.'));
-        frag.appendChild(el('p', 'After the restore completes you must:'));
+        frag.appendChild(el('p', 'Stop Skyrim before restoring. After restoring:'));
         const ol = el('ol');
-        ol.appendChild(el('li', 'Shut down Skyrim'));
+        ol.appendChild(el('li', 'Keep Skyrim closed'));
         ol.appendChild(el('li', 'Restart the CHIM server'));
-        ol.appendChild(el('li', 'Restart Skyrim and load the save you want to continue from'));
+        ol.appendChild(el('li', 'Restart Skyrim and load the matching game save'));
         frag.appendChild(ol);
         return frag;
     }
@@ -990,24 +988,24 @@ if (!$ptmFragment) {
     function buildDeleteBody(name, size){
         const frag = document.createDocumentFragment();
         const p1 = el('p');
-        p1.appendChild(el('strong', 'Playthrough: '));
+        p1.appendChild(el('strong', 'Playthrough Save: '));
         const nm = el('span', name + (size ? ' (' + size + ')' : ''));
         nm.className = 'ptm-dialog-target';
         p1.appendChild(nm);
         frag.appendChild(p1);
-        frag.appendChild(el('p', 'This permanently deletes the saved playthrough "' + name + '"' + (size ? ' and frees about ' + size + ' of storage' : '') + '. The active playthrough is not affected.'));
+        frag.appendChild(el('p', 'This permanently deletes the Playthrough Save "' + name + '"' + (size ? ' and frees about ' + size + ' of storage' : '') + '. The active playthrough is not affected.'));
         frag.appendChild(el('p', 'This cannot be undone.'));
         return frag;
     }
 
     function plainTextConfirm(kind, name, size, activeName){
         if (kind === 'restore') {
-            return 'Restore playthrough "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\n' +
+            return 'Restore Playthrough Save "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\n' +
                 '1. Your current progress is saved over the active playthrough' + (activeName ? ' "' + activeName + '"' : ' (if it cannot be determined, the restore is blocked)') + '.\n' +
                 '2. "' + name + '" then replaces the active playthrough.\n' +
-                '3. Afterwards: shut down Skyrim, restart the CHIM server, then restart Skyrim.\n\nContinue?';
+                '3. Stop Skyrim before restoring. Afterwards, restart CHIM and load the matching Skyrim save.\n\nContinue?';
         }
-        return 'Permanently delete playthrough "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\nThis cannot be undone.';
+        return 'Permanently delete Playthrough Save "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\nThis cannot be undone.';
     }
 
     function proceed(){
@@ -1042,12 +1040,12 @@ if (!$ptmFragment) {
         lastFocus = document.activeElement;
         dlgBody.textContent = '';
         if (kind === 'restore') {
-            dlgTitle.textContent = 'Restore playthrough?';
+            dlgTitle.textContent = 'Restore Playthrough Save?';
             dlgBody.appendChild(buildRestoreBody(name, size, activeName));
             dlgConfirm.textContent = 'Restore "' + name + '"';
             dlgConfirm.className = 'button btn-confirm-primary';
         } else {
-            dlgTitle.textContent = 'Delete playthrough?';
+            dlgTitle.textContent = 'Delete Playthrough Save?';
             dlgBody.appendChild(buildDeleteBody(name, size));
             dlgConfirm.textContent = 'Delete "' + name + '"';
             dlgConfirm.className = 'button btn-confirm-danger';
