@@ -166,6 +166,43 @@ if (in_array($gameRequest[0], ['updateequipment', 'updateinventory', 'updateskil
 $db = $GLOBALS["db"] ?? new sql();
 $GLOBALS["db"] = $db;
 
+$boredActivitySnapshot = null;
+if (($gameRequest[0] ?? '') === 'bored') {
+    require_once(__DIR__ . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'rolemaster_bored.php');
+    try {
+        $boredActivitySnapshot = chimBoredEventCaptureActivitySnapshot($db);
+    } catch (Throwable $e) {
+        Logger::warn('[BORED_STALE] Unable to capture activity snapshot: ' . $e->getMessage());
+    }
+}
+
+$discardStaleBoredEventIfSuperseded = static function (string $phase) use ($db, &$boredActivitySnapshot): void {
+    if (!is_array($boredActivitySnapshot)) {
+        return;
+    }
+
+    try {
+        $supersedingActivity = chimBoredEventFindSupersedingActivity($db, $boredActivitySnapshot);
+    } catch (Throwable $e) {
+        Logger::warn(
+            "[BORED_STALE] Unable to validate activity watermark; continuing bored event (phase={$phase}): "
+            . $e->getMessage()
+        );
+        return;
+    }
+
+    if ($supersedingActivity !== null) {
+        Logger::info(
+            '[BORED_STALE] Discarding bored event because conversation activity resumed'
+            . " (phase={$phase}, event_rowid={$boredActivitySnapshot['event_rowid']},"
+            . " speech_rowid={$boredActivitySnapshot['speech_rowid']},"
+            . " activity_rowid={$supersedingActivity['rowid']},"
+            . " activity_type={$supersedingActivity['type']})"
+        );
+        terminate();
+    }
+};
+
 if (PHP_SAPI !== 'cli' && !getenv('PHPUNIT_TEST') && $gameRequest[0] !== 'request') {
     $newGameActivitySession = chimMarkGameActivity();
     if ($newGameActivitySession && function_exists('herikaEnsureBackgroundProcessorRunning')) {
@@ -248,6 +285,10 @@ if (!in_array($gameRequest[0],$fast_commands)) {
     Logger::info("Audit:Lock acquired by {$gameRequest[0]}");
 } 
 chimRequestPerformanceMark('lock_ready');
+
+if (($gameRequest[0] ?? '') === 'bored') {
+    $discardStaleBoredEventIfSuperseded('after_main_lock');
+}
 
 // adnpc has its custom semaphore, as it write files
 if (in_array($gameRequest[0],["addnpc"])) {
@@ -997,6 +1038,7 @@ if (in_array($gameRequest[0], ["playerinfo", "newgame"])) {
 // Fake entry to mark time passing when bored event
 if (in_array($gameRequest[0],["bored"])) {
     //Loggar::trace(" bored event - exec trace"); // debug
+    $discardStaleBoredEventIfSuperseded('before_dispatch');
     if ((($gameRequest[2] ?? 0)-GetLastSpeechTs()) > 416667) { // 1/0.0000024 = 416667 
         $localGameRequest=$gameRequest;
         $localGameRequest[0]="infoaction";
