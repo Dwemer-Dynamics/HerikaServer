@@ -370,7 +370,10 @@ function chimPortableDownload(string $scope, string $enginePath): void
                     : strval($promptRow['custom_prompt']);
             }
         }
-        $filename = 'chim_narration_settings.json';
+        $narratorSlug = chimPortableFilenameSlug($export['settings']['roleplay_name'] ?? '');
+        $filename = $narratorSlug !== ''
+            ? 'chim_narration_settings_' . $narratorSlug . '.json'
+            : 'chim_narration_settings.json';
     } else {
         foreach (chimPortableGlobalFields() as $name => $type) {
             $export['settings'][$name] = chimPortableTypedGlobalValue($name, $type);
