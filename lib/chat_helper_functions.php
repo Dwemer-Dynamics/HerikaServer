@@ -12,6 +12,7 @@ require_once(__DIR__."/pipeline_status.php");
 require_once(__DIR__."/emote_moods.php");
 require_once(__DIR__."/core/event_type.php");
 require_once(__DIR__."/tts_pronunciation.php");
+require_once(__DIR__."/core/tts_filter_presets.php");
 
 // Narrator-specific override for the latest diary entry toggle. It lives in
 // core_narrator so the assigned Core Profile, which NPCs can share, is never changed.
@@ -124,7 +125,27 @@ function callConfiguredTts($textString, $mood, $stringforhash)
         return false;
     }
 
-    return $GLOBALS["TTS_IN_USE"]($textString, $mood, $stringforhash);
+    $activePresetId = getActiveTtsFilterPresetId();
+    $hadAvoidTtsCache = array_key_exists('AVOID_TTS_CACHE', $GLOBALS);
+    $previousAvoidTtsCache = $GLOBALS['AVOID_TTS_CACHE'] ?? null;
+    if ($activePresetId !== 'none') {
+        // Connector cache keys are text-only, so a filtered NPC must not reuse another voice or preset.
+        $GLOBALS['AVOID_TTS_CACHE'] = true;
+    }
+
+    try {
+        $ttsOutput = $GLOBALS["TTS_IN_USE"]($textString, $mood, $stringforhash);
+    } finally {
+        if ($activePresetId !== 'none') {
+            if ($hadAvoidTtsCache) {
+                $GLOBALS['AVOID_TTS_CACHE'] = $previousAvoidTtsCache;
+            } else {
+                unset($GLOBALS['AVOID_TTS_CACHE']);
+            }
+        }
+    }
+
+    return applyActiveTtsFilterPresetToOutput($ttsOutput);
 }
 
 function getNpcTtsFallbackCandidates(): array
@@ -1063,6 +1084,8 @@ function saveCurrentVoiceSettings() {
         'patch_override_tts_language' => $GLOBALS['PATCH_OVERRIDE_TTS_LANGUAGE'] ?? null,
         'has_patch_override_tts_options' => array_key_exists('PATCH_OVERRIDE_TTS_OPTIONS', $GLOBALS),
         'patch_override_tts_options' => $GLOBALS['PATCH_OVERRIDE_TTS_OPTIONS'] ?? null,
+        'has_active_tts_filter_preset' => array_key_exists('CHIM_TTS_FILTER_PRESET_ID', $GLOBALS),
+        'active_tts_filter_preset' => $GLOBALS['CHIM_TTS_FILTER_PRESET_ID'] ?? null,
     ];
 }
 
@@ -1097,7 +1120,10 @@ function loadNarratorVoiceSettings() {
     require_once(__DIR__ . "/core/core_profiles.class.php");
     require_once(__DIR__ . "/core/tts_connector.class.php");
 
+    clearActiveTtsFilterPreset();
+
     $narrator = new Narrator();
+    setActiveTtsFilterPreset($narrator->get('tts_filter_preset') ?? 'none');
     $profileId = $narrator->getProfileId();
     if ($profileId) {
         $profileManager = new CoreProfile();
@@ -1182,6 +1208,12 @@ function restoreVoiceSettings($savedSettings) {
         $GLOBALS['PATCH_OVERRIDE_TTS_OPTIONS'] = $savedSettings['patch_override_tts_options'];
     } else {
         unset($GLOBALS['PATCH_OVERRIDE_TTS_OPTIONS']);
+    }
+
+    if (!empty($savedSettings['has_active_tts_filter_preset'])) {
+        setActiveTtsFilterPreset($savedSettings['active_tts_filter_preset'], true);
+    } else {
+        clearActiveTtsFilterPreset();
     }
 }
 
@@ -1282,7 +1314,7 @@ function unmoodSentence($sentence) {
     return $responseTextUnmooded;
 }
 
-function returnLines($lines,$writeOutput=true)
+function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
 {
     global $db, $startTime, $forceMood, $staticMood, $talkedSoFar, $FORCED_STOP, $TRANSFORMER_FUNCTION,$receivedData;
 
@@ -1325,6 +1357,12 @@ function returnLines($lines,$writeOutput=true)
         
         if (is_array($sentence))
             continue;
+
+        // Let the caller stop a superseded response after the current TTS line has finished,
+        // but before any work begins for the next line.
+        if (is_callable($beforeSpeechLine)) {
+            $beforeSpeechLine();
+        }
         
         // Remove actions
         if (isset($GLOBALS["startTimeAfterPlayerTTTS"]))
@@ -1430,6 +1468,9 @@ function returnLines($lines,$writeOutput=true)
         // Set up subtitles based on whether inline narration is enabled
         if ($isPlayerSpeech) {
             $responseForSubtitles = formatPlayerSubtitleText($sentenceForSubtitles);
+            if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
+                $responseForSubtitles = substr($responseForSubtitles, 0, _MAX_SUBTITLE_LENGTH);
+            }
         } elseif ($textOnlyNarration) {
             $responseForSubtitles = formatTextOnlyInlineNarrationSubtitleText($sentenceForSubtitles);
             if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
@@ -1491,6 +1532,7 @@ function returnLines($lines,$writeOutput=true)
         $hasNarrationBlocks = $splitNarration && $narrationParts && !empty($narrationParts['narrations']);
         $hasTextOnlyNarration = $textOnlyNarration && $narrationParts && !empty($narrationParts['narrations']);
         $shouldEmitNpcLine = false;
+        $inlineNarrationTtsCompleted = false;
 
         if ($responseTextUnmooded || $hasNarrationBlocks || $hasTextOnlyNarration) {
             $shouldEmitNpcLine = true;
@@ -1531,6 +1573,10 @@ function returnLines($lines,$writeOutput=true)
                         continue; // Skip empty narrations
                     }
 
+                    if ($inlineNarrationTtsCompleted && is_callable($beforeSpeechLine)) {
+                        $beforeSpeechLine();
+                    }
+
                     Logger::info("[INLINE_NARRATION] Processing narration: " . $narrationText);
 
                     // Switch to Narrator voice
@@ -1551,6 +1597,7 @@ function returnLines($lines,$writeOutput=true)
 
                     // Generate TTS for narration using the configured TTS function
                     $narratorTtsOutput = callConfiguredTts($narrationForSpeech, "default", $narrationTtsCacheText);
+                    $inlineNarrationTtsCompleted = true;
 
                     // Track narrator TTS output
                     if ($narratorTtsOutput) {
@@ -1612,14 +1659,37 @@ function returnLines($lines,$writeOutput=true)
                 $npcPronunciationApplied = $responseForSpeech !== $responseForTTS;
                 $ttsCacheText = $npcPronunciationApplied ? $responseForSpeech : $responseForSubtitles;
 
+                if ($inlineNarrationTtsCompleted && is_callable($beforeSpeechLine)) {
+                    $beforeSpeechLine();
+                }
+
                 // Set TTS processing status
                 pipeline_status_set('tts', true);
 
                 // Generate regular TTS (either full text if no narration, or just dialogue after narration)
                 $ttsOutput = callNpcTtsWithFallback($responseForSpeech, $mood, $responseForSubtitles); // Third parameter is used to calculate md5 hash, must be the same as the text sent as main response.
                 if (!$ttsOutput) {
-                    if (isset($GLOBALS["TTS_FALLBACK_FNCT"]))
-                        $ttsOutput = $GLOBALS["TTS_FALLBACK_FNCT"]($responseForSpeech, $mood, $responseForSubtitles);
+                    if (isset($GLOBALS["TTS_FALLBACK_FNCT"])) {
+                        $activePresetId = getActiveTtsFilterPresetId();
+                        $hadAvoidTtsCache = array_key_exists('AVOID_TTS_CACHE', $GLOBALS);
+                        $previousAvoidTtsCache = $GLOBALS['AVOID_TTS_CACHE'] ?? null;
+                        if ($activePresetId !== 'none') {
+                            $GLOBALS['AVOID_TTS_CACHE'] = true;
+                        }
+
+                        try {
+                            $ttsOutput = $GLOBALS["TTS_FALLBACK_FNCT"]($responseForSpeech, $mood, $responseForSubtitles);
+                        } finally {
+                            if ($activePresetId !== 'none') {
+                                if ($hadAvoidTtsCache) {
+                                    $GLOBALS['AVOID_TTS_CACHE'] = $previousAvoidTtsCache;
+                                } else {
+                                    unset($GLOBALS['AVOID_TTS_CACHE']);
+                                }
+                            }
+                        }
+                        $ttsOutput = applyActiveTtsFilterPresetToOutput($ttsOutput);
+                    }
                 }
 
                 // Clear TTS processing status
@@ -2924,10 +2994,10 @@ function chimParseChatModeShortcut($message)
     $message = (string)$message;
     $rules = [
         ["prefix" => "((", "mode" => "INJECTION_LOG", "suffix" => "))"],
-        ["prefix" => "||", "mode" => "CLOSE", "suffix" => ""],
+        ["prefix" => "%%", "mode" => "CLOSE", "suffix" => ""],
         ["prefix" => "!!", "mode" => "SHOUT", "suffix" => ""],
         ["prefix" => "**", "mode" => "AUTOCHAT", "suffix" => ""],
-        ["prefix" => "|", "mode" => "WHISPER", "suffix" => ""],
+        ["prefix" => "%", "mode" => "WHISPER", "suffix" => ""],
         ["prefix" => "@", "mode" => "NARRATOR", "suffix" => ""],
         ["prefix" => ">", "mode" => "DIRECTOR", "suffix" => ""],
         ["prefix" => "#", "mode" => "CHEATMODE", "suffix" => ""],
