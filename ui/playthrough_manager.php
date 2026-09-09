@@ -1,6 +1,6 @@
 <?php
 
-// Shared "Playthrough Management" fragment mode. The Dwemer Dashboard includes this
+// Shared "Playthrough Saves" fragment mode. The Dwemer Dashboard includes this
 // page in-process and renders its controls inside the shared shell, so only the
 // document chrome and asset URLs adapt while server-owned operations stay here.
 $ptmFragment = defined('DWEMER_STORAGE_FRAGMENT') && DWEMER_STORAGE_FRAGMENT === true;
@@ -54,7 +54,7 @@ if ($uiPos !== false) {
 if ($webRoot == '/') $webRoot = '';
 $webRoot = rtrim($webRoot, '/');
 
-$TITLE = "🎮 CHIM - Playthrough Manager";
+$TITLE = "🎮 CHIM - Playthrough Saves";
 $debugPaneLink = false;
 if ($ptmFragment) {
     // The shared page lives under a different path, so every asset and endpoint
@@ -221,7 +221,7 @@ function ptm_create_default_playthrough($adminConn, string $schema): array {
     @pg_query($adminConn, 'BEGIN');
     $q1 = @pg_query_params(
         $adminConn,
-        "INSERT INTO chim_meta.playthrough_profiles (name, size_bytes, storage_type, notes, is_active, player_name, game, eventlog_count, oghma_count, last_gamets, schema_name) VALUES ($1,$2,$3,$4,true,$5,$6,$7,$8,$9,$10)",
+        "INSERT INTO chim_meta.playthrough_profiles (name, size_bytes, storage_type, notes, is_active, player_name, game, eventlog_count, oghma_count, last_gamets, schema_name, retention_kind) VALUES ($1,$2,$3,$4,true,$5,$6,$7,$8,$9,$10,'manual')",
         ['default', (string)$size, 'schema', 'Auto-captured default profile', $meta['player_name'], $meta['game'], (string)$meta['eventlog_count'], (string)$meta['oghma_count'], (string)$meta['last_gamets'], $schemaName]
     );
     if ($q1) {
@@ -288,7 +288,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     @pg_query($adminConn, 'BEGIN');
                     $q1 = @pg_query_params(
                         $adminConn,
-                        "INSERT INTO chim_meta.playthrough_profiles (name, size_bytes, storage_type, notes, is_active, player_name, game, eventlog_count, oghma_count, last_gamets, schema_name) VALUES ($1,$2,$3,$4,false,$5,$6,$7,$8,$9,$10)",
+                        "INSERT INTO chim_meta.playthrough_profiles (name, size_bytes, storage_type, notes, is_active, player_name, game, eventlog_count, oghma_count, last_gamets, schema_name, retention_kind) VALUES ($1,$2,$3,$4,false,$5,$6,$7,$8,$9,$10,'manual')",
                         [$name, (string)$size, 'schema', $notes, $meta['player_name'], $meta['game'], (string)$meta['eventlog_count'], (string)$meta['oghma_count'], (string)$meta['last_gamets'], $schemaName]
                     );
                     if ($q1) {
@@ -498,7 +498,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
         } catch (Throwable $e) {
             @pg_query($adminConn, 'ROLLBACK');
-            Logger::error('Playthrough Manager: ' . $e->getMessage());
+            Logger::error('Playthrough Saves: ' . $e->getMessage());
             $message .= '<p><strong>Error:</strong> The operation could not finish. Protected playthroughs cannot be deleted. Check the server log for details.</p>';
         } finally {
             ptr_unlock($adminConn);
@@ -705,44 +705,8 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     .storage-legend { list-style: none; margin: 10px 0 0 0; padding: 0; display:flex; gap: 6px 18px; flex-wrap: wrap; font-size: 13px; color:#ccc; }
     .storage-legend .swatch { display:inline-block; width: 14px; height: 14px; border-radius: 3px; border:1px solid #444; vertical-align: -2px; margin-right: 4px; }
     .help-text { font-size: 0.9em; color: #9fb1c9; }
-    /* Data retention panel */
-    .retention-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 12px 0; }
-    .retention-fieldset { border: 1px solid #3a3a3a; border-radius: 8px; padding: 10px 12px; margin: 0; background: rgba(0,0,0,0.25); min-width: 0; }
-    .retention-fieldset legend { color: #ffb862; font-size: 13px; font-weight: bold; padding: 0 6px; }
-    .retention-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; font-size: 13px; color: #e0e0e0; }
-    .retention-row label { margin: 0; width: auto; display: inline; cursor: pointer; }
-    .retention-row input[type="number"] { width: 90px; min-width: 0; background: #111; color: #e0e0e0; border: 1px solid #555; border-radius: 4px; padding: 4px 6px; }
-    .retention-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: #f27c11; flex: 0 0 auto; }
-    .retention-note { font-size: 12px; color: #9fb1c9; margin: 6px 0 0 0; line-height: 1.5; }
-    .retention-blocked { font-size: 12px; color: #fbbf24; background: rgba(74,30,13,0.5); border: 1px solid rgba(220,38,38,0.5); border-radius: 6px; padding: 6px 8px; margin-top: 8px; line-height: 1.5; }
-    .retention-status { font-size: 13px; margin: 10px 0 0 0; padding: 6px 10px; border-radius: 6px; border: 1px solid transparent; }
-    .retention-status:empty { display: none; }
-    .retention-status.is-busy { color: #9fb1c9; border-color: #444; background: rgba(0,0,0,0.3); }
-    .retention-status.is-error { color: #fca5a5; border-color: rgba(220,38,38,0.6); background: rgba(74,30,13,0.4); }
-    .retention-status.is-success { color: #4ade80; border-color: rgba(74,222,128,0.4); background: rgba(20,60,35,0.35); }
-    .retention-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
-    .retention-actions .button { padding: 6px 14px; min-width: 0; }
-    .retention-actions .button[disabled] { opacity: 0.55; cursor: not-allowed; transform: none; }
-    .retention-preview-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; }
-    .retention-preview-table th, .retention-preview-table td { border: 1px solid #333; padding: 4px 8px; text-align: left; color: #e0e0e0; }
-    .retention-preview-table th { background: #222; color: #ffb862; }
-    .retention-preview-table td.num, .retention-preview-table th.num { text-align: right; }
-    .retention-preview-box { border: 1px solid #3a3a3a; border-radius: 8px; background: rgba(0,0,0,0.25); padding: 10px 12px; margin-top: 12px; }
-    .retention-preview-box h3 { font-size: 14px; color: #ffb862; margin: 0 0 6px 0; }
-    .retention-playthrough-list { list-style: none; margin: 8px 0 0 0; padding: 0; border: 1px solid #333; border-radius: 8px; background: #1a1a1a; }
-    .retention-playthrough-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #2c2c2c; flex-wrap: wrap; font-size: 13px; color: #e0e0e0; }
-    .retention-playthrough-list li:last-child { border-bottom: none; }
-    .retention-badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 4px; margin-left: 6px; border: 1px solid #444; color: #ccc; white-space: nowrap; }
-    .retention-badge.b-active { background: #14532d; color: #bbf7d0; border-color: #166534; }
-    .retention-badge.b-default { background: #1e3a5f; color: #bfdbfe; border-color: #1d4ed8; }
-    .retention-badge.b-auto { background: #3b2f14; color: #fde68a; border-color: #a16207; }
-    .retention-badge.b-pinned { background: #312e81; color: #c7d2fe; border-color: #4338ca; }
-    .btn-pin { padding: 4px 10px; font-size: 12px; min-width: 0; }
-    #retention-section details { margin-top: 12px; font-size: 13px; color: #ccc; }
-    #retention-section details ul { margin: 8px 0 4px 0; padding-left: 20px; line-height: 1.6; }
-    #retention-section summary { cursor: pointer; color: #ffb862; }
-    #retention-section summary:focus-visible { outline: 2px solid #ffb862; outline-offset: 2px; }
-    @media (max-width: 700px) { .retention-actions .button { width: 100%; text-align: center; } }
+    .retention-note { font-size:12px; color:#9fb1c9; margin:6px 0; line-height:1.5; }
+
     /* Accessibility helpers */
     .visually-hidden { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; clip:rect(0 0 0 0); clip-path: inset(50%); overflow:hidden; white-space:nowrap; }
     main button:focus-visible, main a:focus-visible, main input:focus-visible, .ptm-dialog button:focus-visible { outline: 2px solid #ffb862; outline-offset: 2px; }
@@ -770,16 +734,16 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     </div>
 
     <div class="page-header">
-        <?php if ($ptmFragment): ?><h2>Playthroughs and cleanup</h2><?php else: ?><h1>Playthrough Management</h1><?php endif; ?>
+        <?php if ($ptmFragment): ?><h2>Playthroughs and cleanup</h2><?php else: ?><h1>Playthrough Saves</h1><?php endif; ?>
         <div style="font-size: 0.95em; color: #ccc; margin-bottom: 10px;">Save or restore playthroughs. Restoring first saves your current progress over the active playthrough.</div>
 
         <details class="storage-help"><summary>How playthroughs work</summary>
         <div style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; border: 1px solid #444; margin-top: 15px; text-align: left;">
             <div style="font-size: 0.9em; color: #e0e0e0; line-height: 1.6;">
                 • <strong>Active playthrough</strong> = the live data CHIM is reading and writing right now.<br>
-                • <strong>Saved playthroughs</strong> = stored copies of a playthrough. They are not in use.<br>
+                • <strong>Playthrough Saves</strong> = stored copies of a playthrough. They are not in use.<br>
                 • <strong>Restore</strong> = saves your current progress over the active playthrough first, then loads the selected playthrough as the new active playthrough. If the currently active playthrough cannot be determined, the restore is blocked so nothing is overwritten.<br>
-                • <strong>Dragon Breaks</strong> = playthroughs saved automatically when you load a save 3+ days behind.<br>
+                • <strong>Automatic Rollback Saves</strong> = playthroughs saved automatically when you load a save at least the configured number of in-game days behind.<br>
                 <span class="help-text">Technical note: the active playthrough lives in the PostgreSQL <code>public</code> schema; saved playthroughs are cloned schemas in the same database.</span>
             </div>
         </div>
@@ -866,7 +830,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         </div>
 
         <div class="content-section">
-            <h2>💾 Saved playthroughs</h2>
+            <h2>💾 Playthrough Saves</h2>
             <div class="help-text" style="margin-bottom: 12px;">
                 Stored copies of playthroughs — they are not in use.
                 <strong>Restore</strong> loads one as the active playthrough; your current progress is saved over the active playthrough first.
@@ -958,131 +922,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         </div>
     </div>
 
-    <div class="content-section full-width-section" id="retention-section" style="margin-top: 30px;">
-        <h2>🧹 Storage cleanup</h2>
-        <div class="help-text" style="margin-bottom: 10px;">
-            Choose which old data CHIM can delete. Cleanup is <strong>off by default</strong>.
-            These settings apply to every playthrough on this server.
-        </div>
-        <div class="retention-note" style="margin-bottom: 4px;">
-            Your current playthrough's memories, relationships, diaries, quests and files stay intact.
-            A playthrough is a saved copy of CHIM data. Restore it alongside the matching Skyrim save. Deleting a copy permanently removes its stored data.
-        </div>
-
-        <div id="retention-status" role="status" aria-live="polite" class="retention-status"></div>
-
-        <form id="retention-form" novalidate data-api="<?php echo htmlspecialchars($webRoot . '/ui/api/playthrough_retention.php', ENT_QUOTES); ?>" data-csrf="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES); ?>">
-            <div class="retention-grid">
-                <fieldset class="retention-fieldset">
-                    <legend>Automatic cleanup</legend>
-                    <div class="retention-row">
-                        <input type="checkbox" id="ret-automatic" name="automatic" disabled>
-                        <label for="ret-automatic">Clean up automatically</label>
-                    </div>
-                    <p class="retention-note" id="ret-automatic-help">
-                        After you save, CHIM can run the enabled cleanups once an hour while its Background Processor is running. Off by default.
-                    </p>
-                    <p class="retention-note">Last run: <span id="ret-lastrun">—</span></p>
-                </fieldset>
-
-                <fieldset class="retention-fieldset">
-                    <legend>Debug logs</legend>
-                    <div class="retention-row">
-                        <input type="checkbox" id="ret-diag-enabled" name="diagnostics_enabled" disabled>
-                        <label for="ret-diag-enabled">Delete old debug logs</label>
-                    </div>
-                    <div class="retention-row">
-                        <label for="ret-diag-days">Delete entries older than</label>
-                        <input type="number" id="ret-diag-days" name="diagnostic_days" inputmode="numeric" min="1" max="3650" step="1" value="7" disabled aria-describedby="ret-diag-help">
-                        <span>real-world days (1–3650)</span>
-                    </div>
-                    <div class="retention-row">
-                        <label for="ret-diag-maxmb">Try to stay under</label>
-                        <input type="number" id="ret-diag-maxmb" name="diagnostic_max_mb" inputmode="numeric" min="0" max="102400" step="1" value="500" disabled aria-describedby="ret-diag-help">
-                        <span>MB per log table (0 = ignore size)</span>
-                    </div>
-                    <p class="retention-note" id="ret-diag-help">
-                        Deletes old entries, or entries from logs above the size target. Always keeps the last 24 hours and unsent replies.
-                        The size target applies separately to each of the three log tables. It is a goal, not a hard limit.
-                    </p>
-                </fieldset>
-
-                <fieldset class="retention-fieldset">
-                    <legend>Automatic playthroughs (Dragon Breaks)</legend>
-                    <div class="retention-row">
-                        <input type="checkbox" id="ret-pt-enabled" name="playthroughs_enabled" disabled>
-                        <label for="ret-pt-enabled">Delete old automatic recovery copies</label>
-                    </div>
-                    <div class="retention-row">
-                        <label for="ret-pt-keep">Keep the newest</label>
-                        <input type="number" id="ret-pt-keep" name="playthrough_keep" inputmode="numeric" min="1" max="100" step="1" value="5" disabled aria-describedby="ret-pt-help">
-                        <span>automatic playthroughs (1–100)</span>
-                    </div>
-                    <p class="retention-note" id="ret-pt-help">
-                        Keeps the active and default playthroughs, protected copies, playthroughs you saved yourself, and copies made before this cleanup feature.
-                    </p>
-                </fieldset>
-
-                <fieldset class="retention-fieldset">
-                    <legend>Event log (preview only)</legend>
-                    <div class="retention-row">
-                        <label for="ret-event-days">Preview events older than</label>
-                        <input type="number" id="ret-event-days" name="event_days" inputmode="numeric" min="0" max="3650" step="1" value="0" disabled aria-describedby="ret-event-blocked ret-event-help">
-                        <span>in-game days (0 = no preview)</span>
-                    </div>
-                    <div class="retention-blocked" id="ret-event-blocked">
-                        <strong>Preview only — no events are deleted.</strong> CHIM may still need them to build NPC memories.
-                    </div>
-                    <p class="retention-note" id="ret-event-help">Counted in in-game days back from the latest game time CHIM has recorded.</p>
-                </fieldset>
-            </div>
-
-            <div class="retention-actions">
-                <button type="submit" class="button" id="ret-save" style="background-color: rgb(1 53 166 / 90%); color:#fff;" disabled>💾 Save settings</button>
-                <button type="button" class="button" id="ret-preview" style="background-color:#333; color:#e0e0e0;" disabled>🔍 Preview cleanup (saved settings)</button>
-                <button type="button" class="button" id="ret-run" style="background-color: rgba(166, 53, 63, 0.9); color:#fff;" disabled aria-disabled="true">🗑️ Run cleanup now</button>
-            </div>
-            <p class="retention-note" id="ret-run-hint">
-                Saving settings never deletes anything. Preview always uses the settings you last <em>saved</em>, so save first if you just changed something.
-                "Run cleanup now" unlocks only after a preview and still asks you to confirm. A preview lasts 5 minutes, and changing any setting or playthrough protection cancels it.
-            </p>
-        </form>
-
-        <div id="ret-preview-out" style="margin-top: 4px;"></div>
-
-        <div style="margin-top: 16px;">
-            <strong style="color:#ffb862; font-size: 14px;">Playthrough protection</strong>
-            <p class="retention-note">
-                Protected playthroughs cannot be deleted, even manually, until you unprotect them.
-            </p>
-            <ul class="retention-playthrough-list" id="ret-pt-list">
-                <li><span>Loading playthrough list…</span></li>
-            </ul>
-        </div>
-
-        <details>
-            <summary>How storage cleanup works (details)</summary>
-            <ul>
-                <li>These settings are stored on the server and apply to whichever playthrough is loaded. <strong>Saving them never deletes anything by itself</strong> — turning on automatic cleanup is what lets CHIM delete in the background.</li>
-                <li>Debug log cleanup covers three tables: log, audit_request, and already-sent rows in responselog. Each table is checked on its own, by real-world age or by estimated size. Rows from the last 24 hours and replies CHIM has not sent yet are always kept.</li>
-                <li>Cleanup runs only when you press "Run cleanup now" after a preview and confirm, or at most once an hour when automatic cleanup is on and CHIM's Background Processor is running.</li>
-                <li>A preview always uses the settings you last <em>saved</em>. It shows the exact number of log entries and the playthrough names for the next cleanup, and it expires after 5 minutes.</li>
-                <li>Each round deletes at most 1,000 debug log rows per table and 3 automatic playthroughs. Sizes shown are estimates of the data itself: that space becomes reusable inside the database, but the files on disk may not shrink.</li>
-                <li id="ret-event-status">The event-days box is preview only. This cleanup never deletes events.</li>
-                <li>Your current playthrough's NPC memories, relationships, diaries and quests are never trimmed. Deleting a playthrough deletes the whole saved copy, including the records inside it. Audio and temporary files are left alone.</li>
-                <li>Only playthroughs that were tagged as automatic Dragon Breaks when they were created can be deleted here. Playthroughs made before this feature existed count as manual and are never removed automatically.</li>
-            </ul>
-        </details>
-    </div>
-
-    <dialog id="ret-confirm-dialog" class="ptm-dialog" aria-labelledby="ret-confirm-title" aria-describedby="ret-confirm-body">
-        <h3 id="ret-confirm-title">Run cleanup now?</h3>
-        <p id="ret-confirm-body" style="white-space:pre-line;"></p>
-        <form method="dialog" class="ptm-dialog-buttons">
-            <button class="button" value="cancel" autofocus>Cancel</button>
-            <button class="button" value="run" style="background:#a6353f;color:#fff;">Delete this batch</button>
-        </form>
-    </dialog>
+    <?php include __DIR__ . '/tmpl/playthrough_save_controls.php'; ?>
     <dialog id="ptm-dialog" class="ptm-dialog" role="alertdialog" aria-labelledby="ptm-dialog-title" aria-describedby="ptm-dialog-body">
         <h3 id="ptm-dialog-title"></h3>
         <div id="ptm-dialog-body"></div>
@@ -1383,7 +1223,7 @@ if (!$ptmFragment) {
         const total = Math.max(0, s.total_bytes);
         const segs = [
             { label: 'Active playthrough and settings', bytes: Math.max(0, s.playthrough_bytes || 0), cls: 'seg-playthrough' },
-            { label: 'Saved playthroughs' + (s.playthrough_schemas ? ' (' + s.playthrough_schemas + ')' : ''), bytes: Math.max(0, s.playthroughs_bytes || 0), cls: 'seg-playthroughs' },
+            { label: 'Playthrough Saves' + (s.playthrough_schemas ? ' (' + s.playthrough_schemas + ')' : ''), bytes: Math.max(0, s.playthroughs_bytes || 0), cls: 'seg-playthroughs' },
             { label: 'Diagnostics logs', bytes: Math.max(0, s.diagnostics_bytes || 0), cls: 'seg-diagnostics' },
             { label: 'Other', bytes: Math.max(0, s.other_bytes || 0), cls: 'seg-other' }
         ];
@@ -1468,5 +1308,3 @@ if (!$ptmFragment) {
     } catch (_e) {}
 })();
 </script>
-
-<script src="<?php echo $webRoot; ?>/ui/js/playthrough_retention.js"></script>

@@ -398,7 +398,7 @@ $serverLogoFile = $isDevBuild ? 'serverlogodev.png' : 'serverlogo.png';
                     $navStorageUrl = $navStorageAvailable
                         ? preg_replace('#/HerikaServer$#', '/Dwemer-Dashboard', $webRoot) . '/data_manager.php?mod=chim&view=manage'
                         : $webRoot . '/ui/import_db.php';
-                    $navStorageLabel = $navStorageAvailable ? 'Playthrough Management' : 'Database Manager';
+                    $navStorageLabel = $navStorageAvailable ? 'Playthrough Saves' : 'Database Manager';
                     ?>
                     <a class="dropdown-item" href="<?php echo htmlspecialchars((string)$navStorageUrl, ENT_QUOTES, 'UTF-8'); ?>" title="Playthroughs, storage cleanup, backups, restore and maintenance.">
                         <?php echo $navStorageLabel; ?>

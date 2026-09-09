@@ -4,14 +4,14 @@
 // it only when the persisted policy is enabled and the hourly interval is due.
 (function () {
     require_once $GLOBALS['ENGINE_ROOT'] . 'lib/playthrough_retention.php';
-    $conn = @pg_connect('host=localhost port=5432 dbname=dwemer user=dwemer password=dwemer', PGSQL_CONNECT_FORCE_NEW);
+    $conn = ptp_connect();
     if (!$conn) return;
     try {
         $settings = ptr_settings($conn);
         $due = time() - (int)ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', 0) >= 3600;
-        if (!$settings['automatic'] || !$due || (!$settings['diagnostics_enabled'] && !$settings['playthroughs_enabled'])) return;
+        if (!$settings['automatic'] || !$due || (!$settings['diagnostics_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0))) return;
         $GLOBALS['TASKS']['retention'] = ['fn' => function () {
-            $workerConn = @pg_connect('host=localhost port=5432 dbname=dwemer user=dwemer password=dwemer', PGSQL_CONNECT_FORCE_NEW);
+            $workerConn = ptp_connect();
             if (!$workerConn) return;
             try { ptr_tick($workerConn); } finally { pg_close($workerConn); }
         }];

@@ -12,17 +12,11 @@ require_once(__DIR__ . DIRECTORY_SEPARATOR . 'playthrough_retention.php');
  */
 
 function dragon_break_is_enabled() {
-	if (!isset($GLOBALS["DRAGON_BREAK_AUTO_PLAYTHROUGH"])) {
-		$GLOBALS["DRAGON_BREAK_AUTO_PLAYTHROUGH"] = true;
-	}
-	return !!$GLOBALS["DRAGON_BREAK_AUTO_PLAYTHROUGH"];
+	return ptp_runtime_backup_settings()['enabled'];
 }
 
 function dragon_break_min_days() {
-	if (!isset($GLOBALS["DRAGON_BREAK_MIN_DAYS"])) {
-		$GLOBALS["DRAGON_BREAK_MIN_DAYS"] = 3;
-	}
-	return intval($GLOBALS["DRAGON_BREAK_MIN_DAYS"]);
+	return ptp_runtime_backup_settings()['min_days'];
 }
 
 /**
@@ -150,6 +144,7 @@ function dragon_break_create_playthrough($name, $notes) {
 	Logger::error("DragonBreak: Failed to insert profile record");
 	return 0;
 	} finally {
+		ptp_record_backup($adminConn, $profileId ?? 0, ($profileId ?? 0) > 0 ? 'Automatic Playthrough Save created.' : 'Automatic Playthrough Save failed. Check the server log.');
 		ptr_unlock($adminConn);
 		pg_close($adminConn);
 	}
@@ -160,9 +155,6 @@ function dragon_break_create_playthrough($name, $notes) {
  * Returns playthrough id (existing or newly created), or 0.
  */
 function dragon_break_playthrough_if_needed($prevGamets, $incomingGamets) {
-	if (!dragon_break_is_enabled()) {
-		return 0;
-	}
 	$prev = intval($prevGamets);
 	$incoming = intval($incomingGamets);
 	if ($prev <= 0 || $incoming <= 0) {
@@ -171,13 +163,17 @@ function dragon_break_playthrough_if_needed($prevGamets, $incomingGamets) {
 	if ($incoming >= $prev) {
 		return 0;
 	}
+	if (!dragon_break_is_enabled()) {
+		return 0;
+	}
+
 	$daysRollback = gamets2days_between($incoming, $prev);
 	if ($daysRollback < dragon_break_min_days()) {
 		return 0;
 	}
 	$dateNew = convert_gamets2skyrim_long_date_no_time($incoming);
 	$dateOld = convert_gamets2skyrim_long_date_no_time($prev);
-	$name = "Dragon Break (" . $dateOld . " -> " . $dateNew . ")";
+	$name = "Automatic Playthrough Save (" . $dateOld . " -> " . $dateNew . ")";
 	$notes = "Automatic playthrough save due to rollback of {$daysRollback} in-game days ({$incoming} -> {$prev}).";
 	return dragon_break_create_playthrough($name, $notes);
 }

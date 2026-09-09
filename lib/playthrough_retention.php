@@ -1,12 +1,47 @@
 <?php
 
 require_once __DIR__ . '/playthrough_schema.php';
+require_once __DIR__ . '/playthrough_preferences.php';
+
+function ptr_categories(): array {
+    return [
+        'log' => ['label'=>'Prompt and response logs', 'table'=>'log', 'stamp'=>'localts'],
+        'requests' => ['label'=>'Request logs', 'table'=>'audit_request', 'stamp'=>'EXTRACT(EPOCH FROM created_at)'],
+        'recall' => ['label'=>'Memory search logs', 'table'=>'audit_memory', 'stamp'=>'EXTRACT(EPOCH FROM created_at)'],
+        'responses' => ['label'=>'Delivered response logs', 'table'=>'responselog', 'stamp'=>'localts'],
+    ];
+}
+
+function ptr_relationship_filter(): string { return " AND connector ILIKE '%Relationship%'"; }
+
+// Manual selection uses the same expiring, atomic plan as policy-based cleanup.
+function ptr_preview_delete($conn, array $ids): array {
+    if (!$ids || count($ids)>50) throw new InvalidArgumentException('Select between 1 and 50 Playthrough Saves.');
+    foreach ($ids as $id) if (!is_int($id) || $id<1) throw new InvalidArgumentException('Invalid Playthrough Save selection.');
+    $ids = array_unique($ids);
+    $plan = ptr_preview($conn, ptr_defaults());
+    foreach (ptr_profiles($conn) as $profile) {
+        if (!in_array($profile['id'], $ids, true)) continue;
+        if ($profile['is_active'] || $profile['is_default'] || $profile['pinned'] || $profile['storage_type'] !== 'schema') {
+            throw new RuntimeException('A selected save is active, protected or unsupported. Nothing was deleted.');
+        }
+        $plan['playthroughs'][] = ['id'=>$profile['id'], 'name'=>$profile['name'], 'bytes'=>$profile['bytes']];
+    }
+    if (count($plan['playthroughs']) !== count($ids)) throw new RuntimeException('A selected save no longer exists. Preview again.');
+    return $plan;
+}
 
 // Retention is opt-in. This metadata lives outside saved playthroughs so restoring a game
 // cannot silently re-enable an old cleanup policy.
 function ptr_defaults(): array {
-    return ['automatic' => false, 'diagnostics_enabled' => false, 'diagnostic_days' => 7,
-        'diagnostic_max_mb' => 500, 'playthroughs_enabled' => false, 'playthrough_keep' => 5, 'event_days' => 0];
+    $settings = ['automatic'=>false, 'diagnostics_enabled'=>false, 'diagnostic_days'=>7,
+        'diagnostic_max_mb'=>0, 'playthroughs_enabled'=>false, 'playthrough_keep'=>0, 'event_days'=>0, 'requests_filter'=>'all'];
+    foreach (ptr_categories() as $key => $category) {
+        $settings[$key . '_enabled'] = false;
+        $settings[$key . '_days'] = 7;
+        $settings[$key . '_max_mb'] = 0;
+    }
+    return $settings;
 }
 
 function ptr_query($conn, string $sql, array $params = []) {
@@ -24,7 +59,7 @@ function ptr_ensure_schema($conn): void {
     ptr_query($conn, 'CREATE SCHEMA IF NOT EXISTS chim_meta');
     ptr_query($conn, 'CREATE TABLE IF NOT EXISTS chim_meta.settings (key TEXT PRIMARY KEY, value TEXT)');
     if (ptr_exists($conn, 'chim_meta.playthrough_profiles')) {
-        ptr_query($conn, "ALTER TABLE chim_meta.playthrough_profiles ADD COLUMN IF NOT EXISTS retention_kind TEXT NOT NULL DEFAULT 'manual'");
+        ptr_query($conn, "ALTER TABLE chim_meta.playthrough_profiles ADD COLUMN IF NOT EXISTS retention_kind TEXT NOT NULL DEFAULT 'unclassified'");
         ptr_query($conn, 'ALTER TABLE chim_meta.playthrough_profiles ADD COLUMN IF NOT EXISTS retention_pinned BOOLEAN NOT NULL DEFAULT false');
     }
 }
@@ -46,17 +81,34 @@ function ptr_settings($conn): array {
 
 function ptr_validate(array $input): array {
     $settings = ptr_defaults();
-    foreach (['automatic', 'diagnostics_enabled', 'playthroughs_enabled'] as $key) {
+    $booleans = ['automatic','diagnostics_enabled','playthroughs_enabled'];
+    $numbers = ['diagnostic_days'=>[1,3650], 'diagnostic_max_mb'=>[0,102400], 'playthrough_keep'=>[0,10000], 'event_days'=>[0,3650]];
+    foreach (ptr_categories() as $key => $category) {
+        $booleans[] = $key . '_enabled';
+        $numbers[$key . '_days'] = [1,3650];
+        $numbers[$key . '_max_mb'] = [0,102400];
+        // Preserve saved legacy settings without implicitly enabling a new cleanup category.
+        if (!array_key_exists($key . '_enabled', $input) && array_key_exists('diagnostics_enabled', $input)) {
+            $input[$key . '_enabled'] = $key === 'recall' ? false : $input['diagnostics_enabled'];
+            $input[$key . '_days'] = $input['diagnostic_days'] ?? 7;
+            $input[$key . '_max_mb'] = $input['diagnostic_max_mb'] ?? 500;
+        }
+    }
+    foreach ($booleans as $key) {
         if (!array_key_exists($key, $input)) continue;
         if (!in_array($input[$key], [true, false, 0, 1, '0', '1'], true)) throw new InvalidArgumentException('That cleanup on/off value was not valid.');
         $settings[$key] = in_array($input[$key], [true, 1, '1'], true);
     }
-    foreach (['diagnostic_days' => [1,3650], 'diagnostic_max_mb' => [0,102400], 'playthrough_keep' => [1,100], 'event_days' => [0,3650]] as $key => [$min,$max]) {
+    foreach ($numbers as $key => [$min,$max]) {
         if (!array_key_exists($key, $input)) continue;
         $number = filter_var($input[$key], FILTER_VALIDATE_INT);
         if ($number === false || $number < $min || $number > $max) throw new InvalidArgumentException('That cleanup value is outside its allowed range.');
         $settings[$key] = $number;
     }
+    if (!in_array($input['requests_filter'] ?? 'all', ['all','relationship'], true)) throw new InvalidArgumentException('Choose a valid request-log filter.');
+    $settings['requests_filter'] = $input['requests_filter'] ?? 'all';
+    $settings['diagnostics_enabled'] = false;
+    foreach (ptr_categories() as $key => $category) $settings['diagnostics_enabled'] = $settings['diagnostics_enabled'] || $settings[$key . '_enabled'];
     return $settings;
 }
 
@@ -74,7 +126,7 @@ function ptr_profiles($conn): array {
     if (!ptr_exists($conn, 'chim_meta.playthrough_profiles')) return [];
     // JSON field reads tolerate profiles created before newer metadata columns.
     $rows = pg_fetch_all(ptr_query($conn, "SELECT id, name, is_active, created_at, size_bytes,
-        COALESCE(to_jsonb(p)->>'retention_kind','manual') AS retention_kind,
+        COALESCE(to_jsonb(p)->>'retention_kind','unclassified') AS retention_kind,
         COALESCE(to_jsonb(p)->>'retention_pinned','false') AS retention_pinned,
         COALESCE(to_jsonb(p)->>'storage_type','dump') AS storage_type,
         to_jsonb(p)->>'schema_name' AS schema_name
@@ -84,7 +136,7 @@ function ptr_profiles($conn): array {
         $row['bytes'] = (int)$row['size_bytes'];
         $row['is_active'] = $row['is_active'] === 't';
         $row['is_default'] = strtolower($row['name']) === 'default';
-        $row['automatic'] = $row['retention_kind'] === 'dragon_break';
+        $row['automatic'] = in_array($row['retention_kind'], ['dragon_break','before_switch'], true);
         $row['pinned'] = $row['retention_pinned'] === 'true';
     }
     return $rows;
@@ -92,8 +144,8 @@ function ptr_profiles($conn): array {
 
 // A preview cannot be applied to a restored schema or changed playthrough set.
 function ptr_identity($conn): string {
-    $relations = pg_fetch_all(ptr_query($conn, "SELECT n.nspname,c.relname,c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-        WHERE n.nspname='public' AND c.relname IN ('eventlog','log','audit_request','responselog') ORDER BY c.relname")) ?: [];
+    $relations = pg_fetch_all(ptr_query($conn, "SELECT n.nspname,c.relname,c.oid,c.relfilenode FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname IN ('eventlog','log','audit_request','audit_memory','responselog') ORDER BY c.relname")) ?: [];
     return hash('sha256', json_encode([$relations, ptr_profiles($conn), ptr_settings($conn)]));
 }
 
@@ -102,24 +154,28 @@ function ptr_identity($conn): string {
 function ptr_preview($conn, array $settings): array {
     $plan = ['identity' => ptr_identity($conn), 'created' => time(), 'diagnostics' => [], 'playthroughs' => [], 'more_possible' => false,
         'events' => ['older_rows' => 0, 'cutoff_gamets' => null,
-            'blocked_reason' => 'CHIM cannot yet confirm that these events have finished being turned into NPC memories.'],
+            'blocked_reason' => 'Event history is kept because it supports NPC memories.'],
         'message' => 'This is one cleanup round. Space from deleted rows becomes reusable inside the database, but the files on disk may not shrink.'];
     if ($settings['diagnostics_enabled']) {
-        $cutoff = time() - $settings['diagnostic_days'] * 86400;
-        foreach (['log' => 'localts', 'audit_request' => 'created_at', 'responselog' => 'localts'] as $table => $column) {
+        foreach (ptr_categories() as $key => $category) {
+            if (!$settings[$key . '_enabled']) continue;
+            $cutoff = time() - $settings[$key . '_days'] * 86400;
+            $table = $category['table'];
             if (!ptr_exists($conn, 'public.' . $table)) continue;
-            $stamp = $column === 'created_at' ? 'EXTRACT(EPOCH FROM created_at)' : $column;
+            $stamp = $category['stamp'];
             // responselog is also a delivery queue: unsent entries are never eligible.
             $delivered = $table === 'responselog' ? 'AND sent > 0' : '';
-            $rows = pg_fetch_all(ptr_query($conn, "SELECT rowid, xmin::text AS version, pg_column_size(t) AS bytes, {$stamp} AS stamp
+            if ($key === 'requests' && $settings['requests_filter'] === 'relationship') $delivered .= ptr_relationship_filter();
+            // ctid + xmin also identify rows in keyless audit_memory. Rewrites invalidate the preview.
+            $rows = pg_fetch_all(ptr_query($conn, "SELECT ctid::text AS rowid, xmin::text AS version, pg_column_size(t) AS bytes, {$stamp} AS stamp
                 FROM public.{$table} t WHERE {$stamp} > 0 AND {$stamp} < $1 {$delivered}
-                ORDER BY {$column}, rowid LIMIT 1000", [time() - 86400])) ?: [];
+                ORDER BY {$stamp}, ctid LIMIT 1000", [time() - 86400])) ?: [];
             $excess = 0;
             // If age already selects this entire batch, measuring the whole table
             // cannot change the result. Empty batches need no size scan either.
-            if ($settings['diagnostic_max_mb'] > 0 && $rows && (float)$rows[count($rows) - 1]['stamp'] >= $cutoff) {
-                $bytes = pg_fetch_result(ptr_query($conn, "SELECT COALESCE(SUM(pg_column_size(t)),0) FROM public.{$table} t"), 0, 0);
-                $excess = max(0, (int)$bytes - $settings['diagnostic_max_mb'] * 1048576);
+            if ($settings[$key . '_max_mb'] > 0 && $rows && (float)$rows[count($rows) - 1]['stamp'] >= $cutoff) {
+                $bytes = pg_fetch_result(ptr_query($conn, "SELECT COALESCE(SUM(pg_column_size(t)),0) FROM public.{$table} t WHERE true {$delivered}"), 0, 0);
+                $excess = max(0, (int)$bytes - $settings[$key . '_max_mb'] * 1048576);
             }
             $selected = []; $size = 0;
             foreach ($rows as $row) {
@@ -128,11 +184,11 @@ function ptr_preview($conn, array $settings): array {
                 $size += (int)$row['bytes'];
                 $excess -= (int)$row['bytes'];
             }
-            $plan['diagnostics'][] = ['table' => $table, 'rows' => count($selected), 'bytes_estimate' => $size, 'selected' => $selected];
+            $plan['diagnostics'][] = ['table' => $table, 'label'=>$category['label'], 'rows' => count($selected), 'bytes_estimate' => $size, 'selected' => $selected];
             if (count($selected) === 1000) $plan['more_possible'] = true;
         }
     }
-    if ($settings['playthroughs_enabled']) {
+    if ($settings['playthroughs_enabled'] && $settings['playthrough_keep'] > 0) {
         $seen = 0;
         foreach (ptr_profiles($conn) as $profile) {
             if (!$profile['automatic']) continue;
@@ -141,11 +197,10 @@ function ptr_preview($conn, array $settings): array {
             // Automatic cleanup only operates on explicitly tagged schema playthroughs.
             if ($profile['storage_type'] !== 'schema' || !str_starts_with((string)$profile['schema_name'], 'chim_profile_')) continue;
             $plan['playthroughs'][] = ['id' => $profile['id'], 'name' => $profile['name'], 'bytes' => $profile['bytes']];
-            if (count($plan['playthroughs']) >= 3) {
-                $plan['more_possible'] = true;
-                break;
-            }
         }
+        $plan['playthroughs'] = array_reverse($plan['playthroughs']);
+        if (count($plan['playthroughs']) > 3) $plan['more_possible'] = true;
+        $plan['playthroughs'] = array_slice($plan['playthroughs'], 0, 3);
     }
     if ($settings['event_days'] > 0 && ptr_exists($conn, 'public.eventlog')) {
         // Preview only: never use this timestamp as proof that an event is disposable.
@@ -184,12 +239,12 @@ function ptr_execute($conn, array $plan): array {
         if (!hash_equals($plan['identity'], ptr_identity($conn))) throw new RuntimeException('Your playthrough or settings changed. Run a new preview.');
         $deleted = 0;
         foreach ($plan['diagnostics'] as $group) {
-            if (!in_array($group['table'], ['log','audit_request','responselog'], true)) throw new RuntimeException('An unexpected log table was in the plan, so nothing was deleted.');
+            if (!in_array($group['table'], array_column(ptr_categories(), 'table'), true)) throw new RuntimeException('An unexpected log table was in the plan, so nothing was deleted.');
             if (!$group['selected']) continue;
             $table = $group['table'];
             $queueGuard = $table === 'responselog' ? 'AND t.sent > 0' : '';
-            $res = ptr_query($conn, "DELETE FROM public.{$table} t USING jsonb_to_recordset($1::jsonb) AS chosen(id bigint, version text)
-                WHERE t.rowid=chosen.id AND t.xmin::text=chosen.version {$queueGuard}", [json_encode($group['selected'])]);
+            $res = ptr_query($conn, "DELETE FROM public.{$table} t USING jsonb_to_recordset($1::jsonb) AS chosen(id text, version text)
+                WHERE t.ctid=chosen.id::tid AND t.xmin::text=chosen.version {$queueGuard}", [json_encode($group['selected'])]);
             if (pg_affected_rows($res) !== count($group['selected'])) throw new RuntimeException('The debug logs changed since the preview. Run a new preview.');
             $deleted += pg_affected_rows($res);
         }
@@ -211,13 +266,13 @@ function ptr_execute($conn, array $plan): array {
 function ptr_tick($conn): void {
     if (!ptr_exists($conn, 'chim_meta.settings')) return;
     $settings = ptr_settings($conn);
-    if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && !$settings['playthroughs_enabled'])) return;
+    if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0))) return;
     $attempt = (int)ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', 0);
     if (time() - $attempt < 3600 || !ptr_lock($conn)) return;
     try {
         if (time() - (int)ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', 0) < 3600) return;
         $settings = ptr_settings($conn);
-        if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && !$settings['playthroughs_enabled'])) return;
+        if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0))) return;
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', time());
         ptr_query($conn, "SET statement_timeout='20s'");
         $plan = ptr_preview($conn, $settings);
@@ -225,7 +280,7 @@ function ptr_tick($conn): void {
     } catch (Throwable $e) {
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', ['at' => gmdate('c'), 'status' => 'failed', 'rows' => 0, 'playthroughs' => 0,
             'message' => 'Cleanup failed. Nothing was deleted. Use Preview cleanup to try again.']);
-        Logger::error('Playthrough retention: ' . $e->getMessage());
+        error_log('Playthrough retention: ' . $e->getMessage());
     } finally {
         @pg_query($conn, 'RESET statement_timeout');
         ptr_unlock($conn);
