@@ -30,7 +30,7 @@ function pts_ensure_functions($conn): bool {
     if ($checkResult && pg_num_rows($checkResult) > 0) {
         $row = pg_fetch_assoc($checkResult);
         if (pts_clone_function_is_current($row['function_definition'] ?? null)
-            && pg_fetch_result(pg_query($conn, "SELECT to_regprocedure('chim_meta.restore_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.capture_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.clone_selected_schema(text,text,text[])') IS NOT NULL"), 0, 0) === 't') {
+            && pg_fetch_result(pg_query($conn, "SELECT to_regprocedure('chim_meta.restore_playthrough_upgraded(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.capture_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.clone_selected_schema(text,text,text[])') IS NOT NULL"), 0, 0) === 't') {
             return true;
         }
 
@@ -45,11 +45,12 @@ function pts_ensure_functions($conn): bool {
     
     $sql = file_get_contents($sqlFile);
     $selectionSql = file_get_contents(__DIR__ . '/playthrough_selection.sql');
-    if ($selectionSql === false) {
+    $upgradeSql = file_get_contents(__DIR__ . '/playthrough_upgrade.sql');
+    if ($selectionSql === false || $upgradeSql === false) {
         return false;
     }
     if ($sql !== false) {
-        $sql .= "\n" . $selectionSql;
+        $sql .= "\n" . $selectionSql . "\n" . $upgradeSql;
     }
     if ($sql === false) {
         Logger::error("Failed to read schema_clone_function.sql");
@@ -127,7 +128,7 @@ function pts_transfer_playthrough($conn, string $schemaName, bool $restore = fal
     if (!pts_ensure_functions($conn)) {
         return ['success' => false, 'error' => 'Playthrough database functions are unavailable'];
     }
-    $function = $restore ? 'restore_playthrough' : 'capture_playthrough';
+    $function = $restore ? 'restore_playthrough_upgraded' : 'capture_playthrough';
     $result = @pg_query_params($conn,
         "SELECT chim_meta.{$function}($1, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)))",
         [$schemaName, json_encode(pts_playthrough_tables())]);
