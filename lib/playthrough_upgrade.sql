@@ -103,7 +103,9 @@ BEGIN
                         AND src.attname=dst.attname AND src.attnum>0 AND NOT src.attisdropped)
             ORDER BY dst.attnum
         LOOP
-            IF item.attidentity<>'' OR EXISTS (
+            -- Text-built sequence names have no pg_depend entry; reject those
+            -- calls too, since nextval/setval changes cannot be rolled back.
+            IF item.attidentity<>'' OR item.expression ~* '\m(nextval|setval)\s*\(' OR EXISTS (
                 SELECT 1 FROM pg_depend d
                 LEFT JOIN pg_proc p ON d.refclassid='pg_proc'::regclass AND p.oid=d.refobjid
                 WHERE d.classid='pg_attrdef'::regclass AND d.objid=item.default_oid
