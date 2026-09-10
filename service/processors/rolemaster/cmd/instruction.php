@@ -74,6 +74,10 @@ if (!isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]) ) {
         if ($nearbySceneContext !== "") {
             $historyData .= $nearbySceneContext . PHP_EOL.PHP_EOL;
         }
+        if ($isBoredInstruction) {
+            // Ground the opener in the same current world context used by normal dialogue.
+            $historyData .= buildWorldPrompt($GLOBALS["gameRequest"][2] ?? 0) . PHP_EOL.PHP_EOL;
+        }
         
         $recap=$GLOBALS["db"]->fetchOne("SELECT * FROM rolemaster where type='story_summary' ORDER BY rowid DESC LIMIT 1");
         if (isset($recap["data"])) {
