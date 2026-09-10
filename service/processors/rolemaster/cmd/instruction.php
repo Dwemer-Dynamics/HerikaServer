@@ -107,6 +107,18 @@ if (!isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]) ) {
             $historyData .= "\n" . $relContext . "\n";
         }
 
+        if (!$isBoredInstruction) {
+            require_once $GLOBALS['ENGINE_ROOT'] . '/lib/director_scene.php';
+            try {
+                chimGenerateDirectorScene($connectionHandler, (string)($GLOBALS['argv'][3] ?? ''), $historyData);
+            } catch (Throwable $error) {
+                Logger::error('[DIRECTOR] Scene generation failed: ' . $error->getMessage());
+                $GLOBALS['db']->insert('responselog', ['localts' => time(), 'sent' => 0, 'actor' => 'rolemaster',
+                    'text' => '', 'action' => 'rolecommand|DirectorSceneFailed@' . (int)($GLOBALS['argv'][5] ?? 0)]);
+            }
+            return;
+        }
+
         // Function stuff
         require($enginePath . "functions/functions_instruction.php");
 

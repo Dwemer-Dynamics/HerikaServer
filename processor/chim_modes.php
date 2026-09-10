@@ -127,7 +127,10 @@ if ($EXECUTION_MODE=="STANDARD") {
             "id='chim_mode'"
         );
     }
-    exec("php /var/www/html/HerikaServer/service/manager.php rolemaster instruction \"$instruction\" notify", $output, $returnCode);
+    $managerPath = dirname(__DIR__) . '/service/manager.php';
+    $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
+    exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
+        . ' rolemaster instruction ' . $instruction . ' notify ' . (int)($_GET['director_generation'] ?? 0), $output, $returnCode);
     terminate();
 
 } else if ($EXECUTION_MODE=="CHEATMODE") {
