@@ -96,7 +96,7 @@
         }
         for (const category of state.capabilities.categories) {
             const key = category.key, part = cleanupRow(key,category.label,category.description || 'Troubleshooting logs.');
-            field(part,key+'_enabled','Include in saved cleanup rules',state.settings[key+'_enabled'],'checkbox');
+            field(part,key+'_enabled','Enable cleanup',state.settings[key+'_enabled'],'checkbox');
             field(part,key+'_days','Older than (real-world days)',state.settings[key+'_days'],'number',1,3650);
             field(part,key+'_max_mb','Size limit (MB; 0 = no limit)',state.settings[key+'_max_mb'],'number',0,102400);
             if (key === 'requests') {
@@ -109,7 +109,7 @@
         }
         if (state.capabilities.event_cleanup) {
             const events = cleanupRow('events','Events',measured.get('events')?.description || 'Raw gameplay and conversation history.');
-            field(events,'events_enabled','Include in saved cleanup rules (off by default)',state.settings.events_enabled,'checkbox');
+            field(events,'events_enabled','Enable cleanup (off by default)',state.settings.events_enabled,'checkbox');
             field(events,'events_days','Older than (in-game days)',state.settings.events_days ?? 30,'number',1,3650);
             events.append(node('p','Age is measured from the latest recorded game time. Events recorded in the last 24 real-world hours, unfinished replies and the newest event of each type are kept.'));
             events.append(node('p','Deleting events removes raw history used for conversations, recall and future diaries. Saved memories and diaries are kept, but they may not contain every detail. Create a Playthrough Save first if you may need this history.'));
@@ -128,17 +128,16 @@
             row.append(node('strong',category.label),node('span',size(category.bytes)),node('p',category.description)); kept.append(row);
         }
         form.append(kept,node('p','Sizes include indexes and unused space. Size limits apply to log data. Only the preview estimates what can be deleted; cleanup may not reduce files on disk.'));
-        field(form,'automatic','Run cleanup automatically (off by default)',state.settings.automatic,'checkbox');
-        form.append(node('p','Runs saved rules at most once an hour while the background service is running. Large cleanups may take several rounds.'));
+        form.append(node('p','Enabled categories are cleaned up at most once an hour while the background service is running. Save settings to apply your changes. Large cleanups may take several rounds.'));
         if (state.last_run) form.append(node('p','Last cleanup: '+state.last_run.message+' '+state.last_run.at));
         form.append(button('Save settings',async()=> {
             if (!valid(form)) return;
             const fields=values(form);
-            if (fields.automatic==='1' && (!state.settings.automatic || fields.events_enabled==='1') && !confirm('Run the selected cleanup rules without asking each time? Your active Playthrough Save is kept.' + (fields.events_enabled==='1' ? '\n\nDeleting events removes raw history used for conversations, recall and future diaries. Saved memories and diaries are kept, but they may not contain every detail. Create a Playthrough Save first if you may need this history.' : ''))) return;
+            if (fields.events_enabled==='1' && (!state.settings.events_enabled || Number(fields.events_days)<state.settings.events_days) && !confirm('Save these Events cleanup rules? Matching older events will be deleted during background cleanup. Your active Playthrough Save is kept.' + '\n\nDeleting events removes raw history used for conversations, recall and future diaries. Saved memories and diaries are kept, but they may not contain every detail. Create a Playthrough Save first if you may need this history.')) return;
             await request('save',fields); await load(); status.textContent='Cleanup settings saved.';
         }),button('Preview all cleanup',async()=> {
             if (!valid(form)) return;
-            preview(area,(await request('preview',values(form))).preview); status.textContent='Preview only. Your settings were not saved and automatic cleanup was not turned on.';
+            preview(area,(await request('preview',values(form))).preview); status.textContent='Preview only. Your saved cleanup rules were not changed.';
             area.scrollIntoView({block:'nearest'});
         }));
         form.addEventListener('input',()=>area.replaceChildren());

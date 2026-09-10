@@ -27,7 +27,7 @@ function ptr_preview_delete($conn, array $ids): array {
 // Retention is opt-in. This metadata lives outside saved playthroughs so restoring a game
 // cannot silently re-enable an old cleanup policy.
 function ptr_defaults(): array {
-    $settings = ['automatic'=>false, 'diagnostics_enabled'=>false, 'diagnostic_days'=>7,
+    $settings = ['diagnostics_enabled'=>false, 'diagnostic_days'=>7,
         'diagnostic_max_mb'=>0, 'playthroughs_enabled'=>false, 'playthrough_keep'=>0, 'event_days'=>0, 'events_enabled'=>false, 'events_days'=>30, 'requests_filter'=>'all'];
     foreach (ptr_categories() as $key => $category) {
         $settings[$key . '_enabled'] = false;
@@ -74,7 +74,7 @@ function ptr_settings($conn): array {
 
 function ptr_validate(array $input): array {
     $settings = ptr_defaults();
-    $booleans = ['automatic','diagnostics_enabled','playthroughs_enabled','events_enabled'];
+    $booleans = ['diagnostics_enabled','playthroughs_enabled','events_enabled'];
     $numbers = ['diagnostic_days'=>[1,3650], 'diagnostic_max_mb'=>[0,102400], 'playthrough_keep'=>[0,10000], 'event_days'=>[0,3650], 'events_days'=>[1,3650]];
     foreach (ptr_categories() as $key => $category) {
         $booleans[] = $key . '_enabled';
@@ -294,17 +294,18 @@ function ptr_execute($conn, array $plan): array {
     }
 }
 
-// Existing service manager calls this; no scheduler or cleanup runs on page GET.
+// The existing service sweeps enabled categories; the retired master switch is ignored.
+// No cleanup runs on page GET, and disabled categories never enter the sweep.
 function ptr_tick($conn): void {
     if (!ptr_exists($conn, 'chim_meta.settings')) return;
     $settings = ptr_settings($conn);
-    if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && !$settings['events_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0))) return;
+    if (!$settings['diagnostics_enabled'] && !$settings['events_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0)) return;
     $attempt = (int)ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', 0);
     if (time() - $attempt < 3600 || !ptr_lock($conn)) return;
     try {
         if (time() - (int)ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', 0) < 3600) return;
         $settings = ptr_settings($conn);
-        if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && !$settings['events_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0))) return;
+        if (!$settings['diagnostics_enabled'] && !$settings['events_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0)) return;
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', time());
         ptr_query($conn, "SET statement_timeout='20s'");
         $plan = ptr_preview($conn, $settings);
