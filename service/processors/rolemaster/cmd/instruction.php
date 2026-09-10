@@ -63,7 +63,7 @@ if (!isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]) ) {
         )??[];
         $nearbySceneContext = trim((string)($GLOBALS["PROMPT_NEARBY_SECTIONS"] ?? ""));
         $contextDataFull = array_merge($contextDataWorld, $contextDataHistoric);
-        $historyData="";
+        $historyData=$isBoredInstruction ? "" : "# Current world context\n";
 
             
         foreach ($contextDataFull as $element) {
@@ -81,7 +81,7 @@ if (!isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]) ) {
         
         $recap=$GLOBALS["db"]->fetchOne("SELECT * FROM rolemaster where type='story_summary' ORDER BY rowid DESC LIMIT 1");
         if (isset($recap["data"])) {
-            $historyData=$recap["data"]."\n".$historyData;
+            $historyData=($isBoredInstruction ? "" : "# Historical story summary (not current presence)\n") . $recap["data"]."\n".$historyData;
 
         }
 
