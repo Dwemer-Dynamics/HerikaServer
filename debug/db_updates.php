@@ -8140,7 +8140,30 @@ if ($checkVersion("latest_diary_context") < 20260727001) {
 if ($checkVersion("faction_vanilla") < 20260803001) {
     Logger::debug("Applying faction_vanilla 20260803001 - some description fixes for vanilla factions");
 
-    $migrationOk = $db->execQuery(file_get_contents(__DIR__."/../data/factions_vanilla.sql")) !== false;
+    // Stage the canonical seed so existing faction tables can be updated without losing custom rows.
+    $factionSeed = file_get_contents(__DIR__."/../data/factions_vanilla.sql");
+    $migrationOk = false;
+    if ($factionSeed !== false) {
+        $factionSeed = str_replace('public.faction_vanilla', 'pg_temp.chim_faction_vanilla_seed', $factionSeed);
+        // One pg_query batch keeps seed changes atomic and releases the lock on failure.
+        $migrationOk = $db->execQuery($factionSeed . <<<'SQL'
+
+CREATE TABLE IF NOT EXISTS public.faction_vanilla (name text, formid text);
+ALTER TABLE public.faction_vanilla OWNER TO dwemer;
+LOCK TABLE public.faction_vanilla IN SHARE ROW EXCLUSIVE MODE;
+UPDATE public.faction_vanilla AS existing
+SET name = seed.name
+FROM pg_temp.chim_faction_vanilla_seed AS seed
+WHERE existing.formid = seed.formid AND existing.name IS DISTINCT FROM seed.name;
+INSERT INTO public.faction_vanilla (name, formid)
+SELECT seed.name, seed.formid FROM pg_temp.chim_faction_vanilla_seed AS seed
+WHERE NOT EXISTS (
+    SELECT 1 FROM public.faction_vanilla AS existing WHERE existing.formid = seed.formid
+);
+DROP TABLE pg_temp.chim_faction_vanilla_seed;
+SQL
+        ) !== false;
+    }
 
     if ($migrationOk) {
         $updateVersion("faction_vanilla", 20260803001);
@@ -8238,6 +8261,30 @@ if ($migrationOk) {
     }
 } else {
     Logger::error("Failed to apply eventlog_session_payload migration; existing views were preserved");
+}
+
+if ($checkVersion("default_npc_tags") < 20260814001) {
+    $migrationPath = __DIR__ . "/../data/canonical_npc_knowledge_tags_20260814.sql";
+    if (is_readable($migrationPath) && $db->execQuery(file_get_contents($migrationPath)) !== false) {
+        $updateVersion("default_npc_tags", 20260814001);
+        Logger::info("Applied patch default_npc_tags 20260814001");
+    } else {
+        Logger::error("Failed to apply patch default_npc_tags 20260814001");
+    }
+}
+
+if ($checkVersion("oghma_catalog") < 20260827001) {
+    require_once dirname(__DIR__) . "/lib/oghma_catalog.php";
+    try {
+        // Validate the package first, then upgrade schema and factory data atomically.
+        // Custom articles and edited legacy rows remain intact.
+        $oghmaCatalog = new ChimOghmaCatalogManager($db, dirname(__DIR__));
+        $oghmaCatalog->provisionActivePackage(false, true);
+        $updateVersion("oghma_catalog", 20260827001);
+        Logger::info("Applied Oghma catalog 20260827001");
+    } catch (Throwable $error) {
+        Logger::error("Oghma catalog update failed: " . $error->getMessage());
+    }
 }
 
 if ($checkVersion("core_tts_pronunciation") < 20260829003) {

@@ -54,6 +54,18 @@ final class DynamicProfileQueueTestDb
     }
 }
 
+final class SupersedingUserInputTestDb
+{
+    public array $queries = [];
+    public array $rows = [];
+
+    public function fetchAll(string $query): array
+    {
+        $this->queries[] = $query;
+        return $this->rows;
+    }
+}
+
 final class CoreRequestStabilityTest extends TestCase
 {
     private bool $warningHandlerInstalled = false;
@@ -129,6 +141,67 @@ final class CoreRequestStabilityTest extends TestCase
 
         $this->assertSame(['chain_id', 'abc', 'def', 'line', 'claw', 'barrow', 'old'], $terms);
         $this->assertSame([], chimNormalizeTsQueryTerms('{} | & :'));
+    }
+
+    public function testSupersedingUserInputLookupUsesStrictRequestTimestamp(): void
+    {
+        $db = new SupersedingUserInputTestDb();
+        $db->rows = [['rowid' => '42', 'ts' => '1002', 'data' => 'inputtext']];
+
+        $result = chimFindSupersedingUserInput($db, '1001', 'instruction');
+
+        $this->assertSame(['rowid' => '42', 'ts' => '1002'], $result);
+        $this->assertCount(1, $db->queries);
+        $this->assertStringContainsString('FROM eventlog ORDER BY rowid DESC LIMIT 100', $db->queries[0]);
+        $this->assertStringContainsString("type='user_input' AND ts>1001", $db->queries[0]);
+        $this->assertStringNotContainsString("COALESCE(data, '')<>'instruction'", $db->queries[0]);
+        $this->assertStringContainsString('ORDER BY rowid DESC LIMIT 1', $db->queries[0]);
+    }
+
+    public function testDirectPlayerInputLookupExcludesAutomaticInstruction(): void
+    {
+        $db = new SupersedingUserInputTestDb();
+        $db->rows = [['rowid' => '42', 'ts' => '1002']];
+
+        $this->assertSame(['rowid' => '42', 'ts' => '1002'], chimFindSupersedingUserInput($db, '1001', 'inputtext'));
+        $this->assertStringContainsString("COALESCE(data, '')<>'instruction'", $db->queries[0]);
+    }
+
+    public function testSupersedingUserInputLookupRejectsInvalidTimestampWithoutQuery(): void
+    {
+        $db = new SupersedingUserInputTestDb();
+
+        $this->assertNull(chimFindSupersedingUserInput($db, '1001 OR 1=1'));
+        $this->assertSame([], $db->queries);
+    }
+
+    public function testReturnLinesRunsBoundaryCheckBeforeTts(): void
+    {
+        $hadForcedStop = array_key_exists('FORCED_STOP', $GLOBALS);
+        $savedForcedStop = $GLOBALS['FORCED_STOP'] ?? null;
+        $GLOBALS['FORCED_STOP'] = false;
+        $boundaryCheckRan = false;
+
+        try {
+            returnLines(
+                ['Boundary test sentence.'],
+                false,
+                static function () use (&$boundaryCheckRan): void {
+                    $boundaryCheckRan = true;
+                    throw new RuntimeException('boundary-check-ran');
+                }
+            );
+            $this->fail('Speech boundary check was not invoked');
+        } catch (RuntimeException $e) {
+            $this->assertSame('boundary-check-ran', $e->getMessage());
+            $this->assertTrue($boundaryCheckRan);
+        } finally {
+            if ($hadForcedStop) {
+                $GLOBALS['FORCED_STOP'] = $savedForcedStop;
+            } else {
+                unset($GLOBALS['FORCED_STOP']);
+            }
+        }
     }
 
     public function testZonosCheckDoesNotWarnWhenTtsIsNotInitialized(): void
