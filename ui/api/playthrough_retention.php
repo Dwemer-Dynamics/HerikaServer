@@ -77,7 +77,7 @@ try {
                 if (!is_string($category) || (!in_array($category, ['playthroughs','events'], true) && !isset(ptr_categories()[$category]))) {
                     throw new InvalidArgumentException('Choose a valid cleanup category.');
                 }
-                $keys = $category === 'playthroughs' ? ['playthrough_keep'] : [$category . '_days', $category . '_max_mb'];
+                $keys = $category === 'playthroughs' ? ['playthrough_keep'] : [$category . '_days'];
                 if ($category === 'events') $keys = ['events_days'];
                 if ($category === 'requests') $keys[] = 'requests_filter';
                 $input = array_intersect_key($input, array_flip($keys));

@@ -106,15 +106,13 @@
         for (const category of state.capabilities.categories) {
             const key = category.key, part = cleanupRow(key,category.label,category.description || 'Troubleshooting logs.');
             field(part,key+'_enabled','Clean up automatically',state.settings[key+'_enabled'],'checkbox');
-            field(part,key+'_days','Older than (real-world days)',state.settings[key+'_days'],'number',1,3650);
-            field(part,key+'_max_mb','Size limit (MB; 0 = Unlimited)',state.settings[key+'_max_mb'],'number',0,102400);
-            part.append(node('p','Deletes older logs first when either the age or size limit is exceeded. Size limits apply to log data.'));
+            field(part,key+'_days','Older than (days)',state.settings[key+'_days'],'number',1,3650);
             if (key === 'requests') {
                 const label = node('label','Request logs to include '), select = node('select'); select.name = 'requests_filter';
                 for (const [value,text] of [['all','All request logs'],['relationship','Relationship requests only']]) { const o=node('option',text); o.value=value; select.append(o); }
                 select.value=state.settings.requests_filter; label.append(select); part.append(label);
             }
-            part.append(node('p','Logs from the last 24 hours are kept.'));
+            part.append(node('p','Uses real-world days. Logs from the last 24 hours are kept.'));
             categoryPreview(part,key);
         }
         if (state.capabilities.event_cleanup) {
@@ -136,7 +134,7 @@
             const row = node('div'); row.className='ps-kept-row';
             row.append(node('strong',category.label),node('span',categorySize(category.bytes)),node('p',category.description)); kept.append(row);
         }
-        form.append(kept,node('p','Percentages show each category\'s share of this mod\'s total database storage. Sizes include indexes and unused space. Size limits apply to log data. Only the preview estimates what can be deleted; cleanup may not reduce files on disk.'));
+        form.append(kept,node('p','Percentages show each category\'s share of this mod\'s total database storage. Sizes include indexes and unused space. Only the preview estimates what can be deleted; cleanup may not reduce files on disk.'));
         form.append(node('p','Automatic cleanup runs at most once an hour while the background service is running. Large cleanups may take several rounds.'));
         if (state.last_run) form.append(node('p','Last cleanup: '+state.last_run.message+' '+state.last_run.at));
         form.append(button('Save settings',async()=> {

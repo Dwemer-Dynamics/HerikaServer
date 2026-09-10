@@ -28,11 +28,10 @@ function ptr_preview_delete($conn, array $ids): array {
 // cannot silently re-enable an old cleanup policy.
 function ptr_defaults(): array {
     $settings = ['diagnostics_enabled'=>false, 'diagnostic_days'=>7,
-        'diagnostic_max_mb'=>0, 'playthroughs_enabled'=>false, 'playthrough_keep'=>0, 'event_days'=>0, 'events_enabled'=>false, 'events_days'=>30, 'requests_filter'=>'all'];
+        'playthroughs_enabled'=>false, 'playthrough_keep'=>0, 'event_days'=>0, 'events_enabled'=>false, 'events_days'=>30, 'requests_filter'=>'all'];
     foreach (ptr_categories() as $key => $category) {
         $settings[$key . '_enabled'] = false;
         $settings[$key . '_days'] = 7;
-        $settings[$key . '_max_mb'] = 0;
     }
     return $settings;
 }
@@ -75,16 +74,14 @@ function ptr_settings($conn): array {
 function ptr_validate(array $input): array {
     $settings = ptr_defaults();
     $booleans = ['diagnostics_enabled','playthroughs_enabled','events_enabled'];
-    $numbers = ['diagnostic_days'=>[1,3650], 'diagnostic_max_mb'=>[0,102400], 'playthrough_keep'=>[0,10000], 'event_days'=>[0,3650], 'events_days'=>[1,3650]];
+    $numbers = ['diagnostic_days'=>[1,3650], 'playthrough_keep'=>[0,10000], 'event_days'=>[0,3650], 'events_days'=>[1,3650]];
     foreach (ptr_categories() as $key => $category) {
         $booleans[] = $key . '_enabled';
         $numbers[$key . '_days'] = [1,3650];
-        $numbers[$key . '_max_mb'] = [0,102400];
         // Preserve saved legacy settings without implicitly enabling a new cleanup category.
         if (!array_key_exists($key . '_enabled', $input) && array_key_exists('diagnostics_enabled', $input)) {
             $input[$key . '_enabled'] = $key === 'recall' ? false : $input['diagnostics_enabled'];
             $input[$key . '_days'] = $input['diagnostic_days'] ?? 7;
-            $input[$key . '_max_mb'] = $input['diagnostic_max_mb'] ?? 500;
         }
     }
     foreach ($booleans as $key) {
@@ -182,20 +179,11 @@ function ptr_preview($conn, array $settings, ?string $category = null): array {
             // ctid + xmin also identify rows in keyless audit_memory. Rewrites invalidate the preview.
             $rows = pg_fetch_all(ptr_query($conn, "SELECT ctid::text AS rowid, xmin::text AS version, pg_column_size(t) AS bytes, {$stamp} AS stamp
                 FROM public.{$table} t WHERE {$stamp} > 0 AND {$stamp} < $1 {$delivered}
-                ORDER BY {$stamp}, ctid LIMIT 1000", [time() - 86400])) ?: [];
-            $excess = 0;
-            // If age already selects this entire batch, measuring the whole table
-            // cannot change the result. Empty batches need no size scan either.
-            if ($settings[$key . '_max_mb'] > 0 && $rows && (float)$rows[count($rows) - 1]['stamp'] >= $cutoff) {
-                $bytes = pg_fetch_result(ptr_query($conn, "SELECT COALESCE(SUM(pg_column_size(t)),0) FROM public.{$table} t WHERE true {$delivered}"), 0, 0);
-                $excess = max(0, (int)$bytes - $settings[$key . '_max_mb'] * 1048576);
-            }
+                ORDER BY {$stamp}, ctid LIMIT 1000", [min($cutoff, time() - 86400)])) ?: [];
             $selected = []; $size = 0;
             foreach ($rows as $row) {
-                if ((float)$row['stamp'] >= $cutoff && $excess <= 0) break;
                 $selected[] = ['id' => $row['rowid'], 'version' => $row['version']];
                 $size += (int)$row['bytes'];
-                $excess -= (int)$row['bytes'];
             }
             $plan['diagnostics'][] = ['table' => $table, 'label'=>$category['label'], 'rows' => count($selected), 'bytes_estimate' => $size, 'selected' => $selected];
             if (count($selected) === 1000) $plan['more_possible'] = true;
