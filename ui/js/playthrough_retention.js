@@ -67,6 +67,14 @@
             const unit=bytes >= 1048576 ? 'MB' : 'KB', divisor=unit==='MB'?1048576:1024;
             return (bytes/divisor).toLocaleString(undefined,{maximumFractionDigits:1})+' '+unit;
         };
+        // Show each category's share of this mod's total database storage.
+        const categorySize = value => {
+            const amount = Number(value), total = Number(storage?.database_bytes);
+            if (value == null || storage?.database_bytes == null || !Number.isFinite(amount) || !Number.isFinite(total) || amount < 0 || total < 0 || (total === 0 && amount > 0)) return size(value);
+            const percent = total > 0 ? amount / total * 100 : 0;
+            const share = percent > 0 && percent < 0.1 ? '<0.1' : percent.toLocaleString(undefined, {maximumFractionDigits:1});
+            return size(value) + ' (' + share + '%)';
+        };
         // Reveal invalid settings before moving keyboard focus to their message.
         const valid = container => {
             for(const input of container.querySelectorAll('input,select')) {
@@ -82,7 +90,7 @@
         // Each row keeps its size, rules and one-off preview together.
         function cleanupRow(key, label, description) {
             const row = node('details'), summary = node('summary'); row.className = 'ps-cleanup-row';
-            summary.append(node('strong',label),node('span',size(measured.get(key)?.bytes)),node('span','Cleanup settings'));
+            summary.append(node('strong',label),node('span',categorySize(measured.get(key)?.bytes)),node('span','Cleanup settings'));
             row.append(summary,node('p',description)); form.append(row);
             return row;
         }
@@ -126,9 +134,9 @@
         const kept = node('section'); kept.append(node('h3','Data kept by cleanup'));
         for (const category of categories.filter(item=>!item.cleanup)) {
             const row = node('div'); row.className='ps-kept-row';
-            row.append(node('strong',category.label),node('span',size(category.bytes)),node('p',category.description)); kept.append(row);
+            row.append(node('strong',category.label),node('span',categorySize(category.bytes)),node('p',category.description)); kept.append(row);
         }
-        form.append(kept,node('p','Sizes include indexes and unused space. Size limits apply to log data. Only the preview estimates what can be deleted; cleanup may not reduce files on disk.'));
+        form.append(kept,node('p','Percentages show each category\'s share of this mod\'s total database storage. Sizes include indexes and unused space. Size limits apply to log data. Only the preview estimates what can be deleted; cleanup may not reduce files on disk.'));
         form.append(node('p','Automatic cleanup runs at most once an hour while the background service is running. Large cleanups may take several rounds.'));
         if (state.last_run) form.append(node('p','Last cleanup: '+state.last_run.message+' '+state.last_run.at));
         form.append(button('Save settings',async()=> {
