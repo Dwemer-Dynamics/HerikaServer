@@ -98,8 +98,8 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
     $GLOBALS['CURRENT_CONNECTOR'] = $directorConnector['driver'];
     $prompt = [
         ['role' => 'system', 'content' => dwemerDirectorPrompt('Skyrim', $catalog)],
-        ['role' => 'user', 'content' => "# Current scene and relationships\n" . $worldContext
-            . "\n# Eligible NPC profiles\n" . json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        ['role' => 'user', 'content' => "# World context and history\n" . $worldContext
+            . "\n# Present eligible NPC profiles\n" . json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
             . "\n# Player name\n" . $player],
         ['role' => 'user', 'content' => $instruction],
     ];
