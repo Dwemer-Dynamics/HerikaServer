@@ -3166,6 +3166,7 @@ function chimDecodePlayerRoutingSnapshotField($rawField)
         "audience" => "",
         "present_actors" => [],
         "chat_shortcut_routed" => false,
+        "execution_mode" => "",
         "player_mood" => "",
         "player_mood_custom" => "",
     ];
@@ -3195,6 +3196,11 @@ function chimDecodePlayerRoutingSnapshotField($rawField)
         ($payload["source"] ?? "") === "plugin_player_routing_v2" &&
         ($payload["chat_shortcut_routed"] ?? false) === true;
     if (($payload["source"] ?? "") === "plugin_player_routing_v2") {
+        $mode = is_string($payload['execution_mode'] ?? null) ? strtoupper(trim($payload['execution_mode'])) : '';
+        if (in_array($mode, ['STANDARD', 'WHISPER', 'CLOSE', 'SHOUT', 'NARRATOR',
+            'DIRECTOR', 'CHEATMODE', 'AUTOCHAT', 'INJECTION_LOG', 'INJECTION_CHAT'], true)) {
+            $result['execution_mode'] = $mode;
+        }
         $playerMood = chimNormalizePlayerMood($payload["player_mood"] ?? "");
         if ($playerMood !== "") {
             $result["player_mood"] = $playerMood;

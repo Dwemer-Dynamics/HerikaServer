@@ -55,6 +55,11 @@ $PLAYER_INPUT_REQUEST = in_array(
 $SYMBOL_MODE_OVERRIDE = false;
 $CHAT_SHORTCUT_ROUTED = ($GLOBALS["CHIM_CHAT_SHORTCUT_ROUTED"] ?? false) === true;
 
+// The submitted mode survives later dropdown changes and one-shot resets.
+$submittedMode = $requestRoutingSnapshot['execution_mode'] ?? '';
+$REQUEST_LOCAL_MODE_OVERRIDE = $PLAYER_INPUT_REQUEST && $submittedMode !== '';
+if ($REQUEST_LOCAL_MODE_OVERRIDE) $EXECUTION_MODE = $submittedMode;
+
 if ($PLAYER_INPUT_REQUEST && $CHAT_SHORTCUT_ROUTED && isset($gameRequest[3]) && is_string($gameRequest[3])) {
     $speakerSeparator = strpos($gameRequest[3], ":");
     $speakerPrefix = $speakerSeparator === false ? "" : substr($gameRequest[3], 0, $speakerSeparator + 1);
@@ -74,7 +79,7 @@ if ($PLAYER_INPUT_REQUEST && $CHAT_SHORTCUT_ROUTED && isset($gameRequest[3]) && 
         $gameRequest[3] = $speakerPrefix . $symbolMode["content"];
     }
 }
-$REQUEST_LOCAL_MODE_OVERRIDE = $SYMBOL_MODE_OVERRIDE;
+$REQUEST_LOCAL_MODE_OVERRIDE = $REQUEST_LOCAL_MODE_OVERRIDE || $SYMBOL_MODE_OVERRIDE;
 
 // Retire the old free-form Spawn mode without leaving upgraded installs stuck in it.
 if ($EXECUTION_MODE === "SPAWN") {
@@ -127,7 +132,10 @@ if ($EXECUTION_MODE=="STANDARD") {
             "id='chim_mode'"
         );
     }
-    exec("php /var/www/html/HerikaServer/service/manager.php rolemaster instruction \"$instruction\" notify", $output, $returnCode);
+    $managerPath = dirname(__DIR__) . '/service/manager.php';
+    $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
+    exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
+        . ' rolemaster instruction ' . $instruction . ' notify ' . (int)($_GET['director_generation'] ?? 0), $output, $returnCode);
     terminate();
 
 } else if ($EXECUTION_MODE=="CHEATMODE") {
