@@ -173,8 +173,8 @@ main { padding-top: 80px; padding-left: 10px; padding-right: 10px; }
             <section class="tab-group" data-category="data-tools">
                 <div class="tab-group-label">Data &amp; Tools</div>
                 <div class="tab-buttons" role="tablist" aria-label="Data and tools pages">
-                    <button class="tab-button" data-tab="cache"><span class="tab-icon" aria-hidden="true">&#x1F3BC;</span><span class="tab-label">Audio &amp; Image Cache</span></button>
                     <button class="tab-button" data-tab="storage"><span class="tab-icon" aria-hidden="true">&#x1F5C4;&#xFE0F;</span><span class="tab-label"><?php echo htmlspecialchars($storageTabLabel, ENT_QUOTES, 'UTF-8'); ?></span></button>
+                    <button class="tab-button" data-tab="cache"><span class="tab-icon" aria-hidden="true">&#x1F3BC;</span><span class="tab-label">Audio &amp; Image Cache</span></button>
 <?php if ($legacyDbmgrEmbedUrl !== null): ?>
                     <button class="tab-button" data-tab="dbmgr"><span class="tab-icon" aria-hidden="true">&#x1F5C3;&#xFE0F;</span><span class="tab-label">Database Manager</span></button>
 <?php endif; ?>
