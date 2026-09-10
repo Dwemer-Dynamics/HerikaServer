@@ -58,6 +58,25 @@
                 }
             }
         },
+        "chim-bes": {
+            "name": "CHIM-BES",
+            "description": "Lets CHIM NPCs comment when Breakable Equipment System breaks their gear in combat.",
+            "git_repo": "hey-danielx/CHIM-BES",
+            "github_url": "https://github.com/hey-danielx/CHIM-BES",
+            "mod_download_url": "https://github.com/hey-danielx/CHIM-BES/releases/latest/download/BES-CHIM-Patch.zip",
+            "default_channel": "main",
+            "channels": {
+                "main": {
+                    "label": "Live",
+                    "branch": "main",
+                    "package_source": "release",
+                    "package_urls": [
+                        "https://github.com/hey-danielx/CHIM-BES/releases/latest/download/CHIM-BES.tar.gz",
+                        "https://github.com/hey-danielx/CHIM-BES/releases/latest/download/CHIM-BES.tar"
+                    ]
+                }
+            }
+        },
         "sharmat": {
             "name": "aiagent_nsfw",
             "display_name": "SHARMAT",
