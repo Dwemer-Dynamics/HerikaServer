@@ -74,14 +74,14 @@ if (!function_exists('chimOghmaInputText')) {
 }
 
 $db = $GLOBALS['db'] ?? ($db ?? null);
-$request = is_array($gameRequest ?? null) ? $gameRequest : [];
+$localRequest = is_array($gameRequest ?? null) ? $gameRequest : [];
 $settings = chimOghmaEffectiveSettings();
-$eligible = chimOghmaRequestEligible($request);
-$inputText = $eligible ? chimOghmaInputText($request, $db) : '';
+$eligible = chimOghmaRequestEligible($localRequest);
+$inputText = $eligible ? chimOghmaInputText($localRequest, $db) : '';
 $status = !$settings['values']['enabled'] ? 'disabled' : ($eligible ? 'no_match' : 'ineligible');
 $GLOBALS['OGHMA_PARITY_RESULT'] = chimOghmaNewResult($status, $settings, $eligible, $inputText);
 $result =& $GLOBALS['OGHMA_PARITY_RESULT'];
-$result['request_type'] = (string) ($request[0] ?? '');
+$result['request_type'] = (string) ($localRequest[0] ?? '');
 $totalStarted = hrtime(true);
 
 try {
