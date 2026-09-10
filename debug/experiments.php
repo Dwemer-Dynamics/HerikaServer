@@ -853,10 +853,12 @@ if ($argv[1] == '13') {
 
 if ($argv[1] == '14') {
     $npcMaster = new NpcMaster();
-    $npc = $npcMaster->getByName("Orianne Marius");
+    $npc = $npcMaster->getByName("Violet");
     $skyrimCmd = new SkyrimCommandBuilder();
-    //$json = $skyrimCmd->Actor->RemoveFromAllFactions("0x{$npc["refid"]}", "0xFF00127C");
-    //$skyrimCmd->send(cmd: $json);
+    $json = $skyrimCmd->Actor->RemoveFromAllFactions("0x{$npc["refid"]}", "0xFF00127C");
+    $skyrimCmd->send(cmd: $json);
+    $json = $skyrimCmd->Actor->SetRelationshipRank("0x{$npc["refid"]}", "0x14", 1);
+    $skyrimCmd->send(cmd: $json);
     //$json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x08365D75");
     //$skyrimCmd->send(cmd: $json);
     print_r(resolveTravelLocation("Elysium Estate (Interior)", $npc, $GLOBALS["db"]));
@@ -1209,7 +1211,7 @@ if ($argv[1] == '33') {
 if ($argv[1] == '34a' || $argv[1] == '34b') {
 
     $npcMaster = new NpcMaster();
-    $npc = $npcMaster->getByName("Jaryra");
+    $npc = $npcMaster->getByName("Lydia");
 
     $skyrimCmd = new SkyrimCommandBuilder();
 
@@ -1227,8 +1229,8 @@ if ($argv[1] == '34a' || $argv[1] == '34b') {
         $json = $skyrimCmd->Actor->PlayIdle("0x{$npc["refid"]}", "0x000bb053");
         $skyrimCmd->send(cmd: $json);
 
-        //$json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
-        //$skyrimCmd->send(cmd: $json);
+        $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+        $skyrimCmd->send(cmd: $json);
     }
 
     if (false) {
@@ -1282,8 +1284,193 @@ if ($argv[1] == '36') {
 
 if ($argv[1] == '37') {
 
-    $firstPass=moveDialogueTargetSuffixToEnd("Sleep during the day... such a haunting detail, my love. (talking to Varek) It is as if this Movarth is wandering into a trap while thinking himself the hunter. (talking to Lydia) It makes me wonder about the things we invite into our lives under the guise of curiosity. (talking to Lydia) Do you think his weariness is a sign of a soul already starting to fray, or merely the weight of the secrets he carries? (talking to Lydia) Shall I continue, or should we pause to let the embers settle? (talking to Lydia)");
-    echo $firstPass.PHP_EOL;
-    echo print_r(extractDialogueTarget($firstPass),true).PHP_EOL;
+    $firstPass = moveDialogueTargetSuffixToEnd("Sleep during the day... such a haunting detail, my love. (talking to Varek) It is as if this Movarth is wandering into a trap while thinking himself the hunter. (talking to Lydia) It makes me wonder about the things we invite into our lives under the guise of curiosity. (talking to Lydia) Do you think his weariness is a sign of a soul already starting to fray, or merely the weight of the secrets he carries? (talking to Lydia) Shall I continue, or should we pause to let the embers settle? (talking to Lydia)");
+    echo $firstPass . PHP_EOL;
+    echo print_r(extractDialogueTarget($firstPass), true) . PHP_EOL;
     echo removeTalkingToOccurrences("Sleep during the day... such a haunting detail, my love. (talking to Varek) It is as if this Movarth is wandering into a trap while thinking himself the hunter. (talking to Lydia) It makes me wonder about the things we invite into our lives under the guise of curiosity. (talking to Lydia) Do you think his weariness is a sign of a soul already starting to fray, or merely the weight of the secrets he carries? (talking to Lydia) Shall I continue, or should we pause to let the embers settle? (talking to Lydia)");
 }
+
+if ($argv[1] == '38') {
+    $GLOBALS["db"]->insert(
+        'responselog',
+        array(
+            'localts' => time(),
+            'sent' => 0,
+            'text' => "Consume@{\"item\":\"\",\"target\":\"0xFF000FC6:Potion of Restore Magicka\"}",
+            'actor' => "Aranea Ienith",
+            'action' => 'command'
+        )
+    );
+}
+
+
+// GSPOSES
+if ($argv[1] == '39') {
+
+    if ($argv[2] == '0') {
+
+        $GLOBALS["db"]->insert(
+            'responselog',
+            array(
+                'localts' => time(),
+                'sent' => 0,
+                'text' => "CommandAnimation@IdleForceDefaultState",
+                'actor' => "{$argv[3]}",
+                'action' => 'command'
+            )
+        );
+    } else {
+        $GLOBALS["db"]->insert(
+            'responselog',
+            array(
+                'localts' => time(),
+                'sent' => 0,
+                'text' => "CommandAnimation@{$argv[2]}",
+                'actor' => "{$argv[3]}",
+                'action' => 'command'
+            )
+        );
+    }
+}
+
+if ($argv[1] == '40') {
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Dorys Bruc [Vaermina Devotee]");
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $json = $skyrimCmd->Actor->RemoveFromAllFactions("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+}
+
+
+if ($argv[1] == '41') {
+
+    $GLOBALS["db"]->insert(
+        'responselog',
+        array(
+            'localts' => time(),
+            'sent' => 0,
+            'text' => "ExtCmdRemoveClothes@",
+            'actor' => "Alva",
+            'action' => 'command'
+        )
+    );
+}
+
+if ($argv[1] == '42') {
+
+    $GLOBALS["db"]->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => "rolemaster",
+            'text' => "",
+            'action' => "rolecommand|ImpersonatePlayer@Can you read the book of Mannimarco?@inputtext",
+            'tag' => __FILE__ . ":" . __LINE__,
+        ]
+    );
+}
+
+if ($argv[1] == '43') {
+    $GLOBALS['db']->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => 'rolemaster',
+            'text' => '',
+            'action' => "rolecommand|RenameNPC@0x32000D67@Herika",
+            'tag' => '',
+        ]
+    );
+
+    sleep(1);
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Herika");
+    $extended_data = $npcMaster->getExtendedData($npc);
+    $extended_data['background_life_commands'] = true;
+    $extended_data['background_life_enabled'] = true;
+    $extended_data['background_life_last_updated'] = $last_gamets;
+    $extended_data['background_life_player_unattached'] = true;
+    $extended_data['middle_term_enabled'] = 1;
+
+    $metadata = $npcMaster->getExtendedData($npc);
+    $metadata['gps_track'] = true;
+    $npc = $npcMaster->setMetadata($npc, $metadata);
+    $npc = $npcMaster->setExtendedData($npc, $extended_data);
+    $npcMaster->updateByArray($npc);
+}
+if ($argv[1] == '44') {
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Jaryra");
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x000847a9");
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+}
+
+if ($argv[1] == '45') {
+    $GLOBALS["db"]->insert(
+        'responselog',
+        array(
+            'localts' => time(),
+            'sent' => 0,
+            'text' => "MoveTo@Elysium Estate",
+            'actor' => "Lydia",
+            'action' => 'command'
+        )
+    );
+}
+
+
+if ($argv[1] == "46") {
+    $GLOBALS["db"]->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => "rolemaster",
+            'text' => "",
+            'action' => "rolecommand|BackgroundCmd@0x00019E0F@TravelTo/101939",
+            'tag' => __FILE__ . ":" . __LINE__,
+        ]
+    );
+
+    $npcMaster = new NpcMaster();
+    $npcname = "Grosta";
+    $npc = $npcMaster->getByName($npcname);
+
+    $meta = $npcMaster->getMetaData($npc);
+    print_r($meta["last_coords"]);
+
+    print_r(getLocationsNearNpcCoords($npcname));
+
+}
+
+if ($argv[1] == "47") {
+    require_once __DIR__ . "/../lib/minimet5_service.php";
+    $sourceText = internalDumbTranslator("we got all the parts of the blade...");
+    $keywords = minimeExtract($sourceText, true);
+    print_r($keywords);
+}
+
+if ($argv[1] == "48") {
+
+    $npcMaster = new NpcMaster();
+    $npcname = "Grosta";
+    $npc= $npcMaster->getByName($npcname);
+    $skyrimCmd = new SkyrimCommandBuilder();
+
+    $json = $skyrimCmd->Actor->AddToFaction("0x{$npc["refid"]}", "0x0001dd09"); //WEPlayerFriend
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->SetFactionRank("0x{$npc["refid"]}", "0x0001dd09", 1); //WEPlayerFriend
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->SetRelationshipRank("0x{$npc["refid"]}", "0x14", 1); //WEPlayerFriend
+    $skyrimCmd->send(cmd: $json);
+}
+
+

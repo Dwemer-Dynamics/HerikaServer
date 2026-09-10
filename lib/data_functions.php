@@ -1070,6 +1070,7 @@ function DataLastInfoFor($actorBeingCalled, $lastNelements = -2,$addNPCDescripti
                     if ($nearbyActorsIncludeEquipment && is_array($equipmentData) && !empty($equipmentData)) {
                         $slots = chimEquipmentProfileSlotKeys();
                         $slots = chimProfileEquipmentSlotsFromData($equipmentData, $slots);
+                        
                         $equipmentParts = chimFormatProfileEquipmentParts($equipmentData, $slots, $nearbyActorsEquipmentDescriptions);
                         if (!empty($equipmentParts)) {
                             if ($hasProfileBody) {
@@ -1078,6 +1079,8 @@ function DataLastInfoFor($actorBeingCalled, $lastNelements = -2,$addNPCDescripti
                                 $profileString .= ": Equipment: " . implode(", ", $equipmentParts);
                                 $hasProfileBody = true;
                             }
+                        } else {
+                                $profileString .= ": Naked";
                         }
                     }
 
