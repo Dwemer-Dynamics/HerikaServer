@@ -2056,6 +2056,7 @@ if (!is_array($contextDataHistoric)) {
 // summaries up to the one straddling that floor; if one straddles, the window is cropped to start
 // just after it, so nothing is present twice. One continuous timeline:
 // world -> STM summaries (older, summarised) -> verbatim window (recent) -> cue.
+
 $contextDataHistoric = chimAttachShortTermMemoryToWindow(
     $contextDataHistoric,
     $GLOBALS["HERIKA_NAME"],
@@ -2063,6 +2064,7 @@ $contextDataHistoric = chimAttachShortTermMemoryToWindow(
     $GLOBALS["HERIKA_NAME"] !== "The Narrator"
         && (!chimCompactChatEnabled() || chimShortTermMemoryInCompactChatEnabled())
 );
+
 
 // Info about location and npcs in first position
 // Check $nearbySections

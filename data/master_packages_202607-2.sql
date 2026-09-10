@@ -9,7 +9,25 @@ BEGIN
         SELECT 1 FROM pg_constraint
         WHERE conrelid = 'public.master_packages'::regclass AND contype = 'p'
     ) THEN
-        ALTER TABLE ONLY public.master_packages
+        
+DO $$
+DECLARE
+    constraint_record record;
+BEGIN
+    FOR constraint_record IN
+        SELECT conname
+        FROM pg_constraint
+        WHERE conrelid = 'public.master_packages'::regclass
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE public.master_packages DROP CONSTRAINT IF EXISTS %I',
+            constraint_record.conname
+        );
+    END LOOP;
+END
+$$;
+
+ALTER TABLE ONLY public.master_packages
             ADD CONSTRAINT master_packages_pk PRIMARY KEY (formid);
     END IF;
 END $$;
