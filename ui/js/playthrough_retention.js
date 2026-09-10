@@ -53,13 +53,17 @@
     function render(state) {
         host.replaceChildren();
         const backup = node('form'), auto = group(backup,'Automatic Playthrough Saves');
-        field(auto,'enabled','Save when loading an older game save',state.backup_settings.enabled,'checkbox');
-        field(auto,'min_days','Game days behind',state.backup_settings.min_days,'number',1,3650);
-        auto.append(node('p','Save mod data first if the game save you load is at least this many game days behind. This does not run on a timer. Settings stay the same after a restore.'));
-        auto.append(node('p',state.last_backup ? state.last_backup.message + ' ' + state.last_backup.at : 'No automatic saves recorded yet.'));
+        const days = field(auto,'min_days','Game days behind',state.backup_settings.min_days,'number',1,3650);
+        const slider = node('input'); slider.type='range'; slider.min='1'; slider.max='3650'; slider.step='1';
+        slider.value=days.value; slider.setAttribute('aria-label','Game days behind slider');
+        slider.style.maxWidth='24rem'; slider.style.width='100%';
+        days.parentElement.before(slider);
+        slider.addEventListener('input',()=>{days.value=slider.value;});
+        days.addEventListener('input',()=>{if(days.checkValidity())slider.value=days.value;});
+        if (state.last_backup?.status === 'failed') auto.append(node('p',state.last_backup.message || 'Automatic Playthrough Save failed. Check the server log.'));
         auto.append(button('Save settings',async () => {
             if (!backup.reportValidity()) return;
-            await request('save_backup',values(backup)); await load(); status.textContent = 'Automatic save settings saved.';
+            await request('save_backup',{enabled:'1',min_days:days.value}); await load(); status.textContent = 'Automatic save settings saved.';
         })); host.append(backup);
         const form = node('form'), area = node('div'), storage = state.storage;
         const size = bytes => {

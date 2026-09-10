@@ -33,19 +33,18 @@ function ptp_connect() {
 }
 
 function ptp_validate_backup(array $input): array {
-    $enabled = filter_var($input['enabled'] ?? null, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
     $days = filter_var($input['min_days'] ?? null, FILTER_VALIDATE_INT);
-    if (!in_array($input['enabled'] ?? null, [true,false,0,1,'0','1'], true) || $enabled === null || $days === false || $days < 1 || $days > 3650) {
-        throw new InvalidArgumentException('Choose on or off and a rollback threshold from 1 to 3650 in-game days.');
+    if ($days === false || $days < 1 || $days > 3650) {
+        throw new InvalidArgumentException('Choose a rollback threshold from 1 to 3650 in-game days.');
     }
-    return ['enabled'=>$enabled, 'min_days'=>$days];
+    // Automatic rollback saves are mandatory; ignore retired off values from older clients and settings.
+    return ['enabled'=>true, 'min_days'=>$days];
 }
 
 function ptp_backup_settings($conn): array {
     $product = ptp_product(); $legacy = $product['legacy']; $config = ptp_config();
-    $enabled = $GLOBALS[$legacy . '_AUTO_PLAYTHROUGH'] ?? $config[$legacy . '_AUTO_PLAYTHROUGH'] ?? true;
     $days = $GLOBALS[$legacy . '_MIN_DAYS'] ?? $config[$legacy . '_MIN_DAYS'] ?? $product['days'];
-    $fallback = ['enabled'=>filter_var($enabled, FILTER_VALIDATE_BOOLEAN), 'min_days'=>max(1,min(3650,(int)$days))];
+    $fallback = ['enabled'=>true, 'min_days'=>max(1,min(3650,(int)$days))];
     return ptp_validate_backup(ptr_read($conn, 'PLAYTHROUGH_SAVE_POLICY', $fallback));
 }
 
