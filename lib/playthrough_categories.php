@@ -6,7 +6,7 @@ function ptr_categories(): array {
         'log' => ['label'=>'Prompt and response logs', 'description'=>'AI prompts and replies kept for troubleshooting.', 'table'=>'log', 'stamp'=>'localts'],
         'requests' => ['label'=>'Request logs', 'description'=>'Server requests kept for troubleshooting.', 'table'=>'audit_request', 'stamp'=>'EXTRACT(EPOCH FROM created_at)'],
         'recall' => ['label'=>'Memory search logs', 'description'=>'Search records only. NPC memories are kept.', 'table'=>'audit_memory', 'stamp'=>'EXTRACT(EPOCH FROM created_at)'],
-        'responses' => ['label'=>'Response logs', 'description'=>'Response records. Unsent replies are always kept.', 'table'=>'responselog', 'stamp'=>'localts'],
+        'responses' => ['label'=>'Reply delivery logs', 'description'=>'Reply delivery records used for troubleshooting. Unsent replies are kept.', 'table'=>'responselog', 'stamp'=>'localts'],
     ];
 }
 

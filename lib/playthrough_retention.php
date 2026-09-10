@@ -225,7 +225,7 @@ function ptr_preview($conn, array $settings, ?string $category = null): array {
         $plan['events']['rows'] = count($rows);
         $plan['events']['bytes_estimate'] = array_sum(array_column($rows, 'bytes'));
         $plan['events']['selected'] = array_map(fn($row) => ['id'=>$row['id'], 'version'=>$row['version']], $rows);
-        $plan['events']['message'] = 'Deleting events removes raw history used for conversations, recall and future diaries. Saved memories and diaries are kept, but they may not contain every detail. Create a Playthrough Save first if you may need this history.';
+        $plan['events']['message'] = 'Deleting event history can remove details used for NPC recall and future diaries. Existing memories and diaries are kept.';
         if (count($rows) === 1000) $plan['more_possible'] = true;
     }
     return $plan;
@@ -312,7 +312,7 @@ function ptr_tick($conn): void {
         ptr_execute($conn, $plan);
     } catch (Throwable $e) {
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', ['at' => gmdate('c'), 'status' => 'failed', 'rows' => 0, 'playthroughs' => 0,
-            'message' => 'Cleanup failed. Nothing was deleted. Use Preview cleanup to try again.']);
+            'message' => 'Cleanup failed. Nothing was deleted. Use Preview deletion to try again.']);
         error_log('Playthrough retention: ' . $e->getMessage());
     } finally {
         @pg_query($conn, 'RESET statement_timeout');

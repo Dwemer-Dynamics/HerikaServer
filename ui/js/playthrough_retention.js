@@ -43,7 +43,7 @@
         if (plan.more_possible) area.append(node('p','Another cleanup round may be needed.'));
         area.append(node('p','Preview expires in 5 minutes. Recent entries, unfinished replies and your active Playthrough Save are kept.'));
         if (plan.events?.message) area.append(node('p',plan.events.message));
-        const run = button('Delete listed items', async () => {
+        const run = button('Delete now', async () => {
             if (Date.now() >= Date.parse(plan.expires_at)) throw new Error('Preview expired. Preview again.');
             if (!confirm('Permanently delete these items? This cannot be undone.\n\n' + lines.join('\n') + (plan.events?.rows > 0 ? '\n\n' + plan.events.message : ''))) return;
             const result = await request('run',{preview_token:plan.token}); await load(); status.textContent = result.result.message;
@@ -77,7 +77,8 @@
         form.noValidate=true;
         const categories = storage?.categories || [];
         const measured = new Map(categories.map(item => [item.key,item]));
-        form.append(node('h3','Playthrough Storage'),node('p',size(storage?.database_bytes) + ' total. Expand a category to choose what to remove.'));
+        form.append(node('h3','Playthrough Storage'),node('p',size(storage?.database_bytes) + ' total.'));
+        form.append(node('p','Turn on cleanup for the categories you want managed automatically, then save your settings. You can also preview and delete items manually.'),node('p','You can preview any category without enabling it. Nothing is deleted until you confirm.'));
         // Each row keeps its size, rules and one-off preview together.
         function cleanupRow(key, label, description) {
             const row = node('details'), summary = node('summary'); row.className = 'ps-cleanup-row';
@@ -86,7 +87,7 @@
             return row;
         }
         function categoryPreview(row, key) {
-            row.append(button('Preview ' + (key === 'playthroughs' ? 'saves' : 'cleanup'),async()=> {
+            row.append(button('Preview deletion',async()=> {
                 if (!valid(row)) return;
                 if (!state.capabilities.category_preview) throw new Error('Update the server to preview one category.');
                 preview(area,(await request('preview',{...values(form),preview_category:key})).preview);
@@ -96,28 +97,28 @@
         }
         for (const category of state.capabilities.categories) {
             const key = category.key, part = cleanupRow(key,category.label,category.description || 'Troubleshooting logs.');
-            field(part,key+'_enabled','Enable cleanup',state.settings[key+'_enabled'],'checkbox');
+            field(part,key+'_enabled','Clean up automatically',state.settings[key+'_enabled'],'checkbox');
             field(part,key+'_days','Older than (real-world days)',state.settings[key+'_days'],'number',1,3650);
-            field(part,key+'_max_mb','Size limit (MB; 0 = no limit)',state.settings[key+'_max_mb'],'number',0,102400);
+            field(part,key+'_max_mb','Size limit (MB; 0 = Unlimited)',state.settings[key+'_max_mb'],'number',0,102400);
+            part.append(node('p','Deletes older logs first when either the age or size limit is exceeded. Size limits apply to log data.'));
             if (key === 'requests') {
                 const label = node('label','Request logs to include '), select = node('select'); select.name = 'requests_filter';
                 for (const [value,text] of [['all','All request logs'],['relationship','Relationship requests only']]) { const o=node('option',text); o.value=value; select.append(o); }
                 select.value=state.settings.requests_filter; label.append(select); part.append(label);
             }
-            part.append(node('p','Logs from the last 24 hours are kept. Preview checks only this category, even when its saved rule is off.'));
+            part.append(node('p','Logs from the last 24 hours are kept.'));
             categoryPreview(part,key);
         }
         if (state.capabilities.event_cleanup) {
             const events = cleanupRow('events','Events',measured.get('events')?.description || 'Raw gameplay and conversation history.');
-            field(events,'events_enabled','Enable cleanup (off by default)',state.settings.events_enabled,'checkbox');
+            field(events,'events_enabled','Clean up automatically (off by default)',state.settings.events_enabled,'checkbox');
             field(events,'events_days','Older than (in-game days)',state.settings.events_days ?? 30,'number',1,3650);
             events.append(node('p','Age is measured from the latest recorded game time. Events recorded in the last 24 real-world hours, unfinished replies and the newest event of each type are kept.'));
-            events.append(node('p','Deleting events removes raw history used for conversations, recall and future diaries. Saved memories and diaries are kept, but they may not contain every detail. Create a Playthrough Save first if you may need this history.'));
-            events.append(node('p','Preview checks only Events, even when its saved rule is off.'));
+            events.append(node('p','Deleting event history can remove details used for NPC recall and future diaries. Existing memories and diaries are kept.'));
             categoryPreview(events,'events');
         }
         const saves = cleanupRow('playthroughs','Playthrough Saves',measured.get('playthroughs')?.description || 'Saved copies of your mod data.');
-        field(saves,'playthroughs_enabled','Delete extra automatic saves',state.settings.playthroughs_enabled,'checkbox');
+        field(saves,'playthroughs_enabled','Clean up automatically',state.settings.playthroughs_enabled,'checkbox');
         field(saves,'playthrough_keep','Maximum automatic saves (0 = Unlimited)',state.settings.playthrough_keep);
         saves.append(node('p','Above the limit, the oldest automatic saves are deleted first. Manual, unclassified, active, default and protected saves are kept.'));
         const manage = node('a','Manage saves'); manage.href='#ps-manage-saves'; saves.append(manage);
@@ -128,14 +129,14 @@
             row.append(node('strong',category.label),node('span',size(category.bytes)),node('p',category.description)); kept.append(row);
         }
         form.append(kept,node('p','Sizes include indexes and unused space. Size limits apply to log data. Only the preview estimates what can be deleted; cleanup may not reduce files on disk.'));
-        form.append(node('p','Enabled categories are cleaned up at most once an hour while the background service is running. Save settings to apply your changes. Large cleanups may take several rounds.'));
+        form.append(node('p','Automatic cleanup runs at most once an hour while the background service is running. Large cleanups may take several rounds.'));
         if (state.last_run) form.append(node('p','Last cleanup: '+state.last_run.message+' '+state.last_run.at));
         form.append(button('Save settings',async()=> {
             if (!valid(form)) return;
             const fields=values(form);
-            if (fields.events_enabled==='1' && (!state.settings.events_enabled || Number(fields.events_days)<state.settings.events_days) && !confirm('Save these Events cleanup rules? Matching older events will be deleted during background cleanup. Your active Playthrough Save is kept.' + '\n\nDeleting events removes raw history used for conversations, recall and future diaries. Saved memories and diaries are kept, but they may not contain every detail. Create a Playthrough Save first if you may need this history.')) return;
+            if (fields.events_enabled==='1' && (!state.settings.events_enabled || Number(fields.events_days)<state.settings.events_days) && !confirm('Save these Events cleanup rules? Matching older events will be deleted during background cleanup. Your active Playthrough Save is kept.' + '\n\nDeleting event history can remove details used for NPC recall and future diaries. Existing memories and diaries are kept.')) return;
             await request('save',fields); await load(); status.textContent='Cleanup settings saved.';
-        }),button('Preview all cleanup',async()=> {
+        }),button('Preview enabled categories',async()=> {
             if (!valid(form)) return;
             preview(area,(await request('preview',values(form))).preview); status.textContent='Preview only. Your saved cleanup rules were not changed.';
             area.scrollIntoView({block:'nearest'});
