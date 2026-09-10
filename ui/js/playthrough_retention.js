@@ -33,7 +33,7 @@
         const state = await request(); render(state); status.textContent = 'Settings loaded.';
     }
     function preview(area, plan) {
-        area.replaceChildren(node('h3','Cleanup preview'),node('p',plan.message));
+        area.replaceChildren(node('h3',plan.scope ? plan.scope.label + ': cleanup preview' : 'Cleanup preview'),node('p',plan.message));
         const lines = [];
         for (const item of plan.diagnostics) lines.push((item.label || item.table) + ': ' + item.rows + ' entries');
         for (const item of plan.playthroughs) lines.push('Playthrough Save: ' + item.name);
@@ -59,14 +59,42 @@
             if (!backup.reportValidity()) return;
             await request('save_backup',values(backup)); await load(); status.textContent = 'Automatic save settings saved.';
         })); host.append(backup);
-        const form = node('form'), grid = node('div'); grid.className = 'ps-grid'; form.append(grid);
-        const saves = group(grid,'Automatic Playthrough Saves');
-        field(saves,'playthroughs_enabled','Delete extra automatic saves',state.settings.playthroughs_enabled,'checkbox');
-        field(saves,'playthrough_keep','Maximum automatic saves (0 = Unlimited)',state.settings.playthrough_keep);
-        saves.append(node('p','Above the limit, the oldest automatic saves are deleted first. Manual, unclassified, active, default and protected saves are kept.'));
+        const form = node('form'), area = node('div'), storage = state.storage;
+        const size = bytes => {
+            if(bytes == null)return 'Size unavailable';
+            const unit=bytes >= 1048576 ? 'MB' : 'KB', divisor=unit==='MB'?1048576:1024;
+            return (bytes/divisor).toLocaleString(undefined,{maximumFractionDigits:1})+' '+unit;
+        };
+        // Reveal invalid settings before moving keyboard focus to their message.
+        const valid = container => {
+            for(const input of container.querySelectorAll('input,select')) {
+                if(!input.checkValidity()){const row=input.closest('details');if(row)row.open=true;input.reportValidity();return false;}
+            }
+            return true;
+        };
+        form.noValidate=true;
+        const categories = storage?.categories || [];
+        const measured = new Map(categories.map(item => [item.key,item]));
+        form.append(node('h3','Storage and cleanup'),node('p',size(storage?.database_bytes) + ' total. Expand a category to choose what to remove.'));
+        // Each row keeps its size, rules and one-off preview together.
+        function cleanupRow(key, label, description) {
+            const row = node('details'), summary = node('summary'); row.className = 'ps-cleanup-row';
+            summary.append(node('strong',label),node('span',size(measured.get(key)?.bytes)),node('span','Cleanup settings'));
+            row.append(summary,node('p',description)); form.append(row);
+            return row;
+        }
+        function categoryPreview(row, key) {
+            row.append(button('Preview ' + (key === 'playthroughs' ? 'saves' : 'cleanup'),async()=> {
+                if (!valid(row)) return;
+                if (!state.capabilities.category_preview) throw new Error('Update the server to preview one category.');
+                preview(area,(await request('preview',{...values(form),preview_category:key})).preview);
+                status.textContent='Preview only. Your settings were not saved.';
+                area.scrollIntoView({block:'nearest'});
+            }));
+        }
         for (const category of state.capabilities.categories) {
-            const part = group(grid,category.label), key = category.key;
-            field(part,key+'_enabled','Include in cleanup',state.settings[key+'_enabled'],'checkbox');
+            const key = category.key, part = cleanupRow(key,category.label,category.description || 'Troubleshooting logs.');
+            field(part,key+'_enabled','Include in saved cleanup rules',state.settings[key+'_enabled'],'checkbox');
             field(part,key+'_days','Older than (real-world days)',state.settings[key+'_days'],'number',1,3650);
             field(part,key+'_max_mb','Size limit (MB; 0 = no limit)',state.settings[key+'_max_mb'],'number',0,102400);
             if (key === 'requests') {
@@ -74,24 +102,38 @@
                 for (const [value,text] of [['all','All request logs'],['relationship','Relationship requests only']]) { const o=node('option',text); o.value=value; select.append(o); }
                 select.value=state.settings.requests_filter; label.append(select); part.append(label);
             }
+            part.append(node('p','Logs from the last 24 hours are kept. Preview checks only this category, even when its saved rule is off.'));
+            categoryPreview(part,key);
         }
+        const saves = cleanupRow('playthroughs','Playthrough Saves',measured.get('playthroughs')?.description || 'Saved copies of your mod data.');
+        field(saves,'playthroughs_enabled','Delete extra automatic saves',state.settings.playthroughs_enabled,'checkbox');
+        field(saves,'playthrough_keep','Maximum automatic saves (0 = Unlimited)',state.settings.playthrough_keep);
+        saves.append(node('p','Above the limit, the oldest automatic saves are deleted first. Manual, unclassified, active, default and protected saves are kept.'));
+        const manage = node('a','Manage saves'); manage.href='#ps-manage-saves'; saves.append(manage);
+        categoryPreview(saves,'playthroughs');
+        const kept = node('section'); kept.append(node('h3','Data kept by cleanup'));
+        for (const category of categories.filter(item=>!item.cleanup)) {
+            const row = node('div'); row.className='ps-kept-row';
+            row.append(node('strong',category.label),node('span',size(category.bytes)),node('p',category.description)); kept.append(row);
+        }
+        form.append(kept,node('p','Sizes include indexes and unused space. Size limits apply to log data. Only the preview estimates what can be deleted; cleanup may not reduce files on disk.'));
         field(form,'automatic','Run cleanup automatically (off by default)',state.settings.automatic,'checkbox');
-        form.append(node('p','Runs at most once an hour while the background service is running. Large cleanups may take several rounds.'));
-        form.append(node('p',state.event_status));
+        form.append(node('p','Runs saved rules at most once an hour while the background service is running. Large cleanups may take several rounds.'));
         if (state.last_run) form.append(node('p','Last cleanup: '+state.last_run.message+' '+state.last_run.at));
-        const area = node('div');
         form.append(button('Save settings',async()=> {
-            if (!form.reportValidity()) return;
+            if (!valid(form)) return;
             const fields=values(form);
             if (fields.automatic==='1' && !state.settings.automatic && !confirm('Delete matching logs and extra automatic saves using these rules, without asking each time? Current gameplay data is kept.')) return;
             await request('save',fields); await load(); status.textContent='Cleanup settings saved.';
-        }),button('Preview cleanup',async()=> {
-            if (!form.reportValidity()) return;
+        }),button('Preview all cleanup',async()=> {
+            if (!valid(form)) return;
             preview(area,(await request('preview',values(form))).preview); status.textContent='Preview only. Your settings were not saved and automatic cleanup was not turned on.';
+            area.scrollIntoView({block:'nearest'});
         }));
         form.addEventListener('input',()=>area.replaceChildren());
         for (const f of [form,backup]) f.addEventListener('submit',e=>e.preventDefault());
-        host.append(form,area,node('h3','Manage Playthrough Saves'));
+        const manageTitle=node('h3','Manage Playthrough Saves'); manageTitle.id='ps-manage-saves';
+        host.append(form,area,manageTitle);
         const selected=new Set(), list=node('div');
         const kind={manual:'Manual Save',dragon_break:'Automatic Rollback Save',before_switch:'Before-Switch Save',unclassified:'Unclassified'};
         for (const item of state.playthroughs) {

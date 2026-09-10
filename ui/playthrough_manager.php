@@ -694,18 +694,6 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     .ptm-dialog-buttons .button { padding: 6px 14px; }
     .btn-confirm-danger { background-color: rgba(166, 53, 63, 0.9); color:#fff; }
     .btn-confirm-primary { background-color: rgb(1 53 166 / 90%); color:#fff; }
-    /* Storage overview */
-    .storage-total { font-size: 14px; color:#e0e0e0; margin-bottom: 8px; }
-    .storage-bar { display:flex; height: 22px; border-radius: 6px; overflow:hidden; border:1px solid #444; background:#111; }
-    .storage-bar .seg { display:block; min-width: 2px; }
-    .seg-playthrough { background: #2ea8ff; }
-    .seg-playthroughs { background: repeating-linear-gradient(45deg, #f27c11, #f27c11 6px, #a85408 6px, #a85408 12px); }
-    .seg-diagnostics { background: repeating-linear-gradient(-45deg, #9fb1c9, #9fb1c9 6px, #64748c 6px, #64748c 12px); }
-    .seg-other { background: repeating-linear-gradient(90deg, #555, #555 4px, #2e2e2e 4px, #2e2e2e 8px); }
-    .storage-legend { list-style: none; margin: 10px 0 0 0; padding: 0; display:flex; gap: 6px 18px; flex-wrap: wrap; font-size: 13px; color:#ccc; }
-    .storage-legend .swatch { display:inline-block; width: 14px; height: 14px; border-radius: 3px; border:1px solid #444; vertical-align: -2px; margin-right: 4px; }
-    .help-text { font-size: 0.9em; color: #9fb1c9; }
-    .retention-note { font-size:12px; color:#9fb1c9; margin:6px 0; line-height:1.5; }
 
     /* Accessibility helpers */
     .visually-hidden { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; clip:rect(0 0 0 0); clip-path: inset(50%); overflow:hidden; white-space:nowrap; }
@@ -908,11 +896,6 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
     <?php } ?>
 
     <div class="content-section full-width-section">
-        <h2>💽 Storage overview</h2>
-        <div class="help-text" style="margin-bottom: 12px;">
-            See how much database space your saves and logs use.
-        </div>
-        <div id="storage-overview">Loading storage overview…</div>
         <div class="help-text" style="margin-top: 12px;">
             For backups, exports, and maintenance, use the
             <a href="<?php echo htmlspecialchars($ptmDatabaseToolsUrl, ENT_QUOTES, 'UTF-8'); ?>"<?php echo ($isEmbed && !$ptmFragment) ? ' target="_top"' : ''; ?> style="color:#ffb862;"><?php echo htmlspecialchars($ptmDatabaseToolsLabel, ENT_QUOTES, 'UTF-8'); ?></a>.
@@ -1201,82 +1184,12 @@ if (!$ptmFragment) {
         }
     })();
 
-    // ----- Live stats + storage overview (read-only fetch) -----
-    function fmtBytes(b){
-        b = Number(b);
-        if (!isFinite(b) || b < 0) b = 0;
-        if (b === 0) return '0 Bytes';
-        const k = 1024, sizes = ['Bytes','KB','MB','GB','TB'];
-        const i = Math.min(sizes.length - 1, Math.floor(Math.log(b) / Math.log(k)));
-        return (Math.round((b / Math.pow(k, i)) * 100) / 100) + ' ' + sizes[i];
-    }
-
-    function renderStorage(s){
-        const host = document.getElementById('storage-overview');
-        if (!host) return;
-        if (!s || typeof s.total_bytes !== 'number') {
-            host.textContent = 'Storage overview is currently unavailable.';
-            return;
-        }
-        const total = Math.max(0, s.total_bytes);
-        const segs = [
-            { label: 'Active playthrough and settings', bytes: Math.max(0, s.playthrough_bytes || 0), cls: 'seg-playthrough' },
-            { label: 'Playthrough Saves' + (s.playthrough_schemas ? ' (' + s.playthrough_schemas + ')' : ''), bytes: Math.max(0, s.playthroughs_bytes || 0), cls: 'seg-playthroughs' },
-            { label: 'Diagnostics logs', bytes: Math.max(0, s.diagnostics_bytes || 0), cls: 'seg-diagnostics' },
-            { label: 'Other', bytes: Math.max(0, s.other_bytes || 0), cls: 'seg-other' }
-        ];
-        host.textContent = '';
-
-        const totalLine = document.createElement('div');
-        totalLine.className = 'storage-total';
-        totalLine.textContent = 'Total database size: ' + fmtBytes(total) + ' (' + Math.round(total).toLocaleString() + ' bytes)';
-        host.appendChild(totalLine);
-
-        const bar = document.createElement('div');
-        bar.className = 'storage-bar';
-        bar.setAttribute('role', 'img');
-        bar.setAttribute('aria-label', 'Storage breakdown: ' + segs.map(g => g.label + ' ' + fmtBytes(g.bytes)).join(', '));
-        segs.forEach(g => {
-            const seg = document.createElement('span');
-            seg.className = 'seg ' + g.cls;
-            const p = total > 0 ? (g.bytes / total) * 100 : 0;
-            seg.style.width = p + '%';
-            seg.title = g.label + ': ' + fmtBytes(g.bytes);
-            bar.appendChild(seg);
-        });
-        host.appendChild(bar);
-
-        const legend = document.createElement('ul');
-        legend.className = 'storage-legend';
-        segs.forEach(g => {
-            const li = document.createElement('li');
-            const sw = document.createElement('span');
-            sw.className = 'swatch ' + g.cls;
-            sw.setAttribute('aria-hidden', 'true');
-            li.appendChild(sw);
-            const pctTxt = total > 0 ? (Math.round((g.bytes / total) * 1000) / 10) + '%' : '0%';
-            li.appendChild(document.createTextNode(g.label + ': ' + fmtBytes(g.bytes) + ' (' + Math.round(g.bytes).toLocaleString() + ' bytes, ' + pctTxt + ')'));
-            legend.appendChild(li);
-        });
-        host.appendChild(legend);
-        if (s.playthrough_note) {
-            const note = document.createElement('p');
-            note.className = 'retention-note';
-            note.textContent = s.playthrough_note;
-            host.appendChild(note);
-        }
-    }
-
+    // Refresh live statistics; storage sizes come from the category controls above.
     try {
         fetch('<?php echo $webRoot; ?>/ui/playthrough_stats.php', { credentials:'same-origin' })
             .then(r => r.ok ? r.json() : null)
             .then(j => {
-                const host = document.getElementById('storage-overview');
-                if (!j || !j.ok) {
-                    if (host) host.textContent = 'Storage overview is currently unavailable.';
-                    return;
-                }
-                renderStorage(j.storage || null);
+                if (!j || !j.ok) return;
                 // Counts are planner estimates and can lag or reset; only replace the
                 // metadata-based value with a positive estimate, never with zero.
                 // The label stays "(at last playthrough save)" unless the live estimate applies.
@@ -1299,10 +1212,7 @@ if (!$ptmFragment) {
                     la.textContent = j.last_skyrim_date;
                 }
             })
-            .catch(() => {
-                const host = document.getElementById('storage-overview');
-                if (host) host.textContent = 'Storage overview is currently unavailable.';
-            });
+            .catch(() => { /* Keep the saved metadata when live statistics are unavailable. */ });
     } catch (_e) {}
 })();
 </script>

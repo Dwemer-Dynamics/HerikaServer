@@ -17,5 +17,13 @@
 #retention-section .ps-row { border-bottom:1px solid #777; padding:8px 0; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
 #retention-section .ps-row label { flex:1; min-width:150px; }
 #retention-section [role=alert] { color:#ffb4b4; }
+#retention-section .ps-cleanup-row { border:1px solid #777; border-radius:6px; padding:12px; margin:8px 0; }
+#retention-section .ps-cleanup-row summary { display:flex; flex-wrap:wrap; gap:8px 16px; cursor:pointer; align-items:center; }
+#retention-section .ps-cleanup-row summary strong { flex:1; min-width:140px; }
+#retention-section .ps-cleanup-row summary span:last-child { font-size:0.85em; text-decoration:underline; }
+#retention-section .ps-cleanup-row summary:focus-visible { outline:2px solid #ffb862; outline-offset:4px; }
+#retention-section .ps-kept-row { display:flex; flex-wrap:wrap; gap:4px 16px; padding:8px 0; border-bottom:1px solid #777; }
+#retention-section .ps-kept-row strong { flex:1; }
+#retention-section .ps-kept-row p { flex-basis:100%; margin:0; font-size:0.9em; }
 </style>
-<script src="<?= htmlspecialchars($webRoot . '/ui/js/playthrough_retention.js', ENT_QUOTES) ?>"></script>
+<script src="<?= htmlspecialchars($webRoot . '/ui/js/playthrough_retention.js?v=' . filemtime(dirname(__DIR__) . '/js/playthrough_retention.js'), ENT_QUOTES) ?>"></script>

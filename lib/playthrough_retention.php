@@ -3,14 +3,7 @@
 require_once __DIR__ . '/playthrough_schema.php';
 require_once __DIR__ . '/playthrough_preferences.php';
 
-function ptr_categories(): array {
-    return [
-        'log' => ['label'=>'Prompt and response logs', 'table'=>'log', 'stamp'=>'localts'],
-        'requests' => ['label'=>'Request logs', 'table'=>'audit_request', 'stamp'=>'EXTRACT(EPOCH FROM created_at)'],
-        'recall' => ['label'=>'Memory search logs', 'table'=>'audit_memory', 'stamp'=>'EXTRACT(EPOCH FROM created_at)'],
-        'responses' => ['label'=>'Delivered response logs', 'table'=>'responselog', 'stamp'=>'localts'],
-    ];
-}
+require_once __DIR__ . '/playthrough_categories.php';
 
 function ptr_relationship_filter(): string { return " AND connector ILIKE '%Relationship%'"; }
 
@@ -151,8 +144,21 @@ function ptr_identity($conn): string {
 
 // Each preview is limited to 1,000 diagnostics rows per table and three automatic
 // playthroughs. Row versions pin the exact data the user agreed to remove.
-function ptr_preview($conn, array $settings): array {
-    $plan = ['identity' => ptr_identity($conn), 'created' => time(), 'diagnostics' => [], 'playthroughs' => [], 'more_possible' => false,
+function ptr_preview($conn, array $settings, ?string $category = null): array {
+    $scope = null;
+    if ($category !== null) {
+        $categories = ptr_categories();
+        if ($category !== 'playthroughs' && !isset($categories[$category])) {
+            throw new InvalidArgumentException('Choose a valid cleanup category.');
+        }
+        // A one-off category preview ignores every other enabled rule and never saves settings.
+        foreach ($categories as $key => $entry) $settings[$key . '_enabled'] = $key === $category;
+        $settings['diagnostics_enabled'] = $category !== 'playthroughs';
+        $settings['playthroughs_enabled'] = $category === 'playthroughs';
+        $settings['event_days'] = 0;
+        $scope = ['key'=>$category, 'label'=>$category === 'playthroughs' ? 'Playthrough Saves' : $categories[$category]['label']];
+    }
+    $plan = ['scope' => $scope, 'identity' => ptr_identity($conn), 'created' => time(), 'diagnostics' => [], 'playthroughs' => [], 'more_possible' => false,
         'events' => ['older_rows' => 0, 'cutoff_gamets' => null,
             'blocked_reason' => 'Event history is kept because it supports NPC memories.'],
         'message' => 'Cleanup frees database space for reuse but may not reduce the files on disk.'];

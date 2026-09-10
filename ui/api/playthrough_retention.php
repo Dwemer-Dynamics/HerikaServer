@@ -72,7 +72,16 @@ try {
         } else {
             // One-off form values do not save preferences or enable automatic cleanup.
             $input = array_intersect_key($_POST, ptr_defaults());
-            $plan = ptr_preview($conn, $input ? ptr_validate($input) : ptr_settings($conn));
+            $category = $_POST['preview_category'] ?? null;
+            if ($category !== null) {
+                if (!is_string($category) || ($category !== 'playthroughs' && !isset(ptr_categories()[$category]))) {
+                    throw new InvalidArgumentException('Choose a valid cleanup category.');
+                }
+                $keys = $category === 'playthroughs' ? ['playthrough_keep'] : [$category . '_days', $category . '_max_mb'];
+                if ($category === 'requests') $keys[] = 'requests_filter';
+                $input = array_intersect_key($input, array_flip($keys));
+            }
+            $plan = ptr_preview($conn, $input ? ptr_validate($input) : ptr_settings($conn), $category);
         }
         ptr_query($conn, 'COMMIT');
         $token = bin2hex(random_bytes(24));
@@ -94,11 +103,12 @@ try {
         // The shared settings view already paginates playthroughs through its read-only list API.
         $categories = [];
         foreach (ptr_categories() as $key => $category) {
-            if (ptr_exists($conn, 'public.' . $category['table'])) $categories[] = ['key'=>$key,'label'=>$category['label']];
+            if (ptr_exists($conn, 'public.' . $category['table'])) $categories[] = ['key'=>$key,'label'=>$category['label'],'description'=>$category['description']];
         }
         $response += ['settings' => ptr_settings($conn), 'backup_settings'=>ptp_backup_settings($conn),
             'last_backup'=>ptr_read($conn, 'PLAYTHROUGH_SAVE_LAST_ATTEMPT', null),
-            'capabilities'=>['categories'=>$categories,'bulk_delete'=>true],
+            'capabilities'=>['categories'=>$categories,'bulk_delete'=>true,'category_preview'=>true],
+            'storage'=>($_GET['summary'] ?? '') === '1' ? null : ptr_storage_overview($conn, ptp_product()['meta']),
             'playthroughs' => ($_GET['summary'] ?? '') === '1' ? [] : ptr_profiles($conn),
             'last_run' => ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', null),
             'event_status' => 'Events, NPC memories, diaries and relationship history are kept.'];
