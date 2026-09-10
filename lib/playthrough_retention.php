@@ -28,7 +28,7 @@ function ptr_preview_delete($conn, array $ids): array {
 // cannot silently re-enable an old cleanup policy.
 function ptr_defaults(): array {
     $settings = ['automatic'=>false, 'diagnostics_enabled'=>false, 'diagnostic_days'=>7,
-        'diagnostic_max_mb'=>0, 'playthroughs_enabled'=>false, 'playthrough_keep'=>0, 'event_days'=>0, 'requests_filter'=>'all'];
+        'diagnostic_max_mb'=>0, 'playthroughs_enabled'=>false, 'playthrough_keep'=>0, 'event_days'=>0, 'events_enabled'=>false, 'events_days'=>30, 'requests_filter'=>'all'];
     foreach (ptr_categories() as $key => $category) {
         $settings[$key . '_enabled'] = false;
         $settings[$key . '_days'] = 7;
@@ -74,8 +74,8 @@ function ptr_settings($conn): array {
 
 function ptr_validate(array $input): array {
     $settings = ptr_defaults();
-    $booleans = ['automatic','diagnostics_enabled','playthroughs_enabled'];
-    $numbers = ['diagnostic_days'=>[1,3650], 'diagnostic_max_mb'=>[0,102400], 'playthrough_keep'=>[0,10000], 'event_days'=>[0,3650]];
+    $booleans = ['automatic','diagnostics_enabled','playthroughs_enabled','events_enabled'];
+    $numbers = ['diagnostic_days'=>[1,3650], 'diagnostic_max_mb'=>[0,102400], 'playthrough_keep'=>[0,10000], 'event_days'=>[0,3650], 'events_days'=>[1,3650]];
     foreach (ptr_categories() as $key => $category) {
         $booleans[] = $key . '_enabled';
         $numbers[$key . '_days'] = [1,3650];
@@ -142,25 +142,32 @@ function ptr_identity($conn): string {
     return hash('sha256', json_encode([$relations, ptr_profiles($conn), ptr_settings($conn)]));
 }
 
-// Each preview is limited to 1,000 diagnostics rows per table and three automatic
+// Recheck at execution too: keep recent writes, unfinished replies and the newest
+// event of each type. Age alone does not prove that history is no longer useful.
+function ptr_event_guard(): string {
+    return "t.gamets > 0 AND t.gamets < $1 AND t.localts > 0 AND t.localts < $2
+        AND t.type <> '' AND t.gamets < (SELECT MAX(newer.gamets) FROM public.eventlog newer WHERE newer.type=t.type)
+        AND LOWER(COALESCE(to_jsonb(t)->>'delivery_state','')) IN ('','spoken','cancelled','interrupted')";
+}
+
+// Each preview is limited to 1,000 log/event rows per table and three automatic
 // playthroughs. Row versions pin the exact data the user agreed to remove.
 function ptr_preview($conn, array $settings, ?string $category = null): array {
     $scope = null;
     if ($category !== null) {
         $categories = ptr_categories();
-        if ($category !== 'playthroughs' && !isset($categories[$category])) {
+        if (!in_array($category, ['playthroughs','events'], true) && !isset($categories[$category])) {
             throw new InvalidArgumentException('Choose a valid cleanup category.');
         }
         // A one-off category preview ignores every other enabled rule and never saves settings.
         foreach ($categories as $key => $entry) $settings[$key . '_enabled'] = $key === $category;
-        $settings['diagnostics_enabled'] = $category !== 'playthroughs';
+        $settings['diagnostics_enabled'] = isset($categories[$category]);
         $settings['playthroughs_enabled'] = $category === 'playthroughs';
-        $settings['event_days'] = 0;
-        $scope = ['key'=>$category, 'label'=>$category === 'playthroughs' ? 'Playthrough Saves' : $categories[$category]['label']];
+        $settings['events_enabled'] = $category === 'events';
+        $scope = ['key'=>$category, 'label'=>$category === 'playthroughs' ? 'Playthrough Saves' : ($category === 'events' ? 'Events' : $categories[$category]['label'])];
     }
     $plan = ['scope' => $scope, 'identity' => ptr_identity($conn), 'created' => time(), 'diagnostics' => [], 'playthroughs' => [], 'more_possible' => false,
-        'events' => ['older_rows' => 0, 'cutoff_gamets' => null,
-            'blocked_reason' => 'Event history is kept because it supports NPC memories.'],
+        'events' => ['rows'=>0, 'bytes_estimate'=>0, 'selected'=>[], 'cutoff_gamets'=>null, 'days'=>$settings['events_days'], 'message'=>''],
         'message' => 'Cleanup frees database space for reuse but may not reduce the files on disk.'];
     if ($settings['diagnostics_enabled']) {
         foreach (ptr_categories() as $key => $category) {
@@ -208,12 +215,18 @@ function ptr_preview($conn, array $settings, ?string $category = null): array {
         if (count($plan['playthroughs']) > 3) $plan['more_possible'] = true;
         $plan['playthroughs'] = array_slice($plan['playthroughs'], 0, 3);
     }
-    if ($settings['event_days'] > 0 && ptr_exists($conn, 'public.eventlog')) {
-        // Preview only: never use this timestamp as proof that an event is disposable.
+    if ($settings['events_enabled'] && ptr_exists($conn, 'public.eventlog')) {
         $latest = (int)pg_fetch_result(ptr_query($conn, 'SELECT COALESCE(MAX(gamets),0) FROM public.eventlog'), 0, 0);
-        $cutoff = max(0, $latest - $settings['event_days'] * 10000000);
+        $cutoff = max(0, $latest - $settings['events_days'] * 10000000);
+        $guard = ptr_event_guard();
+        $rows = pg_fetch_all(ptr_query($conn, "SELECT t.ctid::text AS id, t.xmin::text AS version, pg_column_size(t) AS bytes
+            FROM public.eventlog t WHERE {$guard} ORDER BY t.gamets, t.ctid LIMIT 1000", [$cutoff, time()-86400])) ?: [];
         $plan['events']['cutoff_gamets'] = $cutoff;
-        $plan['events']['older_rows'] = (int)pg_fetch_result(ptr_query($conn, 'SELECT COUNT(*) FROM public.eventlog WHERE gamets>0 AND gamets<$1', [$cutoff]), 0, 0);
+        $plan['events']['rows'] = count($rows);
+        $plan['events']['bytes_estimate'] = array_sum(array_column($rows, 'bytes'));
+        $plan['events']['selected'] = array_map(fn($row) => ['id'=>$row['id'], 'version'=>$row['version']], $rows);
+        $plan['events']['message'] = 'Deleting events removes raw history used for conversations, recall and future diaries. Saved memories and diaries are kept, but they may not contain every detail. Create a Playthrough Save first if you may need this history.';
+        if (count($rows) === 1000) $plan['more_possible'] = true;
     }
     return $plan;
 }
@@ -254,11 +267,24 @@ function ptr_execute($conn, array $plan): array {
             if (pg_affected_rows($res) !== count($group['selected'])) throw new RuntimeException('The logs changed. Preview again before deleting.');
             $deleted += pg_affected_rows($res);
         }
+        $eventDeleted = 0;
+        if (!empty($plan['events']['selected'])) {
+            // Loading an older game can move the clock back without replacing the table.
+            $latest = (int)pg_fetch_result(ptr_query($conn, 'SELECT COALESCE(MAX(gamets),0) FROM public.eventlog'), 0, 0);
+            $cutoff = min($plan['events']['cutoff_gamets'], max(0, $latest - $plan['events']['days'] * 10000000));
+            $guard = ptr_event_guard();
+            $res = ptr_query($conn, "DELETE FROM public.eventlog t USING jsonb_to_recordset($3::jsonb) AS chosen(id text, version text)
+                WHERE t.ctid=chosen.id::tid AND t.xmin::text=chosen.version AND {$guard}",
+                [$cutoff, time()-86400, json_encode($plan['events']['selected'])]);
+            $eventDeleted = pg_affected_rows($res);
+            if ($eventDeleted !== count($plan['events']['selected'])) throw new RuntimeException('The events changed. Preview again before deleting.');
+            $deleted += $eventDeleted;
+        }
         foreach ($plan['playthroughs'] as $playthrough) ptr_delete_playthrough($conn, $playthrough['id']);
         $changed = $deleted > 0 || count($plan['playthroughs']) > 0;
         $result = ['at' => gmdate('c'), 'status' => $changed ? 'succeeded' : 'no_work',
-            'rows' => $deleted, 'playthroughs' => count($plan['playthroughs']), 'more_possible' => $plan['more_possible'] ?? false,
-            'message' => $changed ? 'Cleanup finished. Current gameplay data and your active Playthrough Save were kept.' : 'Nothing matches these cleanup rules.'];
+            'rows' => $deleted, 'event_rows'=>$eventDeleted, 'playthroughs' => count($plan['playthroughs']), 'more_possible' => $plan['more_possible'] ?? false,
+            'message' => $changed ? 'Cleanup finished. Only the listed entries and saves were deleted. Your active Playthrough Save was kept.' : 'Nothing matches these cleanup rules.'];
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', $result);
         ptr_query($conn, 'COMMIT');
         return $result;
@@ -272,13 +298,13 @@ function ptr_execute($conn, array $plan): array {
 function ptr_tick($conn): void {
     if (!ptr_exists($conn, 'chim_meta.settings')) return;
     $settings = ptr_settings($conn);
-    if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0))) return;
+    if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && !$settings['events_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0))) return;
     $attempt = (int)ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', 0);
     if (time() - $attempt < 3600 || !ptr_lock($conn)) return;
     try {
         if (time() - (int)ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', 0) < 3600) return;
         $settings = ptr_settings($conn);
-        if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0))) return;
+        if (!$settings['automatic'] || (!$settings['diagnostics_enabled'] && !$settings['events_enabled'] && (!$settings['playthroughs_enabled'] || $settings['playthrough_keep'] === 0))) return;
         ptr_write($conn, 'PLAYTHROUGH_RETENTION_LAST_ATTEMPT', time());
         ptr_query($conn, "SET statement_timeout='20s'");
         $plan = ptr_preview($conn, $settings);

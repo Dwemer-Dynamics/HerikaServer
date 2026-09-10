@@ -42,13 +42,13 @@ function ptr_storage_overview($conn, string $meta): array {
     }
     foreach ([
         'playthroughs'=>['Playthrough Saves','Saved copies of your mod data. Older archive formats may be counted under other database storage.'],
-        'events'=>['Events','Supports gameplay history and NPC memories.'],
+        'events'=>['Events','Raw gameplay and conversation history. Cleanup is off by default.'],
         'memory'=>['Memories and knowledge','Used by your characters.'],
         'other'=>['Settings and other live data','Needed by the mod. Not included in log cleanup.'],
         'stored'=>['Other database storage','Database overhead, older save archives and other stored data.'],
     ] as $key => [$label,$description]) {
         $categories[$key] = ['key'=>$key,'label'=>$label,'description'=>$description,'bytes'=>0,
-            'rows_estimate'=>null,'cleanup'=>$key==='playthroughs','available'=>true];
+            'rows_estimate'=>null,'cleanup'=>in_array($key, ['playthroughs','events'], true),'available'=>$key!=='events'];
     }
     foreach (pg_fetch_all($result) ?: [] as $table) {
         if ($table['nspname'] !== 'public') {

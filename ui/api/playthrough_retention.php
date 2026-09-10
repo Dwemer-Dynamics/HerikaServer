@@ -74,10 +74,11 @@ try {
             $input = array_intersect_key($_POST, ptr_defaults());
             $category = $_POST['preview_category'] ?? null;
             if ($category !== null) {
-                if (!is_string($category) || ($category !== 'playthroughs' && !isset(ptr_categories()[$category]))) {
+                if (!is_string($category) || (!in_array($category, ['playthroughs','events'], true) && !isset(ptr_categories()[$category]))) {
                     throw new InvalidArgumentException('Choose a valid cleanup category.');
                 }
                 $keys = $category === 'playthroughs' ? ['playthrough_keep'] : [$category . '_days', $category . '_max_mb'];
+                if ($category === 'events') $keys = ['events_days'];
                 if ($category === 'requests') $keys[] = 'requests_filter';
                 $input = array_intersect_key($input, array_flip($keys));
             }
@@ -87,7 +88,7 @@ try {
         $token = bin2hex(random_bytes(24));
         $_SESSION[$previewKey] = ['token' => $token, 'plan' => $plan];
         foreach ($plan['diagnostics'] as &$group) unset($group['selected']);
-        unset($group, $plan['identity']);
+        unset($group, $plan['identity'], $plan['events']['selected']);
         $plan['token'] = $token;
         $plan['expires_at'] = gmdate('c', $plan['created'] + 300);
         $response['preview'] = $plan;
@@ -107,11 +108,11 @@ try {
         }
         $response += ['settings' => ptr_settings($conn), 'backup_settings'=>ptp_backup_settings($conn),
             'last_backup'=>ptr_read($conn, 'PLAYTHROUGH_SAVE_LAST_ATTEMPT', null),
-            'capabilities'=>['categories'=>$categories,'bulk_delete'=>true,'category_preview'=>true],
+            'capabilities'=>['categories'=>$categories,'bulk_delete'=>true,'category_preview'=>true,'event_cleanup'=>ptr_exists($conn, 'public.eventlog')],
             'storage'=>($_GET['summary'] ?? '') === '1' ? null : ptr_storage_overview($conn, ptp_product()['meta']),
             'playthroughs' => ($_GET['summary'] ?? '') === '1' ? [] : ptr_profiles($conn),
             'last_run' => ptr_read($conn, 'PLAYTHROUGH_RETENTION_LAST_RUN', null),
-            'event_status' => 'Events, NPC memories, diaries and relationship history are kept.'];
+            'event_status' => 'Event cleanup is off by default. Saved memories, diaries and relationship history are kept.'];
     }
     echo json_encode($response, JSON_THROW_ON_ERROR);
 } catch (Throwable $e) {

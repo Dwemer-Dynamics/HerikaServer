@@ -36,17 +36,19 @@
         area.replaceChildren(node('h3',plan.scope ? plan.scope.label + ': cleanup preview' : 'Cleanup preview'),node('p',plan.message));
         const lines = [];
         for (const item of plan.diagnostics) lines.push((item.label || item.table) + ': ' + item.rows + ' entries');
+        if (plan.events?.cutoff_gamets != null) lines.push('Events: ' + plan.events.rows + ' entries');
         for (const item of plan.playthroughs) lines.push('Playthrough Save: ' + item.name);
         lines.forEach(text => area.append(node('p',text)));
         if (!lines.length) area.append(node('p','Nothing to delete.'));
         if (plan.more_possible) area.append(node('p','Another cleanup round may be needed.'));
-        area.append(node('p','Preview expires in 5 minutes. Logs from the last 24 hours, unsent replies and current gameplay data are kept.'));
+        area.append(node('p','Preview expires in 5 minutes. Recent entries, unfinished replies and your active Playthrough Save are kept.'));
+        if (plan.events?.message) area.append(node('p',plan.events.message));
         const run = button('Delete listed items', async () => {
             if (Date.now() >= Date.parse(plan.expires_at)) throw new Error('Preview expired. Preview again.');
-            if (!confirm('Permanently delete these items? This cannot be undone.\n\n' + lines.join('\n'))) return;
+            if (!confirm('Permanently delete these items? This cannot be undone.\n\n' + lines.join('\n') + (plan.events?.rows > 0 ? '\n\n' + plan.events.message : ''))) return;
             const result = await request('run',{preview_token:plan.token}); await load(); status.textContent = result.result.message;
         });
-        run.disabled = !plan.playthroughs.length && !plan.diagnostics.some(item => item.rows > 0); area.append(run);
+        run.disabled = !(plan.events?.rows > 0) && !plan.playthroughs.length && !plan.diagnostics.some(item => item.rows > 0); area.append(run);
     }
     function render(state) {
         host.replaceChildren();
@@ -75,7 +77,7 @@
         form.noValidate=true;
         const categories = storage?.categories || [];
         const measured = new Map(categories.map(item => [item.key,item]));
-        form.append(node('h3','Storage and cleanup'),node('p',size(storage?.database_bytes) + ' total. Expand a category to choose what to remove.'));
+        form.append(node('h3','Playthrough Storage'),node('p',size(storage?.database_bytes) + ' total. Expand a category to choose what to remove.'));
         // Each row keeps its size, rules and one-off preview together.
         function cleanupRow(key, label, description) {
             const row = node('details'), summary = node('summary'); row.className = 'ps-cleanup-row';
@@ -105,6 +107,15 @@
             part.append(node('p','Logs from the last 24 hours are kept. Preview checks only this category, even when its saved rule is off.'));
             categoryPreview(part,key);
         }
+        if (state.capabilities.event_cleanup) {
+            const events = cleanupRow('events','Events',measured.get('events')?.description || 'Raw gameplay and conversation history.');
+            field(events,'events_enabled','Include in saved cleanup rules (off by default)',state.settings.events_enabled,'checkbox');
+            field(events,'events_days','Older than (in-game days)',state.settings.events_days ?? 30,'number',1,3650);
+            events.append(node('p','Age is measured from the latest recorded game time. Events recorded in the last 24 real-world hours, unfinished replies and the newest event of each type are kept.'));
+            events.append(node('p','Deleting events removes raw history used for conversations, recall and future diaries. Saved memories and diaries are kept, but they may not contain every detail. Create a Playthrough Save first if you may need this history.'));
+            events.append(node('p','Preview checks only Events, even when its saved rule is off.'));
+            categoryPreview(events,'events');
+        }
         const saves = cleanupRow('playthroughs','Playthrough Saves',measured.get('playthroughs')?.description || 'Saved copies of your mod data.');
         field(saves,'playthroughs_enabled','Delete extra automatic saves',state.settings.playthroughs_enabled,'checkbox');
         field(saves,'playthrough_keep','Maximum automatic saves (0 = Unlimited)',state.settings.playthrough_keep);
@@ -123,7 +134,7 @@
         form.append(button('Save settings',async()=> {
             if (!valid(form)) return;
             const fields=values(form);
-            if (fields.automatic==='1' && !state.settings.automatic && !confirm('Delete matching logs and extra automatic saves using these rules, without asking each time? Current gameplay data is kept.')) return;
+            if (fields.automatic==='1' && (!state.settings.automatic || fields.events_enabled==='1') && !confirm('Run the selected cleanup rules without asking each time? Your active Playthrough Save is kept.' + (fields.events_enabled==='1' ? '\n\nDeleting events removes raw history used for conversations, recall and future diaries. Saved memories and diaries are kept, but they may not contain every detail. Create a Playthrough Save first if you may need this history.' : ''))) return;
             await request('save',fields); await load(); status.textContent='Cleanup settings saved.';
         }),button('Preview all cleanup',async()=> {
             if (!valid(form)) return;
