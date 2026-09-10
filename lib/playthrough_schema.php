@@ -30,7 +30,7 @@ function pts_ensure_functions($conn): bool {
     if ($checkResult && pg_num_rows($checkResult) > 0) {
         $row = pg_fetch_assoc($checkResult);
         if (pts_clone_function_is_current($row['function_definition'] ?? null)
-            && pg_fetch_result(pg_query($conn, "SELECT to_regprocedure('chim_meta.restore_playthrough_upgraded(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.capture_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.clone_selected_schema(text,text,text[])') IS NOT NULL"), 0, 0) === 't') {
+            && pg_fetch_result(pg_query($conn, "SELECT to_regprocedure('chim_meta.sync_playthrough_comments(text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough_upgraded(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.capture_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.clone_selected_schema(text,text,text[])') IS NOT NULL"), 0, 0) === 't') {
             return true;
         }
 

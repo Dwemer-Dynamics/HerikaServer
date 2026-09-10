@@ -84,3 +84,13 @@ function pts_playthrough_tables(): array {
         'visual_context',
     ];
 }
+
+// Run after database updates so new tables and retired labels follow the capture policy.
+function pts_update_playthrough_policy($conn): bool {
+    if (!pts_ensure_functions($conn)) return false;
+    $result = @pg_query_params($conn,
+        'SELECT chim_meta.sync_playthrough_comments(ARRAY(SELECT jsonb_array_elements_text($1::jsonb)))',
+        [json_encode(pts_playthrough_tables())]);
+    if (!$result) Logger::error('Could not refresh Playthrough Save table comments: ' . pg_last_error($conn));
+    return $result !== false;
+}

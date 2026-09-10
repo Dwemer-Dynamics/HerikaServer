@@ -189,3 +189,20 @@ BEGIN
     END LOOP;
 END;
 $$ LANGUAGE plpgsql SET lock_timeout = '10s';
+-- Keep pgAdmin labels aligned with the same explicit list used for capture.
+CREATE OR REPLACE FUNCTION chim_meta.sync_playthrough_comments(selected_tables text[])
+RETURNS void AS $$
+DECLARE item record;
+BEGIN
+    FOR item IN
+        SELECT c.relname, CASE WHEN c.relname=ANY(selected_tables)
+            THEN 'Playthrough Manager Backed Up' ELSE NULL END AS expected
+        FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relkind IN ('r','p')
+            AND obj_description(c.oid,'pg_class') IS DISTINCT FROM
+                CASE WHEN c.relname=ANY(selected_tables) THEN 'Playthrough Manager Backed Up' ELSE NULL END
+    LOOP
+        EXECUTE format('COMMENT ON TABLE public.%I IS %L', item.relname, item.expected);
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql SET lock_timeout = '10s';
