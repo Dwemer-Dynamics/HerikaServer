@@ -66,6 +66,6 @@
 ### Required rollback recovery saves
 
 - `lib/playthrough_guard.php` inspects incoming game timestamps before bootstrap writes. A threshold-triggered rollback must commit its selected-table snapshot and manager entry before pruning.
-- The runtime journal in `log/playthrough_runtime/rollback.json` and its pending sentinel are outside playthrough data. A failed or interrupted operation blocks game requests, workers and cleanup until an eligible game request safely retries. Never delete recovery state to bypass a failure.
-- Recovery copies stay pinned while rollback is unfinished. Retries use the operation ID recorded in the same database transaction to reuse a committed snapshot. Snapshot failure leaves gameplay untouched; a later rollback failure may be partial, so retain the recovery copy and block further processing.
+- Automatic saves and rollback failures must never pause mod processing. The rollback journal is diagnostic only; legacy pending markers and unreadable journals must not block requests, workers or cleanup. Keep the existing barrier for explicit manual playthrough switching separate from automatic saves.
+- Failed capture skips pruning for that request while normal request processing continues. A later pruning failure may be partial: keep its recovery copy pinned, report the failure, and continue processing. A new attempt captures current progress again rather than reusing a copy from before intervening gameplay writes.
 - `X-Playthrough-Save` carries fixed versioned operation IDs/statuses to the plugin's existing HTTP path. Keep all three products' notification wording aligned, deduplicate repeated notices, and display them through the game HUD after loading. Preserve each product's existing day threshold and saved preferences.

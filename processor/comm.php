@@ -123,6 +123,7 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
     } catch (Exception $e) {
         Logger::warn("DragonBreak: Playthrough attempt failed: " . $e->getMessage());
     }
+    if (!empty($GLOBALS['pgr_skip_rollback'])) { $MUST_END = true; return; }
     $db->delete("eventlog", "gamets>={$gameRequest[2]}  ");
     $db->delete("eventlog", "localts>$now ");
     //$db->delete("eventlog", "type='playerinfo'");
@@ -1239,6 +1240,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         Logger::warn("DragonBreak: Playthrough attempt (playerdied) failed: " . $e->getMessage());
     }
 
+    if (!empty($GLOBALS['pgr_skip_rollback'])) { $MUST_END = true; return; }
     $lastSaveHistory = $db->fetchAll("select gamets from eventlog where type='infosave' order by ts desc limit 1 offset 0");
     if (isset($lastSaveHistory[0]["ts"])) {
         $lastSave = $lastSaveHistory[0]["ts"];

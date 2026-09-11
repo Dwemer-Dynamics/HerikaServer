@@ -26,9 +26,6 @@ function ptr_runtime_paused(): bool
 {
     $marker = dirname(__DIR__) . '/log/playthrough_runtime/paused';
     clearstatcache(true, $marker);
-    require_once __DIR__ . '/playthrough_guard.php';
-    try { $recovery = pgr_state(); } catch (Throwable $error) { return true; }
-    if ($recovery && ($recovery['phase'] ?? '') !== 'complete') return true;
     if (!is_file($marker)) return false;
     // A crashed controller must not leave the mod permanently paused.
     $lock = ptr_runtime_file('switch.lock');
@@ -41,8 +38,6 @@ function ptr_runtime_paused(): bool
 function ptr_runtime_enter(): void
 {
     if (!empty($GLOBALS['ptr_runtime_controller']) || isset($GLOBALS['ptr_runtime_lease'])) return;
-    require_once __DIR__ . '/playthrough_guard.php';
-    pgr_runtime_check();
     $lease = ptr_runtime_file('work.lock');
     if (ptr_runtime_paused() || !flock($lease, LOCK_SH | LOCK_NB) || ptr_runtime_paused()) {
         fclose($lease);
@@ -54,7 +49,6 @@ function ptr_runtime_enter(): void
         }
         exit(75);
     }
-    pgr_runtime_check();
     $GLOBALS['ptr_runtime_lease'] = $lease;
     $GLOBALS['ptr_runtime_generation'] = trim((string)@file_get_contents(dirname(__DIR__) . '/log/playthrough_runtime/generation'));
     // PHP closes the descriptor on exit. An explicit LOCK_UN would also unlock forked children.
@@ -90,8 +84,6 @@ function ptr_runtime_refresh_worker(): void
 // Acquire before database/advisory locks so active requests can drain without waiting on the switch.
 function ptr_runtime_begin_switch(float $timeoutSeconds = 30.0, $connection = null): array
 {
-    require_once __DIR__ . '/playthrough_guard.php';
-    if (empty($GLOBALS['pgr_controller'])) pgr_runtime_check();
     if (isset($GLOBALS['ptr_runtime_lease'])) fclose($GLOBALS['ptr_runtime_lease']);
     unset($GLOBALS['ptr_runtime_lease']);
     $GLOBALS['ptr_runtime_controller'] = true;

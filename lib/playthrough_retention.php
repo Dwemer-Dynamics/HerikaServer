@@ -105,11 +105,6 @@ function ptr_validate(array $input): array {
 // Manager actions and maintenance yield to a busy playthrough operation. Dragon Break capture
 // waits on this same lock so cleanup cannot make a recovery playthrough disappear.
 function ptr_lock($conn): bool {
-    require_once __DIR__ . '/playthrough_guard.php';
-    if (empty($GLOBALS['pgr_controller'])) {
-        try { $state = pgr_state(); } catch (Throwable $error) { return false; }
-        if ($state && ($state['phase'] ?? '') !== 'complete') return false;
-    }
     return pg_fetch_result(ptr_query($conn, "SELECT pg_try_advisory_lock(hashtext('chim_playthrough_retention'))"), 0, 0) === 't';
 }
 
