@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/playthrough_retention.php';
 require_once __DIR__ . '/playthrough_runtime.php';
+require_once __DIR__ . '/utils_game_timestamp.php';
 
 function pth_query($conn, string $sql, array $params = []) {
     $result = @pg_query_params($conn, $sql, $params);
@@ -17,11 +18,11 @@ function pth_state($conn): array {
     $ready = pg_fetch_result(pth_query($conn, 'SELECT to_regclass($1) IS NOT NULL AND to_regclass($2) IS NOT NULL',
         [$meta . '.playthrough_profiles', $meta . '.settings']), 0, 0) === 't';
     if (!$ready) return ['available'=>false, 'active_id'=>0, 'token'=>'', 'playthroughs'=>[]];
-    $rows = pg_fetch_all(pth_query($conn, "SELECT p.id,p.name,p.schema_name,p.is_active,p.storage_type,p.retention_kind,p.player_name,
+    $rows = pg_fetch_all(pth_query($conn, "SELECT p.id,p.name,p.schema_name,p.is_active,p.storage_type,p.retention_kind,p.player_name,p.last_gamets,p.created_at,p.size_bytes,
         to_jsonb(p)->>'player_faction_members' AS player_faction_members,
         obj_description(n.oid,'pg_namespace') AS manifest
         FROM {$meta}.playthrough_profiles p LEFT JOIN pg_namespace n ON n.nspname=p.schema_name AND p.storage_type='schema'
-        ORDER BY lower(p.name),p.id")) ?: [];
+        ORDER BY p.is_active DESC,p.created_at DESC,p.id DESC")) ?: [];
     $active = array_values(array_filter($rows, fn($row) => $row['is_active'] === 't'));
     if (count($active) > 1) throw new RuntimeException('More than one active playthrough is recorded. Open Manage saves before switching.');
     $id = (int)($active[0]['id'] ?? 0);
@@ -44,8 +45,12 @@ function pth_state($conn): array {
         $detail = $meta === 'stobe_meta' ? implode(', ', $members) : $player;
         if ($meta !== 'stobe_meta' && $detail !== '' && $level !== null) $detail .= ' · Level ' . $level;
         $label = $row['name'] . ($detail !== '' ? ' — ' . $detail : '');
+        $savedGamets = max(0, (int)($row['last_gamets'] ?? 0));
+        $gameDate = $savedGamets > 0 ? convert_gamets2skyrim_long_date_no_time($savedGamets) : '';
         $choices[] = ['id'=>(int)$row['id'], 'name'=>$row['name'], 'active'=>$row['is_active']==='t',
-            'label'=>$label, 'player_name'=>$player, 'player_level'=>$level, 'player_faction_members'=>$members];
+            'label'=>$label, 'player_name'=>$player, 'player_level'=>$level, 'player_faction_members'=>$members,
+            'game_date'=>$gameDate, 'created_at'=>$row['created_at'] ?? '',
+            'size_bytes'=>max(0,(int)($row['size_bytes'] ?? 0)), 'kind'=>$row['retention_kind']];
     }
     return ['available'=>true, 'active_id'=>$id,
         'token'=>hash('sha256', json_encode([$id, $active[0]['schema_name'] ?? '', $revision])), 'playthroughs'=>$choices];

@@ -1,7 +1,14 @@
 (() => {
     const panel = document.querySelector('.pth-home');
     if (!panel) return;
-    const select = document.getElementById('pth-select');
+    const chooseButton = document.getElementById('pth-choose');
+    const current = document.getElementById('pth-current');
+    const picker = document.getElementById('pth-picker');
+    const pickerStatus = document.getElementById('pth-picker-status');
+    const rows = document.getElementById('pth-save-rows');
+    const tableWrap = document.getElementById('pth-table-wrap');
+    const retry = document.getElementById('pth-retry');
+    const isParty = panel.dataset.party === 'true';
     const newButton = document.getElementById('pth-new');
     const status = document.getElementById('pth-status');
     const dialog = document.getElementById('pth-dialog');
@@ -10,12 +17,12 @@
     const confirm = document.getElementById('pth-confirm');
     const cancel = document.getElementById('pth-cancel');
     const error = document.getElementById('pth-error');
-    let state, csrf, action, target, opener, busy = false;
+    let state, csrf, action, target, opener, busy = false, loading = false, reloadRequired = false;
 
-    // Selection opens a confirmation; the selector continues to show the active save.
+    // Selecting a row opens the existing confirmation before any save is changed.
     function open(actionName, profile = null) {
         if (busy || !state?.available) return;
-        action = actionName; target = profile; opener = action === 'new' ? newButton : select;
+        action = actionName; target = profile; opener = action === 'new' ? newButton : chooseButton;
         error.textContent = ''; nameInput.value = '';
         document.getElementById('pth-name-field').hidden = action !== 'new';
         nameInput.required = action === 'new';
@@ -31,14 +38,22 @@
         (action === 'new' ? nameInput : cancel).focus();
     }
     newButton.addEventListener('click', () => open('new'));
-    select.addEventListener('change', () => {
-        const choice = state.playthroughs.find(row => row.id === Number(select.value));
-        select.value = String(state.active_id);
-        if (choice && choice.id !== state.active_id) open('switch', choice);
+    chooseButton.addEventListener('click', () => {
+        if (busy || reloadRequired) return;
+        picker.showModal();
+        loadState();
     });
+    document.getElementById('pth-picker-close').addEventListener('click', () => picker.close());
+    picker.addEventListener('close', () => { if (!dialog.open) chooseButton.focus(); });
+    retry.addEventListener('click', loadState);
     cancel.addEventListener('click', () => { if (!busy) dialog.close(); });
     dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
-    dialog.addEventListener('close', () => opener?.focus());
+    dialog.addEventListener('close', () => {
+        if (action === 'switch' && !busy && !reloadRequired) {
+            picker.showModal();
+            rows.querySelector(`[data-save-id="${target.id}"]`)?.focus();
+        } else opener?.focus();
+    });
     form.addEventListener('submit', async event => {
         event.preventDefault();
         if (busy || !form.reportValidity()) return;
@@ -58,7 +73,7 @@
                     if (action === 'new') nameInput.focus();
                     return;
                 }
-                busy = false; cancel.disabled = false; newButton.disabled = true; select.disabled = true;
+                busy = false; cancel.disabled = false; newButton.disabled = true; chooseButton.disabled = true; reloadRequired = true;
                 status.textContent = 'Reload this page before changing playthroughs again.';
                 // Reload state before another attempt, including late stale-tab responses.
                 confirm.textContent = 'Reload page';
@@ -70,39 +85,94 @@
         } catch (_) {
             // A lost response can follow a committed switch. Never retry the write automatically.
             error.textContent = 'The connection was interrupted. The change may have completed. Reload this page to check before trying again.';
-            busy = false; cancel.disabled = false; newButton.disabled = true; select.disabled = true;
+            busy = false; cancel.disabled = false; newButton.disabled = true; chooseButton.disabled = true; reloadRequired = true;
             status.textContent = 'Reload this page before changing playthroughs again.';
             confirm.textContent = 'Reload page'; confirm.type = 'button'; confirm.disabled = false;
             confirm.onclick = () => location.reload();
         }
     });
-    // A stalled session or server request must not leave the menu loading forever.
-    const loadController = new AbortController();
-    const loadTimeout = setTimeout(() => loadController.abort(), 10000);
-    fetch(panel.dataset.endpoint, {credentials: 'same-origin', cache: 'no-store', signal: loadController.signal})
-        .then(response => response.json()).then(result => {
-            if (!result.ok) throw new Error(result.message);
+    // Construct cells as text so saved names and party metadata cannot become HTML.
+    function renderSaves() {
+        rows.replaceChildren();
+        const kinds = {manual: 'Manual save', dragon_break: 'Automatic save', before_switch: 'Before switching', unclassified: 'Older save'};
+        for (const row of state.playthroughs) {
+            const tr = document.createElement('tr');
+            if (row.active) tr.classList.add('pth-active-row');
+            const cell = (label, text = '') => {
+                const td = document.createElement('td');
+                td.dataset.label = label; td.textContent = text; tr.append(td); return td;
+            };
+            const save = cell('Save');
+            const title = document.createElement('strong');
+            const useSaveId = isParty || (!['manual', 'default'].includes(row.kind) && row.name.toLowerCase() !== 'default');
+            title.textContent = useSaveId
+                ? `Save #${row.id}` : row.name;
+            save.append(title);
+            const kind = document.createElement('small');
+            kind.textContent = kinds[row.kind] || 'Saved copy'; save.append(kind);
+            const identity = cell(isParty ? 'Party' : 'Character');
+            if (isParty) {
+                const members = row.player_faction_members || [];
+                const summary = members.slice(0, 5).join(', ') + (members.length > 5 ? ` +${members.length - 5} more` : '');
+                if (members.length > 5) {
+                    const details = document.createElement('details');
+                    const heading = document.createElement('summary'); heading.textContent = summary;
+                    const full = document.createElement('p'); full.textContent = members.join(', ');
+                    details.append(heading, full); identity.append(details);
+                } else identity.textContent = summary || 'Party not recorded';
+            } else {
+                identity.textContent = row.player_name || 'Character not recorded';
+                if (row.player_level) {
+                    const level = document.createElement('small'); level.textContent = `Level ${row.player_level}`; identity.append(level);
+                }
+            }
+            cell('Game date', row.game_date || 'Not recorded');
+            cell('Created', row.created_at ? row.created_at.slice(0, 16) : 'Not recorded');
+            const bytes = Number(row.size_bytes);
+            let size = bytes, unit = 0;
+            while (size >= 1024 && unit < 3) { size /= 1024; unit++; }
+            cell('Size', Number.isFinite(bytes) && bytes >= 0 ? `${size.toFixed(unit ? 1 : 0)} ${['B', 'KB', 'MB', 'GB'][unit]}` : 'Not recorded');
+            const actionCell = cell('Action');
+            if (row.active) {
+                const active = document.createElement('span'); active.className = 'pth-active'; active.textContent = 'Active'; actionCell.append(active);
+            } else {
+                const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Switch';
+                button.dataset.saveId = String(row.id); button.setAttribute('aria-label', `Switch to ${row.label || row.name}`);
+                button.addEventListener('click', () => { picker.close(); open('switch', row); }); actionCell.append(button);
+            }
+            rows.append(tr);
+        }
+    }
+
+    // Bound reads and offer retry inside the picker; never retry a write automatically.
+    async function loadState() {
+        if (loading || busy || reloadRequired) return;
+        loading = true; newButton.disabled = true; retry.hidden = true; tableWrap.hidden = true;
+        pickerStatus.textContent = 'Loading saves…';
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        try {
+            const response = await fetch(panel.dataset.endpoint, {credentials: 'same-origin', cache: 'no-store', signal: controller.signal});
+            const result = await response.json();
+            if (!response.ok || !result.ok) throw new Error(result.message || 'Saves unavailable');
             state = result.state; csrf = result.csrf_token;
-            select.replaceChildren();
-            if (!state.active_id) select.add(new Option('Current progress (not yet saved)', '0'));
-            for (const row of state.playthroughs) {
-                const label = (row.label || row.name) + (row.active ? ' (active)' : '');
-                const option = new Option(label, String(row.id));
-                option.title = label;
-                select.add(option);
-            }
-            select.value = String(state.active_id);
-            select.disabled = !state.available || state.playthroughs.filter(row => !row.active).length === 0;
+            const active = state.playthroughs.find(row => row.active);
+            current.textContent = active ? (active.label || active.name) : 'Current progress (not yet saved)';
             newButton.disabled = !state.available;
-            status.textContent = !state.available ? 'Open Manage saves to set up Playthrough Saves.' : (result.notice || '');
-            if (state.available && !result.notice && state.playthroughs.length === 0) {
-                status.textContent = 'No saved playthroughs yet. Open Manage saves to save your current progress.';
-            }
-        }).catch(failure => {
-            select.replaceChildren(new Option('Saves unavailable', ''));
-            select.disabled = true; newButton.disabled = true;
-            status.textContent = failure.name === 'AbortError'
-                ? 'Loading saves took too long. Reload this page or open Manage saves.'
-                : 'Could not load Playthrough Saves. Reload this page or open Manage saves.';
-        }).finally(() => clearTimeout(loadTimeout));
+            status.textContent = result.notice || '';
+            renderSaves();
+            tableWrap.hidden = !state.available || state.playthroughs.length === 0;
+            pickerStatus.textContent = '';
+            if (!state.available) pickerStatus.textContent = 'Open Manage saves to set up Playthrough Saves.';
+            else if (state.playthroughs.length === 0) pickerStatus.textContent = 'No saved playthroughs yet. Open Manage saves to save your current progress.';
+        } catch (failure) {
+            state = null; rows.replaceChildren(); retry.hidden = false;
+            current.textContent = 'Saves unavailable';
+            pickerStatus.textContent = failure.name === 'AbortError' ? 'Loading saves took too long. Try again or open Manage saves.'
+                : 'Could not load Playthrough Saves. Try again or open Manage saves.';
+            status.textContent = 'Open Switch playthrough to try again, or open Manage saves.';
+        } finally { clearTimeout(timeout); loading = false; }
+    }
+    loadState();
+
 })();
