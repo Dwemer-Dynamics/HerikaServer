@@ -24,7 +24,9 @@ function pth_state($conn): array {
     $revision = ptr_read($conn, 'PLAYTHROUGH_HOME_REVISION', '0');
     $choices = [];
     foreach ($rows as $row) {
-        if ($row['is_active'] !== 't' && ($row['retention_kind'] !== 'manual' || $row['storage_type'] !== 'schema')) continue;
+        // Older default saves predate retention labels but must remain selectable.
+        $named = $row['retention_kind'] === 'manual' || strtolower($row['name']) === 'default';
+        if ($row['is_active'] !== 't' && (!$named || $row['storage_type'] !== 'schema')) continue;
         $choices[] = ['id'=>(int)$row['id'], 'name'=>$row['name'], 'active'=>$row['is_active']==='t'];
     }
     return ['available'=>true, 'active_id'=>$id,

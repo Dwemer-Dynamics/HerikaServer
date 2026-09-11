@@ -32,4 +32,5 @@ $pthEscape = static fn($value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
         </div>
     </form>
 </dialog>
-<script src="<?= $pthEscape($pthRoot) ?>/ui/js/playthrough_home.js?v=2" defer></script>
+<!-- These controls are ready here; do not wait for unrelated dashboard scripts. -->
+<script src="<?= $pthEscape($pthRoot) ?>/ui/js/playthrough_home.js?v=3"></script>

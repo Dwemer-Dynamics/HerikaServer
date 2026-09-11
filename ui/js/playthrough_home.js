@@ -59,7 +59,7 @@
                     return;
                 }
                 busy = false; cancel.disabled = false; newButton.disabled = true; select.disabled = true;
-            status.textContent = 'Reload this page before changing playthroughs again.';
+                status.textContent = 'Reload this page before changing playthroughs again.';
                 // Reload state before another attempt, including late stale-tab responses.
                 confirm.textContent = 'Reload page';
                 confirm.type = 'button'; confirm.disabled = false;
@@ -76,7 +76,10 @@
             confirm.onclick = () => location.reload();
         }
     });
-    fetch(panel.dataset.endpoint, {credentials: 'same-origin', cache: 'no-store'})
+    // A stalled session or server request must not leave the menu loading forever.
+    const loadController = new AbortController();
+    const loadTimeout = setTimeout(() => loadController.abort(), 10000);
+    fetch(panel.dataset.endpoint, {credentials: 'same-origin', cache: 'no-store', signal: loadController.signal})
         .then(response => response.json()).then(result => {
             if (!result.ok) throw new Error(result.message);
             state = result.state; csrf = result.csrf_token;
@@ -87,5 +90,11 @@
             select.disabled = !state.available || state.playthroughs.filter(row => !row.active).length === 0;
             newButton.disabled = !state.available;
             status.textContent = state.available ? (result.notice || '') : 'Open Manage saves to set up Playthrough Saves.';
-        }).catch(failure => { select.replaceChildren(new Option('Saves unavailable', '')); status.textContent = failure.message || 'Could not load saves. Reload this page.'; });
+        }).catch(failure => {
+            select.replaceChildren(new Option('Saves unavailable', ''));
+            select.disabled = true; newButton.disabled = true;
+            status.textContent = failure.name === 'AbortError'
+                ? 'Loading saves took too long. Reload this page or open Manage saves.'
+                : 'Could not load Playthrough Saves. Reload this page or open Manage saves.';
+        }).finally(() => clearTimeout(loadTimeout));
 })();
