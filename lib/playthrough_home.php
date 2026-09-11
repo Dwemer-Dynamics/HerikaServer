@@ -28,9 +28,8 @@ function pth_state($conn): array {
     $revision = ptr_read($conn, 'PLAYTHROUGH_HOME_REVISION', '0');
     $choices = [];
     foreach ($rows as $row) {
-        // Older default saves predate retention labels but must remain selectable.
-        $named = $row['retention_kind'] === 'manual' || strtolower($row['name']) === 'default';
-        if ($row['is_active'] !== 't' && (!$named || $row['storage_type'] !== 'schema')) continue;
+        // Automatic and legacy copies are valid choices too; retention kind is not a restore restriction.
+        if ($row['is_active'] !== 't' && $row['storage_type'] !== 'schema') continue;
         // Frozen save metadata only; missing legacy details must not borrow live player data.
         $manifest = json_decode($row['manifest'] ?? '', true);
         $identity = is_array($manifest) ? ($manifest['player_identity'] ?? null) : null;

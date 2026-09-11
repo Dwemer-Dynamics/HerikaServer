@@ -94,7 +94,10 @@
             select.value = String(state.active_id);
             select.disabled = !state.available || state.playthroughs.filter(row => !row.active).length === 0;
             newButton.disabled = !state.available;
-            status.textContent = state.available ? (result.notice || '') : 'Open Manage saves to set up Playthrough Saves.';
+            status.textContent = !state.available ? 'Open Manage saves to set up Playthrough Saves.' : (result.notice || '');
+            if (state.available && !result.notice && state.playthroughs.length === 0) {
+                status.textContent = 'No saved playthroughs yet. Open Manage saves to save your current progress.';
+            }
         }).catch(failure => {
             select.replaceChildren(new Option('Saves unavailable', ''));
             select.disabled = true; newButton.disabled = true;
