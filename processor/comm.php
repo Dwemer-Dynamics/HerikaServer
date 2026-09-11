@@ -234,6 +234,8 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
     require_once $GLOBALS["ENGINE_PATH"] . "/service/processors/snqe/lib/snqe.class.php";
     SNQEQuestManager::load_quests($gameRequest[2]);
 
+    pgr_complete();
+
     // Narrator Welcome Message on Load
     try {
         require_once($GLOBALS["ENGINE_PATH"] . "/lib/core/narrator.class.php");
@@ -1277,6 +1279,8 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
 
     $MUST_END = true;
+
+    pgr_complete();
 
 } elseif ($gameRequest[0] == "setconf") {
 

@@ -62,3 +62,10 @@
 - For policy changes, check capture and A-to-B-to-A restoration, an empty New playthrough, unchanged global and unmanaged data, mixed-row filtering, old-policy omissions, comment synchronisation run twice, and rollback on invalid input or dependencies.
 - For runtime/API changes, also check stale requests, concurrent switching, request blocking and worker readiness. Use existing checks or focused scratch probes rather than adding a large test harness.
 - Read the sibling servers independently before a shared change; their schemas and rollback details differ. Report source, disposable-database, local deployment and in-game evidence separately.
+
+### Required rollback recovery saves
+
+- `lib/playthrough_guard.php` inspects incoming game timestamps before bootstrap writes. A threshold-triggered rollback must commit its selected-table snapshot and manager entry before pruning.
+- The runtime journal in `log/playthrough_runtime/rollback.json` and its pending sentinel are outside playthrough data. A failed or interrupted operation blocks game requests, workers and cleanup until an eligible game request safely retries. Never delete recovery state to bypass a failure.
+- Recovery copies stay pinned while rollback is unfinished. Retries use the operation ID recorded in the same database transaction to reuse a committed snapshot. Snapshot failure leaves gameplay untouched; a later rollback failure may be partial, so retain the recovery copy and block further processing.
+- `X-Playthrough-Save` carries fixed versioned operation IDs/statuses to the plugin's existing HTTP path. Keep all three products' notification wording aligned, deduplicate repeated notices, and display them through the game HUD after loading. Preserve each product's existing day threshold and saved preferences.

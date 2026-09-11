@@ -155,27 +155,8 @@ function dragon_break_create_playthrough($name, $notes) {
  * Returns playthrough id (existing or newly created), or 0.
  */
 function dragon_break_playthrough_if_needed($prevGamets, $incomingGamets) {
-	$prev = intval($prevGamets);
-	$incoming = intval($incomingGamets);
-	if ($prev <= 0 || $incoming <= 0) {
-		return 0;
-	}
-	if ($incoming >= $prev) {
-		return 0;
-	}
-	if (!dragon_break_is_enabled()) {
-		return 0;
-	}
-
-	$daysRollback = gamets2days_between($incoming, $prev);
-	if ($daysRollback < dragon_break_min_days()) {
-		return 0;
-	}
-	$dateNew = convert_gamets2skyrim_long_date_no_time($incoming);
-	$dateOld = convert_gamets2skyrim_long_date_no_time($prev);
-	$name = "Automatic Playthrough Save (" . $dateOld . " -> " . $dateNew . ")";
-	$notes = "Automatic playthrough save due to rollback of {$daysRollback} in-game days ({$incoming} -> {$prev}).";
-	return dragon_break_create_playthrough($name, $notes);
+    require_once __DIR__ . '/playthrough_guard.php';
+    return pgr_before_rollback((int)$prevGamets, (int)$incomingGamets);
 }
 
 ?>

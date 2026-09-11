@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . "/lib/playthrough_guard.php";
+pgr_http_preflight("main");
 
 /* Definitions and main includes */
 error_reporting(E_ALL);
