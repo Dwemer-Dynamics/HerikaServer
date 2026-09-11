@@ -658,7 +658,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         </div>
 
         <div class="content-section">
-            <h2>💾 Playthrough Saves</h2>
+            <h2>💾 Playthrough Saves</h2><button type="button" class="ptx-import">Import save</button>
             <div class="help-text" style="margin-bottom: 12px;">
                 Restore a copy to continue from an earlier point. Your current progress replaces the contents of the active Playthrough Save first.
             </div>
@@ -700,7 +700,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
                                         <div style="font-size: 12px; color:#9fb1c9; margin-top: 4px; word-break: break-all;"><?php echo h($p['notes']); ?></div>
                                     <?php } ?>
                                 </div>
-                                <div class="backup-actions">
+                                <div class="backup-actions"><button type="button" class="ptx-download" data-profile-id="<?= (int)$p['id'] ?>">Download</button>
                                     <?php if (!$isActive) { ?>
                                     <form method="post" class="switch-form"
                                           data-confirm="restore"
@@ -744,7 +744,7 @@ $csrfField = '<input type="hidden" name="csrf_token" value="'.h($csrfToken).'">'
         </div>
     </div>
 
-    <?php include __DIR__ . '/tmpl/playthrough_save_controls.php'; ?>
+    <?php include __DIR__ . '/tmpl/playthrough_transfer_controls.php'; include __DIR__ . '/tmpl/playthrough_save_controls.php'; ?>
     <dialog id="ptm-dialog" class="ptm-dialog" role="alertdialog" aria-labelledby="ptm-dialog-title" aria-describedby="ptm-dialog-body">
         <h3 id="ptm-dialog-title"></h3>
         <div id="ptm-dialog-body"></div>

@@ -34,6 +34,14 @@
 
 - Home-picker deletion requires exact `Delete` text and fresh active/target tokens. `pth_delete()` shares the retention lock, rejects active/default/pinned/shared-schema saves, and deletes tables plus schema with RESTRICT in one transaction. Never replace this with a cascading schema drop or an automatic write retry. Deletion does not switch live gameplay or restart workers.
 
+### Download and import
+
+- `lib/playthrough_transfer.php` and `ui/api/playthrough_transfer.php` own `.playthrough.zip` transfers. Home and manager share `ui/tmpl/playthrough_transfer_controls.php` and its script/styles.
+- Export active progress freshly; export inactive saves from their frozen schema. Normalize older archives through the selected-table policy before packaging. Preserve identity and owned or unowned sequence state. Never include global tables or global rows from mixed settings.
+- Import only structured, checksummed table data. Never execute uploaded SQL, defaults, triggers or paths. SQL identifiers/types come from the current policy/catalog or reviewed legacy conversions; ZIP entries are streamed without extraction.
+- Import creates a new inactive save, with explicit mapping to existing global profiles when fingerprints do not match. Preserve global profiles and live progress. Reuse private upgrade/validation, runtime drain, retention locking and transaction boundaries; validation temporarily exercises restore in a rolled-back subtransaction.
+- Transfers use session-owned temporary jobs, CSRF-protected writes, streamed downloads and idempotent import results. Limit expanded transfers to 20 GB and individual rows to 32 MB. Temporary files expire after 24 hours and are swept when another transfer starts.
+
 ### Older saves and policy changes
 
 - Read [lib/playthrough_schema.php](lib/playthrough_schema.php), [lib/playthrough_upgrade.sql](lib/playthrough_upgrade.sql) and [lib/playthrough_migrations.php](lib/playthrough_migrations.php) together. Upgrade a private stage to the current schema before activation.

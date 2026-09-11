@@ -22,6 +22,7 @@ $pthEscape = static fn($value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
         <h2 id="pth-picker-title">Choose a Playthrough Save</h2>
         <button type="button" id="pth-picker-close" autofocus>Close</button>
     </div>
+    <button type="button" class="ptx-import">Import save</button>
     <p id="pth-picker-help">Compare saved copies below. Your current progress is saved before switching.</p>
     <p id="pth-picker-status" role="status" aria-live="polite">Loading saves…</p>
     <button type="button" id="pth-retry" hidden>Try again</button>
@@ -54,4 +55,6 @@ $pthEscape = static fn($value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
     </form>
 </dialog>
 <!-- These controls are ready here; do not wait for unrelated dashboard scripts. -->
-<script src="<?= $pthEscape($pthRoot) ?>/ui/js/playthrough_home.js?v=8"></script>
+<script src="<?= $pthEscape($pthRoot) ?>/ui/js/playthrough_home.js?v=9"></script>
+
+<?php include __DIR__ . '/playthrough_transfer_controls.php'; ?>

@@ -162,6 +162,9 @@
                     remove.addEventListener('click', () => { picker.close(); open('delete',row); }); actionCell.append(remove);
                 }
             }
+            const download=document.createElement('button');download.type='button';download.className='ptx-download';
+            download.dataset.profileId=String(row.id);download.textContent='Download';
+            download.setAttribute('aria-label',`Download Save #${row.id} — ${row.label || row.name}`);actionCell.append(download);
             rows.append(tr);
         }
     }
