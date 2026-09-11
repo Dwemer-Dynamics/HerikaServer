@@ -21,7 +21,7 @@
         nameInput.required = action === 'new';
         document.getElementById('pth-title').textContent = action === 'new' ? 'Start a new playthrough?' : `Switch to ${profile.name}?`;
         document.getElementById('pth-description').textContent = action === 'new'
-            ? 'Your current progress will be saved. The new playthrough starts with empty game history and memories, keeping your current settings and NPC setup.'
+            ? 'Your current progress will be saved. The new playthrough starts with no NPCs, memories or game progress. Global settings and libraries stay the same.'
             : 'Your current progress will be saved before this playthrough loads.';
         document.getElementById('pth-game-help').textContent = action === 'new'
             ? 'Close the game first. After creating this playthrough, start your new game.'

@@ -1,3 +1,24 @@
+-- Settings tables mix reusable configuration and gameplay state. Unknown conf_opts
+-- keys remain gameplay state; unknown general_settings keys remain configuration.
+CREATE OR REPLACE FUNCTION chim_meta.is_global_setting(table_name text, setting_id text)
+RETURNS boolean AS $$
+BEGIN
+    IF setting_id ~ '^(PLAYER_NAME|PLAYER_BIO|PLAYER_CATS|CurrentParty|PLAYER_SQUADS)$'
+        OR setting_id ~ '^(DIARY_LAST_|AUTO_DIARY_LAST_|NARRATOR_AUTO_DIARY_LAST_|DYNAMIC_PROFILE_LAST_|DYNAMIC_PROFILE_LOAD_GRACE_|MEMORY_LAST_)' THEN
+        RETURN false;
+    END IF;
+    IF table_name='general_settings' THEN RETURN true; END IF;
+    IF table_name<>'conf_opts' THEN RETURN false; END IF;
+    RETURN setting_id = ANY(ARRAY[
+        'CONTEXT_HISTORY','CONTEXT_HISTORY_DIARY','CONTEXT_HISTORY_DYNAMIC_PROFILE','MAX_WORDS_LIMIT',
+        'RECHAT_H','RECHAT_P','RECHAT_ALLOW_ACTIONS','BORED_EVENT','RPG_COMMENTS_CHANCE',
+        'COMBAT_BARK_COOLDOWN','QUEST_COMMENT','PLAYER2_FORCE_ALL_LLM','PLAYER2_HEALTH_URL',
+        'core_action_legacy_user_pref_imported','dialectic_mode','dialectic_profile_model','plugin_dll_version'
+    ]) OR setting_id ~ '^(cartesia_voice_|inworld_voice_|tts_sync_|Voicetype/|Network/)'
+       OR EXISTS(SELECT 1 FROM public.general_settings g WHERE g.id=setting_id);
+END;
+$$ LANGUAGE plpgsql STABLE;
+
 -- Validate the historical manifest against its own complete table set, then
 -- let the current policy choose what to restore. Reject future/damaged formats.
 CREATE OR REPLACE FUNCTION chim_meta.validate_save_manifest(source_schema text, actual_tables text[])
@@ -12,7 +33,7 @@ BEGIN
         RAISE EXCEPTION 'Snapshot manifest does not match the saved tables';
     END IF;
     IF manifest->>'format'='chim_selected_tables_v2' AND
-        (manifest->>'table_policy_version' IS DISTINCT FROM '1' OR coalesce((manifest->>'upgrade_version')::int,2)>2) THEN
+        (coalesce(manifest->>'table_policy_version','') NOT IN ('1','2') OR coalesce((manifest->>'upgrade_version')::int,2)>2) THEN
         RAISE EXCEPTION 'Snapshot format is newer than this server';
     END IF;
 END;
@@ -25,6 +46,7 @@ DECLARE
     names text[];
     lock_list text;
     versions jsonb := '{}';
+    table_name text;
 BEGIN
     IF dest_schema !~ '^chim_profile_[a-z0-9_]+$' THEN
         RAISE EXCEPTION 'Invalid playthrough schema';
@@ -46,11 +68,17 @@ BEGIN
         JOIN pg_class s ON s.oid=d.refobjid JOIN pg_namespace sn ON sn.oid=s.relnamespace
         WHERE s.relkind='S' AND tn.nspname=dest_schema AND sn.nspname<>dest_schema
     ) THEN RAISE EXCEPTION 'Snapshot sequence defaults still reference another schema'; END IF;
-    IF 'database_versioning'=ANY(names) THEN
-        EXECUTE format('SELECT coalesce(jsonb_object_agg(tablename,version),''{}''::jsonb) FROM %I.database_versioning',dest_schema) INTO versions;
+    -- Migration versions are metadata, never a restorable configuration table.
+    IF to_regclass('public.database_versioning') IS NOT NULL THEN
+        SELECT coalesce(jsonb_object_agg(tablename,version),'{}'::jsonb) INTO versions FROM public.database_versioning;
     END IF;
+    FOREACH table_name IN ARRAY ARRAY['conf_opts','general_settings'] LOOP
+        IF table_name=ANY(names) THEN
+            EXECUTE format('DELETE FROM %I.%I WHERE chim_meta.is_global_setting($1,id)',dest_schema,table_name) USING table_name;
+        END IF;
+    END LOOP;
     EXECUTE format('COMMENT ON SCHEMA %I IS %L', dest_schema,
-        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',1,
+        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',2,
             'tables',names,'migrations',versions,'upgrade_version',2)::text);
 END;
 $$ LANGUAGE plpgsql SET lock_timeout = '10s';
@@ -63,6 +91,7 @@ DECLARE
     source_names text[];
     lock_list text;
     columns_sql text;
+    row_filter text;
     saved_constraints jsonb;
     saved_triggers jsonb;
     item record;
@@ -135,10 +164,22 @@ BEGIN
           AND dst.attname=src.attname AND dst.attnum>0 AND NOT dst.attisdropped AND dst.attgenerated=''
         WHERE src.attrelid=format('%I.%I', source_schema, lock_list)::regclass
           AND src.attnum>0 AND NOT src.attisdropped;
-        EXECUTE format('DELETE FROM public.%I', lock_list);
-        EXECUTE format('INSERT INTO public.%I (%s) OVERRIDING SYSTEM VALUE SELECT %s FROM %I.%I',
-            lock_list, columns_sql, columns_sql, source_schema, lock_list);
+        -- Old archives can contain configuration rows. Filter both sides so a
+        -- restore cannot overwrite, remove or resurrect any global setting.
+        row_filter := CASE WHEN lock_list IN ('conf_opts','general_settings')
+            THEN format(' WHERE NOT chim_meta.is_global_setting(%L,id)',lock_list) ELSE '' END;
+        EXECUTE format('DELETE FROM public.%I%s', lock_list,row_filter);
+        EXECUTE format('INSERT INTO public.%I (%s) OVERRIDING SYSTEM VALUE SELECT %s FROM %I.%I%s',
+            lock_list, columns_sql, columns_sql, source_schema, lock_list,row_filter);
     END LOOP;
+    -- Some installations have no FK on NPC profile assignments. A historical
+    -- save must not activate dangling references after a shared profile is deleted.
+    IF 'core_npc_master'=ANY(names) AND to_regclass('public.core_profiles') IS NOT NULL THEN
+        IF EXISTS(SELECT 1 FROM public.core_npc_master n WHERE n.profile_id>0
+            AND NOT EXISTS(SELECT 1 FROM public.core_profiles p WHERE p.id=n.profile_id)) THEN
+            RAISE EXCEPTION 'Saved NPC profile is unavailable in the global profiles; restore cancelled';
+        END IF;
+    END IF;
     -- Revalidate all formerly valid FKs, including excluded tables referencing restored IDs.
     FOR entry IN SELECT value FROM jsonb_array_elements(saved_constraints) LOOP
         EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s',
