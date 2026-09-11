@@ -990,9 +990,6 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/navbar.php");
         <h1>CHIM Home</h1>
 
         <div class="dashboard-buttons">
-            <button onclick="window.location.href='<?php echo htmlspecialchars($webRoot . '/ui/control_panel.php?tab=storage', ENT_QUOTES, 'UTF-8'); ?>'" class="dashboard-btn">
-                <span class="btn-icon" aria-hidden="true">🧩</span><span>Playthrough Management</span>
-            </button>
             <button onclick="window.open('https://dwemerdynamics.com/chim/index.html', '_blank')" class="dashboard-btn">
                 <span class="btn-icon" aria-hidden="true">📚</span><span>CHIM Wiki</span>
             </button>
@@ -1000,6 +997,8 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/navbar.php");
                 <span class="btn-icon" aria-hidden="true">🥇</span><span>AI/LLM Tier List</span>
             </button>
         </div>
+
+        <?php require __DIR__ . '/tmpl/playthrough_home_controls.php'; ?>
 
         <?php if ($hasEventLogData): ?>
         <div class="dashboard-container">

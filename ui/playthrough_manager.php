@@ -243,11 +243,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $runtimeSwitch = null;
         $operationLocked = false;
         try {
-        if (($_POST['action'] ?? '') === 'switch') $runtimeSwitch = ptr_runtime_begin_switch(30.0, $adminConn);
-        if (!ptr_lock($adminConn)) throw new RuntimeException('Another playthrough operation or cleanup is running. Try again shortly.');
-        $operationLocked = true;
+        if (($_POST['action'] ?? '') !== 'switch') {
+            if (!ptr_lock($adminConn)) throw new RuntimeException('Another playthrough operation or cleanup is running. Try again shortly.');
+            $operationLocked = true;
+        }
         // Initialization/migrations run only after a CSRF-validated POST.
-        ptm_run_setup_migrations($adminConn);
+        if (($_POST['action'] ?? '') !== 'switch') ptm_run_setup_migrations($adminConn);
         $action = $_POST['action'] ?? '';
 
     if ($action === 'setup') {
@@ -307,169 +308,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'switch') {
-        $profileId = intval($_POST['profile_id'] ?? 0);
-        if ($profileId <= 0) {
-            $message .= '<p><strong>Error:</strong> Invalid playthrough selected.</p>';
-        } else {
-            // Fetch target profile info
-            $targetRes = pg_query_params($adminConn, 'SELECT name, storage_type, schema_name, is_active FROM chim_meta.playthrough_profiles WHERE id=$1', [$profileId]);
-            $targetRow = $targetRes ? pg_fetch_assoc($targetRes) : null;
-            if (!$targetRow) {
-                $message .= '<p><strong>Error:</strong> Playthrough not found.</p>';
-                goto SWITCH_ABORT;
-            }
-            if (ptm_is_active($targetRow['is_active'] ?? null)) {
-                $message .= '<p><strong>Error:</strong> This playthrough is already active. Nothing to restore.</p>';
-                goto SWITCH_ABORT;
-            }
-
-            $targetName = $targetRow['name'];
-            $targetStorageType = $targetRow['storage_type'] ?? 'dump';
-            $targetSchemaName = $targetRow['schema_name'] ?? '';
-            // Raw SQL dumps can overwrite excluded tables; only schema snapshots use the safe restore path.
-            if ($targetStorageType !== 'schema') {
-                $message .= '<p><strong>Error:</strong> Legacy SQL backups cannot be restored here while preserving shared tables. Restore was cancelled.</p>';
-                goto SWITCH_ABORT;
-            }
-
-            // Validate the target before updating the active saved copy. Both changes
-            // remain in this transaction, so any failed activation preserves both saves.
-            ptr_query($adminConn, 'BEGIN');
-            $preparedSchema = pts_prepare_playthrough($adminConn, $targetSchemaName);
-
-            // 1) Auto-save current active profile BEFORE switching
-            $curRes = pg_query($adminConn, "SELECT id, name, storage_type, schema_name FROM chim_meta.playthrough_profiles WHERE is_active = true LIMIT 1");
-            $curRow = $curRes ? pg_fetch_assoc($curRes) : null;
-            if (!$curRow) {
-                $message .= '<p><strong>Error:</strong> No active playthrough is recorded. Restore was cancelled to preserve your current playthrough.</p>';
-                goto SWITCH_ABORT;
-            }
-            if ($curRow) {
-                $curProfileId = intval($curRow['id']);
-                $curStorageType = $curRow['storage_type'] ?? 'dump';
-                $curSchemaName = $curRow['schema_name'] ?? '';
-
-                // Gather live metadata
-                $meta = ptm_collect_live_metadata($adminConn, $schema);
-
-                if ($curStorageType === 'schema' && !empty($curSchemaName)) {
-                    // Schema-based: clone public back to profile schema
-                    $cloneResult = pts_transfer_playthrough($adminConn, $curSchemaName);
-                    if (!$cloneResult['success']) {
-                        $message .= '<p><strong>Error:</strong> Failed to save the current playthrough. Aborting restore.</p>';
-                        $message .= '<pre>'.h($cloneResult['error']).'</pre>';
-                        goto SWITCH_ABORT;
-                    }
-                    // Update metadata
-                    $size = pts_get_schema_size($adminConn, $curSchemaName);
-                    @pg_query_params(
-                        $adminConn,
-                        'UPDATE chim_meta.playthrough_profiles SET size_bytes=$2, player_name=$3, game=$4, eventlog_count=$5, oghma_count=$6, last_gamets=$7 WHERE id=$1',
-                        [(string)$curProfileId, (string)$size, $meta['player_name'], $meta['game'], (string)$meta['eventlog_count'], (string)$meta['oghma_count'], (string)$meta['last_gamets']]
-                    );
-                } else {
-                    // Refresh a legacy active profile as a selected-table schema snapshot.
-                    $curSchemaName = pts_sanitize_profile_name($curRow['name']) . '_' . substr(uniqid(), -6);
-                    $cloneResult = pts_transfer_playthrough($adminConn, $curSchemaName);
-                    if (!$cloneResult['success']) {
-                        $message .= '<p><strong>Error:</strong> Failed to save the current playthrough. Aborting restore.</p>';
-                        goto SWITCH_ABORT;
-                    }
-                    $updated = pg_query_params($adminConn,
-                        "UPDATE chim_meta.playthrough_profiles SET storage_type='schema', schema_name=$2, size_bytes=$3 WHERE id=$1",
-                        [$curProfileId, $curSchemaName, pts_get_schema_size($adminConn, $curSchemaName)]);
-                    if (!$updated) {
-                        pts_drop_schema($adminConn, $curSchemaName);
-                        goto SWITCH_ABORT;
-                    }
-                }
-            }
-
-            // 2) Load target profile
-            if ($targetStorageType === 'schema' && !empty($targetSchemaName)) {
-                // Schema-based: fast switch
-                if (!pts_schema_exists($adminConn, $targetSchemaName)) {
-                    $message .= '<p><strong>Error:</strong> Playthrough schema does not exist.</p>';
-                    goto SWITCH_ABORT;
-                }
-
-                // Keep the live public schema intact if recreating or cloning the playthrough fails.
-                // Replace selected rows while preserving shared and extension tables.
-                $cloneResult = pts_activate_playthrough($adminConn, $preparedSchema);
-                if (!$cloneResult['success']) {
-                    @pg_query($adminConn, 'ROLLBACK');
-                    $message .= '<p><strong>Error:</strong> Failed to restore playthrough.</p>';
-                    $message .= '<pre>'.h($cloneResult['error']).'</pre>';
-                    goto SWITCH_ABORT;
-                }
-
-                // Mark active
-                $clearActive = @pg_query($adminConn, 'UPDATE chim_meta.playthrough_profiles SET is_active = false');
-                $resU = $clearActive
-                    ? @pg_query_params($adminConn, 'UPDATE chim_meta.playthrough_profiles SET is_active = true WHERE id=$1', [$profileId])
-                    : false;
-                if ($resU && @pg_query($adminConn, 'COMMIT')) {
-                    $message .= '<p><strong>✅ Restored playthrough:</strong> '.h($targetName).'</p>';
-                    $runtimeReady = ptr_runtime_finish_switch($runtimeSwitch);
-                    $message .= $runtimeReady
-                        ? '<p>Background processing refreshed. Start Skyrim and load the matching game save.</p>'
-                        : '<p><strong>Warning:</strong> The save loaded, but background processing could not be confirmed. Restart the CHIM server before loading the matching Skyrim save.</p>';
-                } else {
-                    @pg_query($adminConn, 'ROLLBACK');
-                    $message .= '<p><strong>Error:</strong> Restore failed. The current active playthrough was preserved.</p>';
-                }
-            } else {
-                // Legacy dump-based: slow restore
-                $tmpFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . ('playthrough_restore_'.time().'_'.mt_rand(1000,9999).'.sql');
-                $ff = ptm_fetch_playthrough_to_file($adminConn, $profileId, $tmpFile);
-                if (!$ff['success']) {
-                    $message .= '<p><strong>Error:</strong> Failed to materialize playthrough.</p><pre>'.h($ff['error']).'</pre>';
-                    goto SWITCH_ABORT;
-                }
-
-                // Drop and recreate public schema
-                $Q = ["DROP SCHEMA IF EXISTS {$schema} CASCADE", "DROP EXTENSION IF EXISTS vector CASCADE", "DROP EXTENSION IF EXISTS pg_trgm CASCADE", "CREATE SCHEMA {$schema}", "CREATE EXTENSION IF NOT EXISTS vector", "CREATE EXTENSION IF NOT EXISTS pg_trgm"];
-                $errorOccurred = false;
-                foreach ($Q as $QS) {
-                    if (!pg_query($adminConn, $QS)) {
-                        $message .= '<p>Error: '.h(pg_last_error($adminConn)).'</p>';
-                        $errorOccurred = true;
-                        break;
-                    }
-                }
-
-                if (!$errorOccurred) {
-                    $psqlCommand = "PGPASSWORD=".escapeshellarg($password)." psql -h ".escapeshellarg($host)." -p ".escapeshellarg($port)." -U ".escapeshellarg($username)." -d ".escapeshellarg($dbname)." -f ".escapeshellarg($tmpFile);
-                    $output = []; $returnVar = 0;
-                    exec($psqlCommand, $output, $returnVar);
-                    if ($returnVar !== 0) {
-                        $message .= '<p><strong>Error:</strong> Failed to restore playthrough.</p><pre>'.h(implode("\n", $output)).'</pre>';
-                    } else {
-                        pg_query($adminConn, 'BEGIN');
-                        pg_query($adminConn, 'UPDATE chim_meta.playthrough_profiles SET is_active = false');
-                        $resU = pg_query_params($adminConn, 'UPDATE chim_meta.playthrough_profiles SET is_active = true WHERE id=$1', [$profileId]);
-                        if ($resU) {
-                            pg_query($adminConn, 'COMMIT');
-                            $message .= '<p><strong>✅ Restored playthrough:</strong> '.h($targetName).'</p>';
-                            $message .= '<div style="background:#4a1e0d; border:2px solid #dc2626; border-radius:8px; padding:15px; margin-top:15px;">';
-                            $message .= '<p style="color:#fbbf24; font-weight:bold; margin:0 0 10px 0;">⚠️ RESTART REQUIRED</p>';
-                            $message .= '<p style="margin:0 0 8px 0;">You must restart the CHIM server for the restore to take effect:</p>';
-                            $message .= '<ol style="margin:5px 0; padding-left:20px;">';
-                            $message .= '<li>Restart Apache/Nginx (or restart Docker container)</li>';
-                            $message .= '<li>Any background services connected to the database</li>';
-                            $message .= '<li>The Skyrim mod will automatically reconnect</li>';
-                            $message .= '</ol>';
-                            $message .= '</div>';
-                        } else {
-                            pg_query($adminConn, 'ROLLBACK');
-                            $message .= '<p><strong>Warning:</strong> Database restored but failed to mark profile active.</p>';
-                        }
-                    }
-                }
-                @unlink($tmpFile);
-            }
-        }
-        SWITCH_ABORT:;
+        require_once __DIR__ . '/../lib/playthrough_home.php';
+        $result = pth_change($adminConn, 'switch', $_POST);
+        $message .= '<p>' . h($result['message']) . '</p>';
     }
 
     if ($action === 'delete') {

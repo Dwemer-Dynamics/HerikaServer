@@ -1,0 +1,26 @@
+.pth-home { margin: 0 0 22px; padding: 14px 16px; border: 1px solid #555; border-radius: 10px; background: #242424; color: #eee; }
+.pth-home .pth-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.pth-home label { margin: 0; font-weight: 600; }
+.pth-home select { flex: 1 1 220px; min-width: 0; max-width: 480px; }
+.pth-home select, .pth-home button, .pth-dialog button, .pth-dialog input { min-height: 44px; padding: 9px 12px; border: 1px solid #777; border-radius: 6px; background: #303030; color: #fff; font: inherit; }
+.pth-home button, .pth-dialog button { cursor: pointer; }
+.pth-home button:disabled, .pth-home select:disabled, .pth-dialog button:disabled { opacity: .6; cursor: wait; }
+.pth-home a { color: #f7cf88; text-underline-offset: 3px; }
+.pth-home :focus-visible, .pth-dialog :focus-visible { outline: 3px solid #f7cf88; outline-offset: 3px; }
+.pth-home #pth-help { color: #c5c5c5; font-size: .9rem; margin: 9px 0 0; }
+.pth-home #pth-status { margin: 8px 0 0; overflow-wrap: anywhere; }
+.pth-home #pth-status:empty, .pth-dialog #pth-error:empty { display: none; }
+.pth-dialog { box-sizing: border-box; width: min(520px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 24px; border: 1px solid #888; border-radius: 12px; background: #242424; color: #eee; overflow-y: auto; overflow-wrap: anywhere; }
+.pth-dialog::backdrop { background: #000a; }
+.pth-dialog h2 { margin: 0 0 16px; font-size: 1.35rem; color: #fff; }
+.pth-dialog p { line-height: 1.5; }
+.pth-dialog label { display: block; margin-bottom: 8px; }
+.pth-dialog input { box-sizing: border-box; width: 100%; }
+.pth-dialog #pth-error { color: #ffb8aa; }
+.pth-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.pth-dialog #pth-confirm { background: #f7cf88; color: #242424; border-color: #f7cf88; }
+@media (max-width: 600px) {
+    .pth-home .pth-row { gap: 10px; }
+    .pth-home label, .pth-home select { flex-basis: 100%; max-width: none; width: 100%; }
+    .pth-dialog { padding: 18px; }
+}
