@@ -39,6 +39,25 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Identity is read from the captured schema, never from a different live playthrough.
+CREATE OR REPLACE FUNCTION chim_meta.playthrough_identity(source_schema text)
+RETURNS jsonb AS $$
+DECLARE player_name text; raw text; stats jsonb; level_text text; player_level integer;
+BEGIN
+    IF to_regclass(format('%I.core_player',source_schema)) IS NOT NULL THEN
+        EXECUTE format('SELECT value FROM %I.core_player WHERE id=$1',source_schema) INTO player_name USING 'player_name';
+        EXECUTE format('SELECT value FROM %I.core_player WHERE id=$1',source_schema) INTO raw USING 'stats';
+        BEGIN stats := raw::jsonb; EXCEPTION WHEN invalid_text_representation THEN stats := NULL; END;
+        level_text := stats->>'level';
+        IF level_text ~ '^[0-9]{1,9}$' AND level_text::integer > 0 THEN player_level := level_text::integer; END IF;
+    END IF;
+    IF nullif(btrim(player_name),'') IS NULL AND to_regclass(format('%I.general_settings',source_schema)) IS NOT NULL THEN
+        EXECUTE format('SELECT value FROM %I.general_settings WHERE id=$1',source_schema) INTO player_name USING 'PLAYER_NAME';
+    END IF;
+    RETURN jsonb_build_object('version',1,'player_name',coalesce(btrim(player_name),''),'player_level',player_level);
+END;
+$$ LANGUAGE plpgsql STABLE;
+
 -- Snapshot and restore one explicit table policy without replacing shared tables.
 CREATE OR REPLACE FUNCTION chim_meta.capture_playthrough(dest_schema text, selected_tables text[])
 RETURNS void AS $$
@@ -79,7 +98,8 @@ BEGIN
     END LOOP;
     EXECUTE format('COMMENT ON SCHEMA %I IS %L', dest_schema,
         jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',3,
-            'tables',names,'migrations',versions,'upgrade_version',2)::text);
+            'tables',names,'migrations',versions,'upgrade_version',2,
+            'player_identity',chim_meta.playthrough_identity(dest_schema))::text);
 END;
 $$ LANGUAGE plpgsql SET lock_timeout = '10s';
 

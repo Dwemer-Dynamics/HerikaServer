@@ -23,6 +23,8 @@
 
 ### New, switch and restore
 
+- Save identity is frozen in the schema manifest under `player_identity` by `playthrough_identity()` in `lib/playthrough_selection.sql`. CHIM/DIALECTIC store character name and level; STOBE stores player squad member names. Dropdowns read saved metadata, never current gameplay to label another save. Legacy saves fall back to existing metadata without inventing a level.
+
 - [lib/playthrough_home.php](lib/playthrough_home.php) provides the shared `pth_change()` operation for home controls and the manager. Keep its runtime barrier, advisory lock, stale-state token and transaction boundaries intact.
 - Switching prepares and validates the target privately, saves current progress, then activates the target and active-save metadata in one transaction. Failures before commit roll back.
 - [lib/playthrough_fresh.php](lib/playthrough_fresh.php) empties selected data in a private stage for New playthrough. It starts with no encountered NPCs, memories or gameplay progress, while activation preserves global tables and global rows of mixed tables.

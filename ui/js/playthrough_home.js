@@ -19,7 +19,7 @@
         error.textContent = ''; nameInput.value = '';
         document.getElementById('pth-name-field').hidden = action !== 'new';
         nameInput.required = action === 'new';
-        document.getElementById('pth-title').textContent = action === 'new' ? 'Start a new playthrough?' : `Switch to ${profile.name}?`;
+        document.getElementById('pth-title').textContent = action === 'new' ? 'Start a new playthrough?' : `Switch to ${profile.label || profile.name}?`;
         document.getElementById('pth-description').textContent = action === 'new'
             ? 'Your current progress will be saved. The new playthrough starts with no NPCs, memories or game progress. Global settings and libraries stay the same.'
             : 'Your current progress will be saved before this playthrough loads.';
@@ -85,7 +85,12 @@
             state = result.state; csrf = result.csrf_token;
             select.replaceChildren();
             if (!state.active_id) select.add(new Option('Current progress (not yet saved)', '0'));
-            for (const row of state.playthroughs) select.add(new Option(row.name + (row.active ? ' (active)' : ''), String(row.id)));
+            for (const row of state.playthroughs) {
+                const label = (row.label || row.name) + (row.active ? ' (active)' : '');
+                const option = new Option(label, String(row.id));
+                option.title = label;
+                select.add(option);
+            }
             select.value = String(state.active_id);
             select.disabled = !state.available || state.playthroughs.filter(row => !row.active).length === 0;
             newButton.disabled = !state.available;

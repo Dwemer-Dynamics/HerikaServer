@@ -17,7 +17,11 @@ function pth_state($conn): array {
     $ready = pg_fetch_result(pth_query($conn, 'SELECT to_regclass($1) IS NOT NULL AND to_regclass($2) IS NOT NULL',
         [$meta . '.playthrough_profiles', $meta . '.settings']), 0, 0) === 't';
     if (!$ready) return ['available'=>false, 'active_id'=>0, 'token'=>'', 'playthroughs'=>[]];
-    $rows = pg_fetch_all(pth_query($conn, "SELECT id,name,schema_name,is_active,storage_type,retention_kind FROM {$meta}.playthrough_profiles ORDER BY lower(name),id")) ?: [];
+    $rows = pg_fetch_all(pth_query($conn, "SELECT p.id,p.name,p.schema_name,p.is_active,p.storage_type,p.retention_kind,p.player_name,
+        to_jsonb(p)->>'player_faction_members' AS player_faction_members,
+        obj_description(n.oid,'pg_namespace') AS manifest
+        FROM {$meta}.playthrough_profiles p LEFT JOIN pg_namespace n ON n.nspname=p.schema_name AND p.storage_type='schema'
+        ORDER BY lower(p.name),p.id")) ?: [];
     $active = array_values(array_filter($rows, fn($row) => $row['is_active'] === 't'));
     if (count($active) > 1) throw new RuntimeException('More than one active playthrough is recorded. Open Manage saves before switching.');
     $id = (int)($active[0]['id'] ?? 0);
@@ -27,7 +31,22 @@ function pth_state($conn): array {
         // Older default saves predate retention labels but must remain selectable.
         $named = $row['retention_kind'] === 'manual' || strtolower($row['name']) === 'default';
         if ($row['is_active'] !== 't' && (!$named || $row['storage_type'] !== 'schema')) continue;
-        $choices[] = ['id'=>(int)$row['id'], 'name'=>$row['name'], 'active'=>$row['is_active']==='t'];
+        // Frozen save metadata only; missing legacy details must not borrow live player data.
+        $manifest = json_decode($row['manifest'] ?? '', true);
+        $identity = is_array($manifest) ? ($manifest['player_identity'] ?? null) : null;
+        $hasIdentity = is_array($identity) && ($identity['version'] ?? null) === 1;
+        $identity = $hasIdentity ? $identity : [];
+        $player = $hasIdentity ? ($identity['player_name'] ?? '') : ($row['player_name'] ?? '');
+        $player = is_string($player) ? trim($player) : '';
+        $level = $identity['player_level'] ?? null;
+        $level = is_int($level) && $level > 0 ? $level : null;
+        $members = $hasIdentity ? ($identity['player_faction_members'] ?? []) : json_decode($row['player_faction_members'] ?? '[]', true);
+        $members = is_array($members) ? array_values(array_filter($members, fn($name) => is_string($name) && trim($name) !== '')) : [];
+        $detail = $meta === 'stobe_meta' ? implode(', ', $members) : $player;
+        if ($meta !== 'stobe_meta' && $detail !== '' && $level !== null) $detail .= ' · Level ' . $level;
+        $label = $row['name'] . ($detail !== '' ? ' — ' . $detail : '');
+        $choices[] = ['id'=>(int)$row['id'], 'name'=>$row['name'], 'active'=>$row['is_active']==='t',
+            'label'=>$label, 'player_name'=>$player, 'player_level'=>$level, 'player_faction_members'=>$members];
     }
     return ['available'=>true, 'active_id'=>$id,
         'token'=>hash('sha256', json_encode([$id, $active[0]['schema_name'] ?? '', $revision])), 'playthroughs'=>$choices];
