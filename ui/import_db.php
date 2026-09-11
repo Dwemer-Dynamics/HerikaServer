@@ -1,4 +1,6 @@
 <?php
+require_once dirname(__DIR__) . '/lib/storage_manager_route.php';
+dwemerStorageRedirect('chim', 'shared');
 session_start();
 
 // Get the relative web path from document root to our application

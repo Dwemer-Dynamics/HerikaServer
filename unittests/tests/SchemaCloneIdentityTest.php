@@ -24,14 +24,15 @@ final class SchemaCloneIdentityTest extends TestCase
         $this->assertFalse(pts_clone_function_is_current($identityOnlyDefinition));
     }
 
-    public function testIdentityAwareCloneFunctionIsCurrent(): void
+    public function testSelectiveCloneFunctionIsRequired(): void
     {
         $currentDefinition = <<<'SQL'
 INSERT INTO destination OVERRIDING SYSTEM VALUE SELECT * FROM source;
 PERFORM chim_meta.sync_schema_sequences(dest_schema);
 SQL;
 
-        $this->assertTrue(pts_clone_function_is_current($currentDefinition));
+        $this->assertFalse(pts_clone_function_is_current($currentDefinition));
+        $this->assertTrue(pts_clone_function_is_current('PERFORM chim_meta.clone_selected_schema(source_schema, dest_schema, NULL);'));
     }
 
     public function testViewCloningFunctionNeedsRefresh(): void
@@ -55,7 +56,7 @@ SQL;
         $this->assertIsString($sql);
         $this->assertStringNotContainsString('CREATE OR REPLACE VIEW', $sql);
         $this->assertStringContainsString(
-            'INSERT INTO %I.%I OVERRIDING SYSTEM VALUE SELECT * FROM %I.%I ON CONFLICT DO NOTHING',
+            'INSERT INTO %I.%I (%s) OVERRIDING SYSTEM VALUE SELECT %s FROM %I.%I',
             $sql
         );
         $this->assertStringContainsString('sync_schema_sequences', $sql);

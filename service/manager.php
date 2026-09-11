@@ -17,6 +17,7 @@ chimRuntimeBootstrap($GLOBALS["ENGINE_ROOT"], [
     'load_player_name' => true,
     'load_narrator' => true,
 ]);
+ptr_runtime_ready();
 require_once("{$GLOBALS["ENGINE_ROOT"]}/lib/logger.php");
 
 if (isset($argv) && is_array($argv)) {
