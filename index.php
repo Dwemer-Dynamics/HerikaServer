@@ -1,4 +1,5 @@
 <?php
-header("Location: ui/");
+header("Location: ui/home.php");
+exit;
 ?>
 
