@@ -4,7 +4,7 @@ $pthRoot = rtrim($webRoot ?? '', '/');
 $pthManager = ptp_product()['meta'] === 'stobe_meta' ? 'controlpanel_hub.php' : 'control_panel.php';
 $pthEscape = static fn($value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
 ?>
-<link rel="stylesheet" href="<?= $pthEscape($pthRoot) ?>/ui/css/playthrough_home.css?v=2">
+<link rel="stylesheet" href="<?= $pthEscape($pthRoot) ?>/ui/css/playthrough_home.css?v=3">
 <section class="pth-home" aria-label="Playthrough Saves" data-party="<?= ptp_product()['meta'] === 'stobe_meta' ? 'true' : 'false' ?>" data-endpoint="<?= $pthEscape($pthRoot) ?>/ui/api/playthrough_manager.php">
     <div class="pth-row">
         <strong>Playthrough Saves</strong>
@@ -42,6 +42,10 @@ $pthEscape = static fn($value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
             <label for="pth-name">Playthrough name</label>
             <input id="pth-name" name="name" maxlength="160" autocomplete="off">
         </div>
+        <div id="pth-delete-field" hidden>
+            <label for="pth-delete-word">Type Delete to confirm</label>
+            <input id="pth-delete-word" name="delete_confirmation" autocomplete="off" spellcheck="false" autocapitalize="off" pattern="Delete">
+        </div>
         <p id="pth-error" role="alert"></p>
         <div class="pth-dialog-actions">
             <button type="button" id="pth-cancel" autofocus>Cancel</button>
@@ -50,4 +54,4 @@ $pthEscape = static fn($value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
     </form>
 </dialog>
 <!-- These controls are ready here; do not wait for unrelated dashboard scripts. -->
-<script src="<?= $pthEscape($pthRoot) ?>/ui/js/playthrough_home.js?v=7"></script>
+<script src="<?= $pthEscape($pthRoot) ?>/ui/js/playthrough_home.js?v=8"></script>

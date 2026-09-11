@@ -32,6 +32,8 @@
 - [lib/playthrough_runtime.php](lib/playthrough_runtime.php) drains active work, blocks new game requests during switching and refreshes persistent workers afterward. This is not a restart of PostgreSQL, Apache or the whole distro. Report worker-readiness warnings even after a successful database commit.
 - Server saves do not change game save files. Close the game, switch the server playthrough, wait for confirmation, then load the matching game save. Character names do not automatically select a server playthrough.
 
+- Home-picker deletion requires exact `Delete` text and fresh active/target tokens. `pth_delete()` shares the retention lock, rejects active/default/pinned/shared-schema saves, and deletes tables plus schema with RESTRICT in one transaction. Never replace this with a cascading schema drop or an automatic write retry. Deletion does not switch live gameplay or restart workers.
+
 ### Older saves and policy changes
 
 - Read [lib/playthrough_schema.php](lib/playthrough_schema.php), [lib/playthrough_upgrade.sql](lib/playthrough_upgrade.sql) and [lib/playthrough_migrations.php](lib/playthrough_migrations.php) together. Upgrade a private stage to the current schema before activation.

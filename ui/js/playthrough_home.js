@@ -14,6 +14,7 @@
     const dialog = document.getElementById('pth-dialog');
     const form = document.getElementById('pth-form');
     const nameInput = document.getElementById('pth-name');
+    const deleteInput = document.getElementById('pth-delete-word');
     const confirm = document.getElementById('pth-confirm');
     const cancel = document.getElementById('pth-cancel');
     const error = document.getElementById('pth-error');
@@ -23,7 +24,11 @@
     function open(actionName, profile = null) {
         if (busy || !state?.available) return;
         action = actionName; target = profile; opener = action === 'new' ? newButton : chooseButton;
-        error.textContent = ''; nameInput.value = '';
+        error.textContent = ''; nameInput.value = ''; deleteInput.value = '';
+        dialog.dataset.action = action; confirm.disabled = action === 'delete';
+        document.getElementById('pth-delete-field').hidden = action !== 'delete';
+        deleteInput.required = action === 'delete';
+        document.getElementById('pth-game-help').hidden = action === 'delete';
         document.getElementById('pth-name-field').hidden = action !== 'new';
         nameInput.required = action === 'new';
         document.getElementById('pth-title').textContent = action === 'new' ? 'Start a new playthrough?' : `Switch to ${profile.label || profile.name}?`;
@@ -34,9 +39,18 @@
             ? 'Close the game first. After creating this playthrough, start your new game.'
             : 'Close the game first. After switching, load the matching game save.';
         confirm.textContent = action === 'new' ? 'Start new playthrough' : 'Switch playthrough';
+        if (action === 'delete') {
+            document.getElementById('pth-title').textContent = `Delete Save #${profile.id} — ${profile.label || profile.name}?`;
+            document.getElementById('pth-description').textContent = 'Are you sure? This permanently deletes this saved copy of mod data. It cannot be undone. Your current playthrough and in-game save files are kept.';
+            confirm.textContent = 'Delete save';
+        }
         dialog.showModal();
-        (action === 'new' ? nameInput : cancel).focus();
+        if (action === 'delete') deleteInput.focus();
+        else (action === 'new' ? nameInput : cancel).focus();
     }
+    deleteInput.addEventListener('input', () => {
+        if (action === 'delete' && !busy && !reloadRequired) confirm.disabled = deleteInput.value !== 'Delete';
+    });
     newButton.addEventListener('click', () => open('new'));
     chooseButton.addEventListener('click', () => {
         if (busy || reloadRequired) return;
@@ -49,27 +63,29 @@
     cancel.addEventListener('click', () => { if (!busy) dialog.close(); });
     dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
     dialog.addEventListener('close', () => {
-        if (action === 'switch' && !busy && !reloadRequired) {
+        if (action !== 'new' && !busy && !reloadRequired) {
             picker.showModal();
-            rows.querySelector(`[data-save-id="${target.id}"]`)?.focus();
+            rows.querySelector(`[data-save-id="${target.id}"][data-action="${action}"]`)?.focus();
         } else opener?.focus();
     });
     form.addEventListener('submit', async event => {
         event.preventDefault();
         if (busy || !form.reportValidity()) return;
         if (action === 'new' && !nameInput.value.trim()) { error.textContent = 'Enter a playthrough name.'; nameInput.focus(); return; }
+        if (action === 'delete' && deleteInput.value !== 'Delete') { error.textContent = 'Type Delete exactly to confirm.'; deleteInput.focus(); return; }
         busy = true; confirm.disabled = true; cancel.disabled = true;
-        error.textContent = 'Saving current progress and preparing your playthrough. Please wait…';
+        error.textContent = action === 'delete' ? 'Deleting this saved copy. Please wait…' : 'Saving current progress and preparing your playthrough. Please wait…';
         const body = new URLSearchParams({action, csrf_token: csrf, expected_token: state.token});
         if (action === 'new') body.set('name', nameInput.value.trim());
         else body.set('profile_id', String(target.id));
+        if (action === 'delete') { body.set('delete_confirmation',deleteInput.value); body.set('delete_token',target.delete_token); }
         try {
             const response = await fetch(panel.dataset.endpoint, {method: 'POST', body, credentials: 'same-origin'});
             const result = await response.json();
             if (!result.ok) {
                 error.textContent = result.message || 'The playthrough could not be changed.';
                 if (result.retryable === true) {
-                    busy = false; confirm.disabled = false; cancel.disabled = false;
+                    busy = false; confirm.disabled = action === 'delete' && deleteInput.value !== 'Delete'; cancel.disabled = false;
                     if (action === 'new') nameInput.focus();
                     return;
                 }
@@ -137,8 +153,14 @@
                 const active = document.createElement('span'); active.className = 'pth-active'; active.textContent = 'Active'; actionCell.append(active);
             } else {
                 const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Switch';
-                button.dataset.saveId = String(row.id); button.setAttribute('aria-label', `Switch to ${row.label || row.name}`);
+                button.dataset.saveId = String(row.id); button.dataset.action = 'switch'; button.setAttribute('aria-label', `Switch to ${row.label || row.name}`);
                 button.addEventListener('click', () => { picker.close(); open('switch', row); }); actionCell.append(button);
+                if (row.can_delete) {
+                    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete'; remove.className = 'pth-delete';
+                    remove.dataset.saveId = String(row.id); remove.dataset.action = 'delete';
+                    remove.setAttribute('aria-label', `Delete Save #${row.id} — ${row.label || row.name}`);
+                    remove.addEventListener('click', () => { picker.close(); open('delete',row); }); actionCell.append(remove);
+                }
             }
             rows.append(tr);
         }

@@ -18,7 +18,8 @@ function pth_state($conn): array {
     $ready = pg_fetch_result(pth_query($conn, 'SELECT to_regclass($1) IS NOT NULL AND to_regclass($2) IS NOT NULL',
         [$meta . '.playthrough_profiles', $meta . '.settings']), 0, 0) === 't';
     if (!$ready) return ['available'=>false, 'active_id'=>0, 'token'=>'', 'playthroughs'=>[]];
-    $rows = pg_fetch_all(pth_query($conn, "SELECT p.id,p.name,p.schema_name,p.is_active,p.storage_type,p.retention_kind,p.player_name,p.last_gamets,p.created_at,p.size_bytes,
+    $rows = pg_fetch_all(pth_query($conn, "SELECT p.id,p.name,p.schema_name,p.is_active,p.storage_type,p.retention_kind,p.xmin::text AS row_version,n.oid AS schema_oid,
+        to_jsonb(p)->>'retention_pinned' AS pinned,p.player_name,p.last_gamets,p.created_at,p.size_bytes,
         to_jsonb(p)->>'player_faction_members' AS player_faction_members,
         obj_description(n.oid,'pg_namespace') AS manifest
         FROM {$meta}.playthrough_profiles p LEFT JOIN pg_namespace n ON n.nspname=p.schema_name AND p.storage_type='schema'
@@ -50,7 +51,9 @@ function pth_state($conn): array {
         $choices[] = ['id'=>(int)$row['id'], 'name'=>$row['name'], 'active'=>$row['is_active']==='t',
             'label'=>$label, 'player_name'=>$player, 'player_level'=>$level, 'player_faction_members'=>$members,
             'game_date'=>$gameDate, 'created_at'=>$row['created_at'] ?? '',
-            'size_bytes'=>max(0,(int)($row['size_bytes'] ?? 0)), 'kind'=>$row['retention_kind']];
+            'size_bytes'=>max(0,(int)($row['size_bytes'] ?? 0)), 'kind'=>$row['retention_kind'],
+            'can_delete'=>$row['is_active']!=='t' && strtolower($row['name'])!=='default' && $row['pinned']!=='true' && $row['storage_type']==='schema' && $row['schema_oid']!==null,
+            'delete_token'=>hash('sha256',json_encode([$row['id'],$row['schema_name'],$row['row_version'],$row['schema_oid']]))];
     }
     return ['available'=>true, 'active_id'=>$id,
         'token'=>hash('sha256', json_encode([$id, $active[0]['schema_name'] ?? '', $revision])), 'playthroughs'=>$choices];
@@ -171,4 +174,48 @@ function pth_change($conn, string $action, array $input): array {
         if ($locked) ptr_unlock($conn);
         if ($runtime !== null) ptr_runtime_finish_switch($runtime);
     }
+}
+
+// Delete only the confirmed inactive archive. RESTRICT prevents removal of external
+// dependencies; the transaction restores every table if any step fails.
+function pth_delete($conn, array $input): array {
+    if (($input['delete_confirmation'] ?? null) !== 'Delete') throw new InvalidArgumentException('Type Delete exactly to confirm.');
+    $id = filter_var($input['profile_id'] ?? null,FILTER_VALIDATE_INT);
+    if (!$id || $id<1) throw new InvalidArgumentException('Choose a valid Playthrough Save.');
+    $meta = ptp_product()['meta'];
+    if (!ptr_lock($conn)) throw new RuntimeException('Another Playthrough Save operation is running. Try again shortly.');
+    try {
+        pth_query($conn,'BEGIN');
+        pth_query($conn,"SET LOCAL lock_timeout='2s'");
+        pth_query($conn,"LOCK TABLE {$meta}.playthrough_profiles IN SHARE ROW EXCLUSIVE MODE");
+        $state = pth_state($conn);
+        if (!is_string($input['expected_token'] ?? null) || !hash_equals($state['token'],$input['expected_token'])) {
+            throw new RuntimeException('The playthrough list changed. Reload before deleting.');
+        }
+        $target = null;
+        foreach ($state['playthroughs'] as $choice) if ($choice['id']===$id) $target=$choice;
+        if (!$target || !$target['can_delete']) throw new RuntimeException('This save is active, protected or unavailable. Nothing was deleted.');
+        if (!is_string($input['delete_token'] ?? null) || !hash_equals($target['delete_token'],$input['delete_token'])) {
+            throw new RuntimeException('This save changed after you opened it. Reload before deleting.');
+        }
+        $schema = pg_fetch_result(pth_query($conn,"SELECT schema_name FROM {$meta}.playthrough_profiles WHERE id=$1 FOR UPDATE",[$id]),0,0);
+        $prefix = ptp_product()['prefix'];
+        if (!preg_match('/^'.preg_quote($prefix,'/').'[a-z0-9_]+$/D',$schema)) throw new RuntimeException('Unexpected save storage. Nothing was deleted.');
+        if (pg_num_rows(pth_query($conn,"SELECT id FROM {$meta}.playthrough_profiles WHERE schema_name=$1 AND id<>$2",[$schema,$id]))>0) {
+            throw new RuntimeException('Another save uses this storage. Nothing was deleted.');
+        }
+        $tables = pg_fetch_all(pth_query($conn,"SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname",[$schema])) ?: [];
+        if ($tables) {
+            $names = array_map(fn($row)=>pg_escape_identifier($conn,$schema).'.'.pg_escape_identifier($conn,$row['relname']),$tables);
+            if (!@pg_query($conn,'DROP TABLE '.implode(',',$names).' RESTRICT')) throw new RuntimeException('This save is in use or has dependent data. Nothing was deleted.');
+        }
+        if (!@pg_query($conn,'DROP SCHEMA '.pg_escape_identifier($conn,$schema).' RESTRICT')) throw new RuntimeException('This save has dependent data. Nothing was deleted.');
+        pth_query($conn,"DELETE FROM {$meta}.playthrough_profiles WHERE id=$1",[$id]);
+        ptr_write($conn,'PLAYTHROUGH_HOME_REVISION',bin2hex(random_bytes(16)));
+        pth_query($conn,'COMMIT');
+        return ['success'=>true,'id'=>$id,'message'=>'Playthrough Save deleted: '.$target['label'].'.'];
+    } catch (Throwable $error) {
+        if (pg_transaction_status($conn)!==PGSQL_TRANSACTION_IDLE) @pg_query($conn,'ROLLBACK');
+        throw $error;
+    } finally { ptr_unlock($conn); }
 }
