@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/playthrough_runtime.php';
 require_once("logger.php");
 
 class sql
@@ -10,6 +11,7 @@ class sql
     
     public function __construct()
     {
+        ptr_runtime_enter();
         //$connString = "host=localhost dbname=dwemer user=dwemer password=dwemer connect_timeout=15";
         self::$link = @pg_connect($this->connString);
 

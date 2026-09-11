@@ -239,10 +239,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message .= '<p><strong>Error:</strong> Security check failed (missing or expired form token). No changes were made. Please reload the page and try again.</p>';
     } elseif (!$adminConn) {
         // Connection error message already queued above.
-    } elseif (!ptr_lock($adminConn)) {
-        $message .= '<p><strong>Error:</strong> Another playthrough operation or cleanup is running. Try again shortly.</p>';
     } else {
+        $runtimeSwitch = null;
+        $operationLocked = false;
         try {
+        if (($_POST['action'] ?? '') === 'switch') $runtimeSwitch = ptr_runtime_begin_switch(30.0, $adminConn);
+        if (!ptr_lock($adminConn)) throw new RuntimeException('Another playthrough operation or cleanup is running. Try again shortly.');
+        $operationLocked = true;
         // Initialization/migrations run only after a CSRF-validated POST.
         ptm_run_setup_migrations($adminConn);
         $action = $_POST['action'] ?? '';
@@ -407,15 +410,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     : false;
                 if ($resU && @pg_query($adminConn, 'COMMIT')) {
                     $message .= '<p><strong>✅ Restored playthrough:</strong> '.h($targetName).'</p>';
-                    $message .= '<div style="background:#4a1e0d; border:2px solid #dc2626; border-radius:8px; padding:15px; margin-top:15px;">';
-                    $message .= '<p style="color:#fbbf24; font-weight:bold; margin:0 0 10px 0;">⚠️ RESTART REQUIRED</p>';
-                    $message .= '<p style="margin:0 0 8px 0;">You must restart the CHIM server for the restore to take effect:</p>';
-                    $message .= '<ol style="margin:5px 0; padding-left:20px;">';
-                    $message .= '<li>Shutdown Skyrim</li>';
-                    $message .= '<li>Restart CHIM Server</li>';
-                    $message .= '<li>Restart Skyrim and load into the save you want to continue from</li>';
-                    $message .= '</ol>';
-                    $message .= '</div>';
+                    $runtimeReady = ptr_runtime_finish_switch($runtimeSwitch);
+                    $message .= $runtimeReady
+                        ? '<p>Background processing refreshed. Start Skyrim and load the matching game save.</p>'
+                        : '<p><strong>Warning:</strong> The save loaded, but background processing could not be confirmed. Restart the CHIM server before loading the matching Skyrim save.</p>';
                 } else {
                     @pg_query($adminConn, 'ROLLBACK');
                     $message .= '<p><strong>Error:</strong> Restore failed. The current active playthrough was preserved.</p>';
@@ -499,10 +497,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } catch (Throwable $e) {
             @pg_query($adminConn, 'ROLLBACK');
             Logger::error('Playthrough Saves: ' . $e->getMessage());
-            $message .= '<p><strong>Error:</strong> The operation could not finish. Protected playthroughs cannot be deleted. Check the server log for details.</p>';
+            $message .= '<p><strong>Error:</strong> ' . h($e->getMessage()) . '</p>';
         } finally {
             if (pg_transaction_status($adminConn) !== PGSQL_TRANSACTION_IDLE) @pg_query($adminConn, 'ROLLBACK');
-            ptr_unlock($adminConn);
+            if ($operationLocked) ptr_unlock($adminConn);
+            if ($runtimeSwitch !== null) ptr_runtime_finish_switch($runtimeSwitch);
         }
     }
 }
@@ -963,7 +962,7 @@ if (!$ptmFragment) {
         frag.appendChild(el('p', 'Stop Skyrim before restoring. After restoring:'));
         const ol = el('ol');
         ol.appendChild(el('li', 'Keep Skyrim closed'));
-        ol.appendChild(el('li', 'Restart the CHIM server'));
+        ol.appendChild(el('li', 'Wait for the server to finish loading the Playthrough Save'));
         ol.appendChild(el('li', 'Restart Skyrim and load the matching game save'));
         frag.appendChild(ol);
         return frag;
@@ -987,7 +986,7 @@ if (!$ptmFragment) {
             return 'Restore Playthrough Save "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\n' +
                 '1. Your current progress is saved over the active playthrough' + (activeName ? ' "' + activeName + '"' : ' (if it cannot be determined, the restore is blocked)') + '.\n' +
                 '2. "' + name + '" then replaces the active playthrough.\n' +
-                '3. Stop Skyrim before restoring. Afterwards, restart CHIM and load the matching Skyrim save.\n\nContinue?';
+                '3. Stop Skyrim before restoring. Wait for the server to finish, then load the matching Skyrim save.\n\nContinue?';
         }
         return 'Permanently delete Playthrough Save "' + name + '"' + (size ? ' (' + size + ')' : '') + '?\n\nThis cannot be undone.';
     }
