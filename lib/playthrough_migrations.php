@@ -13,7 +13,8 @@ function pts_migrate_prepared_playthrough($conn, string $stage): void {
         return $result;
     };
     $metadata = json_decode(pg_fetch_result($query("SELECT obj_description(oid,'pg_namespace') FROM pg_namespace WHERE nspname=$1", [$stage]), 0, 0), true, 32, JSON_THROW_ON_ERROR);
-    $missing = $metadata['missing_tables'];
+    // Policy omissions have no historical content to migrate or seed.
+    $missing = array_diff($metadata['missing_tables'], $metadata['empty_tables'] ?? []);
     $schema = pg_escape_identifier($conn, $stage);
     foreach (['core_tts_fallback'=>'lib/core/database_schema/core_tts_fallback.sql', 'faction_vanilla'=>'data/factions_vanilla.sql'] as $table=>$file) {
         if (!in_array($table, $missing, true)) continue;

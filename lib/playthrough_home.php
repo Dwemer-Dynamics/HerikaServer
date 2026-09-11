@@ -46,7 +46,7 @@ function pth_capture($conn, string $name, ?array $existing = null, string $kind 
     $event = in_array('eventlog', $tables, true)
         ? pg_fetch_assoc(pth_query($conn, 'SELECT count(*) AS count,coalesce(max(gamets),0) AS gamets FROM public.eventlog')) : ['count'=>0,'gamets'=>0];
     $knowledge = $meta === 'chim_meta' ? 'oghma' : ($meta === 'stobe_meta' ? 'world_knowledge' : 'worldknowledge');
-    // Shared knowledge is not part of this saved copy.
+    // Count knowledge only when it is included in this saved copy.
     $knowledgeCount = in_array($knowledge, pts_playthrough_tables(), true) && in_array($knowledge, $tables, true)
         ? pg_fetch_result(pth_query($conn, 'SELECT count(*) FROM public.' . $knowledge),0,0) : 0;
     $player = '';

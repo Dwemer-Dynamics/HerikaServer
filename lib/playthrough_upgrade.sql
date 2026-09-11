@@ -16,6 +16,8 @@ DECLARE
     required_version bigint;
     version_key text;
     missing_tables text[] := '{}';
+    empty_tables text[] := '{}';
+    source_policy integer;
     all_source_names text[];
     sequence_name text;
     sequence_info record;
@@ -34,6 +36,8 @@ BEGIN
         (SELECT string_agg(format('%I.%I', source_schema, name), ', ' ORDER BY name) FROM unnest(source_names) name));
     SELECT array_agg(tablename ORDER BY tablename) INTO all_source_names FROM pg_tables WHERE schemaname=source_schema;
     PERFORM chim_meta.validate_save_manifest(source_schema, all_source_names);
+    SELECT obj_description(oid,'pg_namespace')::jsonb INTO manifest FROM pg_namespace WHERE nspname=source_schema;
+    source_policy := coalesce((manifest->>'table_policy_version')::integer,1);
     -- CREATE, not replacement: an unexpected name collision must leave it intact.
     EXECUTE format('CREATE SCHEMA %I', stage_schema);
     PERFORM chim_meta.clone_selected_schema(source_schema, stage_schema, source_names);
@@ -53,20 +57,26 @@ BEGIN
                 ('oghma_catalog_events','oghma_catalog',20260827001::bigint),
                 ('oghma_factory_overrides','oghma_catalog',20260827001::bigint)
             ) v(name,version_key,version) WHERE v.name=table_name;
-            IF required_version IS NULL THEN
-                RAISE EXCEPTION 'Snapshot is missing table %; no safe upgrade is available', table_name;
-            END IF;
-            SELECT obj_description(oid,'pg_namespace')::jsonb INTO manifest FROM pg_namespace WHERE nspname=source_schema;
-            IF to_regclass(format('%I.database_versioning',source_schema)) IS NOT NULL THEN
-                EXECUTE format('SELECT coalesce(max(version),0) FROM %I.database_versioning WHERE tablename=$1',source_schema)
-                    INTO saved_version USING version_key;
-            ELSIF manifest ? 'migrations' THEN
-                saved_version := coalesce((manifest->'migrations'->>version_key)::bigint,0);
+            -- Policy 2 kept these tables global, so its saves contain no copy.
+            -- Initialize only that known omission; never borrow another game's live data.
+            IF source_policy=2 AND table_name=ANY(ARRAY['oghma','oghma_audit','oghma_catalog_entries','oghma_catalog_events','oghma_catalogs','oghma_context_rule','oghma_factory_overrides','quest_asset_group_members','quest_asset_groups','quest_asset_imports','quest_asset_packs','quest_assets','quest_item_types','quest_npc_own_templates','quest_npc_templates','quest_outfits','skyrim_quest_definitions']) OR source_policy=1 AND table_name='oghma_context_rule' THEN
+                empty_tables := array_append(empty_tables,table_name);
             ELSE
-                RAISE EXCEPTION 'Snapshot has no migration history for missing table %',table_name;
-            END IF;
-            IF saved_version >= required_version THEN
-                RAISE EXCEPTION 'Snapshot is missing table %, which already existed when it was saved',table_name;
+                IF required_version IS NULL THEN
+                    RAISE EXCEPTION 'Snapshot is missing table %; no safe upgrade is available', table_name;
+                END IF;
+                SELECT obj_description(oid,'pg_namespace')::jsonb INTO manifest FROM pg_namespace WHERE nspname=source_schema;
+                IF to_regclass(format('%I.database_versioning',source_schema)) IS NOT NULL THEN
+                    EXECUTE format('SELECT coalesce(max(version),0) FROM %I.database_versioning WHERE tablename=$1',source_schema)
+                        INTO saved_version USING version_key;
+                ELSIF manifest ? 'migrations' THEN
+                    saved_version := coalesce((manifest->'migrations'->>version_key)::bigint,0);
+                ELSE
+                    RAISE EXCEPTION 'Snapshot has no migration history for missing table %',table_name;
+                END IF;
+                IF saved_version >= required_version THEN
+                    RAISE EXCEPTION 'Snapshot is missing table %, which already existed when it was saved',table_name;
+                END IF;
             END IF;
             EXECUTE format('CREATE TABLE %I.%I (LIKE public.%I INCLUDING ALL)',stage_schema,table_name,table_name);
             -- LIKE gives identity columns their own sequences, but serial defaults still
@@ -160,8 +170,8 @@ BEGIN
     ) THEN RAISE EXCEPTION 'Snapshot sequence defaults still reference another schema'; END IF;
 
     EXECUTE format('COMMENT ON SCHEMA %I IS %L',stage_schema,
-        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',2,
-            'tables',live_names,'missing_tables',missing_tables,'source_schema',source_schema,
+        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',3,
+            'tables',live_names,'missing_tables',missing_tables,'empty_tables',empty_tables,'source_schema',source_schema,
             'upgrade_version',2)::text);
     RETURN stage_schema;
 END;
@@ -185,12 +195,13 @@ $$ LANGUAGE plpgsql;
 -- coordinator so bundled seed/catalog files are validated before activation.
 CREATE OR REPLACE FUNCTION chim_meta.restore_playthrough_upgraded(source_schema text, selected_tables text[])
 RETURNS void AS $$
-DECLARE stage_schema text; missing jsonb;
+DECLARE stage_schema text; missing jsonb; empty_tables jsonb;
 BEGIN
     stage_schema := chim_meta.prepare_playthrough(source_schema,selected_tables);
     SELECT obj_description(oid,'pg_namespace')::jsonb->'missing_tables' INTO missing FROM pg_namespace WHERE nspname=stage_schema;
+    SELECT obj_description(oid,'pg_namespace')::jsonb->'empty_tables' INTO empty_tables FROM pg_namespace WHERE nspname=stage_schema;
     IF EXISTS(SELECT 1 FROM jsonb_array_elements_text(missing) t(name)
-        WHERE name NOT IN ('bgl_history','market_cache','profile_settings_presets','oghma_audit')) THEN
+        WHERE NOT (coalesce(empty_tables,'[]'::jsonb) ? name) AND name NOT IN ('bgl_history','market_cache','profile_settings_presets','oghma_audit')) THEN
         RAISE EXCEPTION 'This save needs a content upgrade through Playthrough Manager';
     END IF;
     PERFORM chim_meta.restore_playthrough(stage_schema,selected_tables);
@@ -199,4 +210,4 @@ END;
 $$ LANGUAGE plpgsql SET lock_timeout = '10s';
 
 CREATE OR REPLACE FUNCTION chim_meta.playthrough_api_version()
-RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 3';
+RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 4';
