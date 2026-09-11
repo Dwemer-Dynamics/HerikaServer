@@ -470,7 +470,8 @@ $TTS["deepgram"]["bitrate"]=24000; //Bitrate.
 $TTS["CARTESIA"]["API_KEY"]=''; //API key.
 $TTS["CARTESIA"]["voiceid"]=''; //Voice file name. Works like XTTS voiceid.
 $TTS["CARTESIA"]["language"]='en'; //Language (en, fr, de, es, etc.).
-$TTS["CARTESIA"]["model_id"]='sonic-3'; //Model (sonic-3, sonic-english, sonic-multilingual).
+$TTS["CARTESIA"]["model_id"]='sonic-3'; //Model (sonic-3, sonic-3.5, sonic-3.6, or a dated snapshot).
+$TTS["CARTESIA"]["accent"]=''; //Optional Sonic 3.6 accent ID supported by the selected multilingual voice.
 $TTS["CARTESIA"]["speed"]='normal'; //Speed (slowest, slow, normal, fast, fastest).
 
 //Inworld TTS
