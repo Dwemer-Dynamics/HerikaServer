@@ -270,6 +270,10 @@ function pgr_http_preflight(string $endpoint): void {
     $pending = $state && ($state['phase'] ?? '') !== 'complete';
     if (!$eligible || $incoming <= 0) {
         if ($pending) pgr_deny($state);
+        $generation = trim((string)@file_get_contents(dirname(__DIR__) . '/log/playthrough_runtime/generation'));
+        if ($state && ($state['generation'] ?? '') === $generation && time()-(int)($state['completed_at'] ?? 0)<120) {
+            pgr_notice($state,$state['notice'] ?? 'created');
+        }
         return;
     }
     $GLOBALS['pgr_candidate'] = true;
