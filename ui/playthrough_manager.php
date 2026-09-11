@@ -329,6 +329,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 goto SWITCH_ABORT;
             }
 
+            // Validate the target before updating the active saved copy. Both changes
+            // remain in this transaction, so any failed activation preserves both saves.
+            ptr_query($adminConn, 'BEGIN');
+            $preparedSchema = pts_prepare_playthrough($adminConn, $targetSchemaName);
+
             // 1) Auto-save current active profile BEFORE switching
             $curRes = pg_query($adminConn, "SELECT id, name, storage_type, schema_name FROM chim_meta.playthrough_profiles WHERE is_active = true LIMIT 1");
             $curRow = $curRes ? pg_fetch_assoc($curRes) : null;
@@ -386,13 +391,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 // Keep the live public schema intact if recreating or cloning the playthrough fails.
-                if (!@pg_query($adminConn, 'BEGIN')) {
-                    $message .= '<p><strong>Error:</strong> Failed to start restore.</p>';
-                    goto SWITCH_ABORT;
-                }
-
                 // Replace selected rows while preserving shared and extension tables.
-                $cloneResult = pts_transfer_playthrough($adminConn, $targetSchemaName, true);
+                $cloneResult = pts_activate_playthrough($adminConn, $preparedSchema);
                 if (!$cloneResult['success']) {
                     @pg_query($adminConn, 'ROLLBACK');
                     $message .= '<p><strong>Error:</strong> Failed to restore playthrough.</p>';
@@ -501,6 +501,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             Logger::error('Playthrough Saves: ' . $e->getMessage());
             $message .= '<p><strong>Error:</strong> The operation could not finish. Protected playthroughs cannot be deleted. Check the server log for details.</p>';
         } finally {
+            if (pg_transaction_status($adminConn) !== PGSQL_TRANSACTION_IDLE) @pg_query($adminConn, 'ROLLBACK');
             ptr_unlock($adminConn);
         }
     }

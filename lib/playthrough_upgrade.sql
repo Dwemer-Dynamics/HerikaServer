@@ -1,7 +1,7 @@
 -- Upgrade a private working copy. Never run db_updates.php here: its public
 -- schema writes and library seeds are not scoped to a saved playthrough.
-CREATE OR REPLACE FUNCTION chim_meta.restore_playthrough_upgraded(source_schema text, selected_tables text[])
-RETURNS void AS $$
+CREATE OR REPLACE FUNCTION chim_meta.prepare_playthrough(source_schema text, selected_tables text[])
+RETURNS text AS $$
 DECLARE
     stage_schema text := 'chim_profile_upgrade_' || pg_backend_pid() || '_' || txid_current();
     source_names text[];
@@ -13,6 +13,12 @@ DECLARE
     target_type text;
     default_sql text;
     saved_version bigint;
+    required_version bigint;
+    version_key text;
+    missing_tables text[] := '{}';
+    all_source_names text[];
+    sequence_name text;
+    sequence_info record;
 BEGIN
     IF source_schema !~ '^chim_profile_[a-z0-9_]+$' OR source_schema = stage_schema THEN
         RAISE EXCEPTION 'Invalid playthrough schema';
@@ -26,33 +32,52 @@ BEGIN
     END IF;
     EXECUTE format('LOCK TABLE %s IN SHARE MODE',
         (SELECT string_agg(format('%I.%I', source_schema, name), ', ' ORDER BY name) FROM unnest(source_names) name));
-    SELECT obj_description(oid, 'pg_namespace') INTO manifest_text FROM pg_namespace WHERE nspname=source_schema;
-    IF manifest_text IS NOT NULL THEN
-        manifest := manifest_text::jsonb;
-        IF manifest->>'format' IS DISTINCT FROM 'chim_selected_tables_v1'
-            OR manifest->'tables' IS DISTINCT FROM to_jsonb(source_names) THEN
-            RAISE EXCEPTION 'Snapshot manifest does not match the saved tables';
-        END IF;
-    END IF;
+    SELECT array_agg(tablename ORDER BY tablename) INTO all_source_names FROM pg_tables WHERE schemaname=source_schema;
+    PERFORM chim_meta.validate_save_manifest(source_schema, all_source_names);
     -- CREATE, not replacement: an unexpected name collision must leave it intact.
     EXECUTE format('CREATE SCHEMA %I', stage_schema);
     PERFORM chim_meta.clone_selected_schema(source_schema, stage_schema, source_names);
 
     FOREACH table_name IN ARRAY live_names LOOP
         IF NOT (table_name=ANY(source_names)) THEN
-            -- These original migrations create empty tables without seed data.
-            -- Require an older saved ledger so a missing newer table is not
-            -- mistaken for a legitimate old snapshot.
-            IF table_name NOT IN ('bgl_history', 'market_cache')
-                OR NOT ('database_versioning'=ANY(source_names)) THEN
+            SELECT v.version_key, v.version INTO version_key, required_version FROM (VALUES
+                ('bgl_history','bgl_history',20260623001::bigint),
+                ('market_cache','market_cache',20260805001::bigint),
+                ('core_tts_fallback','core_tts_fallback',20260727001::bigint),
+                ('core_tts_pronunciation','core_tts_pronunciation',20260829003::bigint),
+                ('faction_vanilla','faction_vanilla',20260803001::bigint),
+                ('profile_settings_presets','profile_settings_presets',20260824001::bigint),
+                ('oghma_audit','oghma_catalog',20260827001::bigint),
+                ('oghma_catalogs','oghma_catalog',20260827001::bigint),
+                ('oghma_catalog_entries','oghma_catalog',20260827001::bigint),
+                ('oghma_catalog_events','oghma_catalog',20260827001::bigint),
+                ('oghma_factory_overrides','oghma_catalog',20260827001::bigint)
+            ) v(name,version_key,version) WHERE v.name=table_name;
+            IF required_version IS NULL OR NOT ('database_versioning'=ANY(source_names)) THEN
                 RAISE EXCEPTION 'Snapshot is missing table %; no safe upgrade is available', table_name;
             END IF;
-            EXECUTE format('SELECT coalesce(max(version), 0) FROM %I.database_versioning WHERE tablename=$1', stage_schema)
-                INTO saved_version USING table_name;
-            IF saved_version >= (CASE table_name WHEN 'bgl_history' THEN 20260623001 ELSE 20260805001 END) THEN
-                RAISE EXCEPTION 'Snapshot is missing table %, which already existed when it was saved', table_name;
+            EXECUTE format('SELECT coalesce(max(version),0) FROM %I.database_versioning WHERE tablename=$1',stage_schema)
+                INTO saved_version USING version_key;
+            IF saved_version >= required_version THEN
+                RAISE EXCEPTION 'Snapshot is missing table %, which already existed when it was saved',table_name;
             END IF;
-            EXECUTE format('CREATE TABLE %I.%I (LIKE public.%I INCLUDING ALL)', stage_schema, table_name, table_name);
+            EXECUTE format('CREATE TABLE %I.%I (LIKE public.%I INCLUDING ALL)',stage_schema,table_name,table_name);
+            -- LIKE gives identity columns their own sequences, but serial defaults still
+            -- point at public. Give newly introduced serial columns private sequences.
+            FOR item IN SELECT a.attname, pg_get_serial_sequence(format('public.%I',table_name),a.attname) AS seq
+                FROM pg_attribute a WHERE a.attrelid=format('public.%I',table_name)::regclass
+                AND a.attnum>0 AND NOT a.attisdropped AND a.attidentity='' LOOP
+                IF item.seq IS NULL THEN CONTINUE; END IF;
+                SELECT * INTO sequence_info FROM pg_sequence WHERE seqrelid=item.seq::regclass;
+                sequence_name := table_name || '_' || item.attname || '_seq';
+                EXECUTE format('CREATE SEQUENCE %I.%I AS %s INCREMENT %s MINVALUE %s MAXVALUE %s START %s',
+                    stage_schema,sequence_name,format_type(sequence_info.seqtypid,NULL),sequence_info.seqincrement,
+                    sequence_info.seqmin,sequence_info.seqmax,sequence_info.seqstart);
+                EXECUTE format('ALTER SEQUENCE %I.%I OWNED BY %I.%I.%I',stage_schema,sequence_name,stage_schema,table_name,item.attname);
+                EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I SET DEFAULT nextval(%L::regclass)',
+                    stage_schema,table_name,item.attname,format('%I.%I',stage_schema,sequence_name));
+            END LOOP;
+            missing_tables := array_append(missing_tables,table_name);
         END IF;
         -- The saved ledger describes the source; do not pretend every historical
         -- content migration ran, or replace the installed server's version ledger.
@@ -127,10 +152,44 @@ BEGIN
         WHERE s.relkind='S' AND tn.nspname=stage_schema AND sn.nspname<>stage_schema
     ) THEN RAISE EXCEPTION 'Snapshot sequence defaults still reference another schema'; END IF;
 
-    -- Existing activation validates current constraints and rolls back all row,
-    -- trigger, foreign-key and sequence changes on failure. The original saved
-    -- schema remains available even after a successful upgrade and activation.
-    PERFORM chim_meta.restore_playthrough(stage_schema, selected_tables);
-    EXECUTE format('DROP SCHEMA %I CASCADE', stage_schema);
+    EXECUTE format('COMMENT ON SCHEMA %I IS %L',stage_schema,
+        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',1,
+            'tables',live_names,'missing_tables',missing_tables,'source_schema',source_schema,
+            'upgrade_version',2)::text);
+    RETURN stage_schema;
 END;
 $$ LANGUAGE plpgsql SET lock_timeout = '10s';
+
+-- Exercise the real constraint/sequence checks inside a rolled-back subtransaction.
+-- No restored rows become visible; application triggers stay disabled as in activation.
+CREATE OR REPLACE FUNCTION chim_meta.validate_playthrough(source_schema text, selected_tables text[])
+RETURNS void AS $$
+BEGIN
+    BEGIN
+        PERFORM chim_meta.restore_playthrough(source_schema,selected_tables);
+        RAISE EXCEPTION USING ERRCODE='PZ001', MESSAGE='playthrough validation completed';
+    EXCEPTION WHEN SQLSTATE 'PZ001' THEN
+        NULL;
+    END;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Retain the SQL API for structural upgrades. Content upgrades use the PHP
+-- coordinator so bundled seed/catalog files are validated before activation.
+CREATE OR REPLACE FUNCTION chim_meta.restore_playthrough_upgraded(source_schema text, selected_tables text[])
+RETURNS void AS $$
+DECLARE stage_schema text; missing jsonb;
+BEGIN
+    stage_schema := chim_meta.prepare_playthrough(source_schema,selected_tables);
+    SELECT obj_description(oid,'pg_namespace')::jsonb->'missing_tables' INTO missing FROM pg_namespace WHERE nspname=stage_schema;
+    IF EXISTS(SELECT 1 FROM jsonb_array_elements_text(missing) t(name)
+        WHERE name NOT IN ('bgl_history','market_cache','profile_settings_presets','oghma_audit')) THEN
+        RAISE EXCEPTION 'This save needs a content upgrade through Playthrough Manager';
+    END IF;
+    PERFORM chim_meta.restore_playthrough(stage_schema,selected_tables);
+    EXECUTE format('DROP SCHEMA %I CASCADE',stage_schema);
+END;
+$$ LANGUAGE plpgsql SET lock_timeout = '10s';
+
+CREATE OR REPLACE FUNCTION chim_meta.playthrough_api_version()
+RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 2';

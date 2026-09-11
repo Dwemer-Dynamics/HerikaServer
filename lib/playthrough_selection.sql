@@ -1,9 +1,30 @@
+-- Validate the historical manifest against its own complete table set, then
+-- let the current policy choose what to restore. Reject future/damaged formats.
+CREATE OR REPLACE FUNCTION chim_meta.validate_save_manifest(source_schema text, actual_tables text[])
+RETURNS void AS $$
+DECLARE raw text; manifest jsonb;
+BEGIN
+    SELECT obj_description(oid,'pg_namespace') INTO raw FROM pg_namespace WHERE nspname=source_schema;
+    IF raw IS NULL THEN RETURN; END IF; -- Pre-manifest full-schema saves.
+    manifest := raw::jsonb;
+    IF manifest->>'format' NOT IN ('chim_selected_tables_v1','chim_selected_tables_v2')
+        OR manifest->>'format' IS NULL OR manifest->'tables' IS DISTINCT FROM to_jsonb(actual_tables) THEN
+        RAISE EXCEPTION 'Snapshot manifest does not match the saved tables';
+    END IF;
+    IF manifest->>'format'='chim_selected_tables_v2' AND
+        (manifest->>'table_policy_version' IS DISTINCT FROM '1' OR coalesce((manifest->>'upgrade_version')::int,2)>2) THEN
+        RAISE EXCEPTION 'Snapshot format is newer than this server';
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Snapshot and restore one explicit table policy without replacing shared tables.
 CREATE OR REPLACE FUNCTION chim_meta.capture_playthrough(dest_schema text, selected_tables text[])
 RETURNS void AS $$
 DECLARE
     names text[];
     lock_list text;
+    versions jsonb := '{}';
 BEGIN
     IF dest_schema !~ '^chim_profile_[a-z0-9_]+$' THEN
         RAISE EXCEPTION 'Invalid playthrough schema';
@@ -25,8 +46,12 @@ BEGIN
         JOIN pg_class s ON s.oid=d.refobjid JOIN pg_namespace sn ON sn.oid=s.relnamespace
         WHERE s.relkind='S' AND tn.nspname=dest_schema AND sn.nspname<>dest_schema
     ) THEN RAISE EXCEPTION 'Snapshot sequence defaults still reference another schema'; END IF;
+    IF 'database_versioning'=ANY(names) THEN
+        EXECUTE format('SELECT coalesce(jsonb_object_agg(tablename,version),''{}''::jsonb) FROM %I.database_versioning',dest_schema) INTO versions;
+    END IF;
     EXECUTE format('COMMENT ON SCHEMA %I IS %L', dest_schema,
-        jsonb_build_object('format', 'chim_selected_tables_v1', 'tables', names)::text);
+        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',1,
+            'tables',names,'migrations',versions,'upgrade_version',2)::text);
 END;
 $$ LANGUAGE plpgsql SET lock_timeout = '10s';
 
@@ -61,14 +86,8 @@ BEGIN
     IF names IS NULL OR source_names IS DISTINCT FROM names OR NOT ('eventlog' = ANY(names)) THEN
         RAISE EXCEPTION 'Snapshot tables do not match this server schema; restore cancelled';
     END IF;
-    SELECT obj_description(oid, 'pg_namespace') INTO manifest_text FROM pg_namespace WHERE nspname = source_schema;
-    IF manifest_text IS NOT NULL THEN
-        manifest := manifest_text::jsonb;
-        IF manifest->>'format' IS DISTINCT FROM 'chim_selected_tables_v1'
-            OR manifest->'tables' IS DISTINCT FROM to_jsonb(source_names) THEN
-            RAISE EXCEPTION 'Snapshot manifest does not match its tables';
-        END IF;
-    END IF;
+    PERFORM chim_meta.validate_save_manifest(source_schema,
+        (SELECT array_agg(tablename ORDER BY tablename) FROM pg_tables WHERE schemaname=source_schema));
     -- Keep the installed migration ledger: restoring old markers can re-run seed
     -- migrations against shared libraries. Its saved copy is compatibility metadata.
     names := array_remove(names, 'database_versioning');

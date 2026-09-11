@@ -15,10 +15,13 @@ final class ChimOghmaCatalogManager
         'knowledge_class_basic', 'tags', 'category',
     ];
 
-    public function __construct(private $db, private string $rootPath)
+    public function __construct(private $db, private string $rootPath, private string $schema = 'public')
     {
         if (!$db || !method_exists($db, 'fetchAll') || !method_exists($db, 'execQuery')) {
             throw new InvalidArgumentException('A HerikaServer database connection is required.');
+        }
+        if ($schema !== 'public' && !preg_match('/^chim_profile_upgrade_[0-9]+_[0-9]+$/D', $schema)) {
+            throw new InvalidArgumentException('Invalid Oghma migration schema');
         }
         $this->rootPath = rtrim($rootPath, '/\\');
     }
@@ -51,14 +54,14 @@ final class ChimOghmaCatalogManager
                 $schema = $this->readUtf8File(
                     __DIR__ . '/core/database_schema/oghma_catalog.sql', 64 * 1024, 'Oghma schema'
                 );
-                $this->execute($schema);
+                $this->execute(str_replace('public.', $this->schema . '.', $schema));
             }
-            $this->execute('LOCK TABLE public.oghma_catalogs, public.oghma_catalog_entries, public.oghma_factory_overrides, public.oghma IN SHARE ROW EXCLUSIVE MODE');
+            $this->execute('LOCK TABLE ' . $this->schema . '.oghma_catalogs, ' . $this->schema . '.oghma_catalog_entries, ' . $this->schema . '.oghma_factory_overrides, ' . $this->schema . '.oghma IN SHARE ROW EXCLUSIVE MODE');
             $restoredHidden = 0;
             if ($restoreHidden) {
-                $hiddenCountRow = $this->db->fetchOne('SELECT count(*) AS count FROM public.oghma_factory_overrides');
+                $hiddenCountRow = $this->db->fetchOne('SELECT count(*) AS count FROM ' . $this->schema . '.oghma_factory_overrides');
                 $restoredHidden = intval($hiddenCountRow['count'] ?? 0);
-                $this->execute('DELETE FROM public.oghma_factory_overrides');
+                $this->execute('DELETE FROM ' . $this->schema . '.oghma_factory_overrides');
             }
             $metadata = $package['manifest'];
             $legacyFactoryChecksums = array_fill_keys(
@@ -66,12 +69,12 @@ final class ChimOghmaCatalogManager
                 true
             );
 
-            $this->execute("DELETE FROM public.oghma WHERE source_type = 'factory'");
-            $this->execute("UPDATE public.oghma SET source_catalog_version = NULL WHERE source_type <> 'factory' AND source_catalog_version IS NOT NULL");
-            $this->execute('DELETE FROM public.oghma_catalog_events');
-            $this->execute('DELETE FROM public.oghma_catalogs');
+            $this->execute("DELETE FROM {$this->schema}.oghma WHERE source_type = 'factory'");
+            $this->execute("UPDATE {$this->schema}.oghma SET source_catalog_version = NULL WHERE source_type <> 'factory' AND source_catalog_version IS NOT NULL");
+            $this->execute('DELETE FROM ' . $this->schema . '.oghma_catalog_events');
+            $this->execute('DELETE FROM ' . $this->schema . '.oghma_catalogs');
             $this->execute(
-                'INSERT INTO public.oghma_catalogs '
+                'INSERT INTO ' . $this->schema . '.oghma_catalogs '
                 . '(catalog_version, contract_version, manifest_sha256, articles_sha256, row_count, state, previous_catalog_version, imported_at, activated_at, superseded_at, metadata) VALUES ('
                 . implode(', ', [
                     $this->literal($catalogVersion),
@@ -96,7 +99,7 @@ final class ChimOghmaCatalogManager
                     $values[] = '(' . implode(', ', array_map(fn(string $value): string => $this->literal($value), $columns)) . ')';
                 }
                 $this->execute(
-                    'INSERT INTO public.oghma_catalog_entries '
+                    'INSERT INTO ' . $this->schema . '.oghma_catalog_entries '
                     . '(catalog_version, topic, aliases, retrieval_phrases, topic_desc, knowledge_class, topic_desc_basic, knowledge_class_basic, tags, category, row_sha256) VALUES '
                     . implode(', ', $values)
                 );
@@ -104,7 +107,7 @@ final class ChimOghmaCatalogManager
 
             $legacy = $this->db->fetchAll(
                 "SELECT ctid::text AS legacy_ctid, topic, aliases, retrieval_phrases, topic_desc, knowledge_class, topic_desc_basic, knowledge_class_basic, tags, category "
-                . "FROM public.oghma WHERE source_type = 'legacy' ORDER BY topic"
+                . "FROM {$this->schema}.oghma WHERE source_type = 'legacy' ORDER BY topic"
             );
             $factoryTopics = [];
             $customTopics = [];
@@ -116,7 +119,7 @@ final class ChimOghmaCatalogManager
                     && in_array((string) $entries[$topic]['row_sha256'], $legacyChecksums, true))
                     || array_filter($legacyChecksums, static fn(string $checksum): bool => isset($legacyFactoryChecksums[$checksum])) !== [];
                 $source = $matchesFactory ? 'factory' : 'custom';
-                $sql = "UPDATE public.oghma SET source_type = '{$source}', updated_at = CURRENT_TIMESTAMP";
+                $sql = "UPDATE {$this->schema}.oghma SET source_type = '{$source}', updated_at = CURRENT_TIMESTAMP";
                 if ($matchesFactory && isset($entries[$topic])) {
                     $sql .= ', source_catalog_version = ' . $this->literal($catalogVersion)
                         . ', source_checksum = ' . $this->literal($entries[$topic]['row_sha256']);
@@ -131,10 +134,10 @@ final class ChimOghmaCatalogManager
                 $this->execute($sql . ' WHERE ctid = ' . $this->literal((string) $row['legacy_ctid']) . '::tid');
             }
 
-            $this->execute("DELETE FROM public.oghma WHERE source_type = 'factory'");
-            $hiddenRows = $this->db->fetchAll("SELECT topic FROM public.oghma_factory_overrides WHERE action = 'hide'");
+            $this->execute("DELETE FROM {$this->schema}.oghma WHERE source_type = 'factory'");
+            $hiddenRows = $this->db->fetchAll("SELECT topic FROM {$this->schema}.oghma_factory_overrides WHERE action = 'hide'");
             $hidden = array_fill_keys(array_map(static fn(array $row): string => (string) $row['topic'], $hiddenRows), true);
-            $customRows = $this->db->fetchAll("SELECT topic FROM public.oghma WHERE source_type = 'custom'");
+            $customRows = $this->db->fetchAll("SELECT topic FROM {$this->schema}.oghma WHERE source_type = 'custom'");
             $custom = array_fill_keys(array_map(static fn(array $row): string => (string) $row['topic'], $customRows), true);
             $projected = 0;
             $collisions = [];
@@ -155,14 +158,14 @@ final class ChimOghmaCatalogManager
                 }
                 if ($values !== []) {
                     $this->execute(
-                        'INSERT INTO public.oghma '
+                        'INSERT INTO ' . $this->schema . '.oghma '
                         . '(topic, aliases, retrieval_phrases, topic_desc, knowledge_class, topic_desc_basic, knowledge_class_basic, tags, category, source_type, source_catalog_version, source_checksum) VALUES '
                         . implode(', ', $values)
                     );
                 }
             }
             $this->execute(
-                "UPDATE public.oghma SET native_vector = "
+                "UPDATE {$this->schema}.oghma SET native_vector = "
                 . "setweight(to_tsvector('simple', coalesce(topic, '')), 'A') "
                 . "|| setweight(to_tsvector('simple', coalesce(aliases, '')), 'A') "
                 . "|| setweight(to_tsvector(coalesce(topic_desc, '')), 'B') "
@@ -192,13 +195,13 @@ final class ChimOghmaCatalogManager
     public function status(): array
     {
         $current = $this->activeCatalog();
-        $counts = $this->db->fetchAll('SELECT source_type, count(*) AS count FROM public.oghma GROUP BY source_type ORDER BY source_type');
+        $counts = $this->db->fetchAll('SELECT source_type, count(*) AS count FROM ' . $this->schema . '.oghma GROUP BY source_type ORDER BY source_type');
         return ['contract' => CHIM_OGHMA_PARITY_VERSION, 'current_dataset' => $current, 'projection_counts' => $counts];
     }
 
     public function activeCatalog(): ?array
     {
-        $row = $this->db->fetchOne("SELECT * FROM public.oghma_catalogs WHERE state = 'active'");
+        $row = $this->db->fetchOne("SELECT * FROM {$this->schema}.oghma_catalogs WHERE state = 'active'");
         return is_array($row) && $row !== [] ? $row : null;
     }
 
@@ -212,14 +215,14 @@ final class ChimOghmaCatalogManager
         $this->transaction(function () use ($topic, &$result): void {
             $this->lockLifecycleTables();
             $row = $this->db->fetchOne(
-                "SELECT source_type FROM public.oghma WHERE topic = " . $this->literal($topic) . ' FOR UPDATE'
+                "SELECT source_type FROM {$this->schema}.oghma WHERE topic = " . $this->literal($topic) . ' FOR UPDATE'
             );
             if (($row['source_type'] ?? null) !== 'custom') {
                 throw new InvalidArgumentException('oghma_custom_override_not_found');
             }
 
             $deleted = $this->executeAffected(
-                "DELETE FROM public.oghma WHERE topic = " . $this->literal($topic) . " AND source_type = 'custom'"
+                "DELETE FROM {$this->schema}.oghma WHERE topic = " . $this->literal($topic) . " AND source_type = 'custom'"
             );
             $restored = $this->restoreFactoryProjection($topic);
             $result = ['deleted' => $deleted, 'factory_restored' => $restored];
@@ -233,7 +236,7 @@ final class ChimOghmaCatalogManager
         $result = [];
         $this->transaction(function () use (&$result): void {
             $this->lockLifecycleTables();
-            $deleted = $this->executeAffected("DELETE FROM public.oghma WHERE source_type = 'custom'");
+            $deleted = $this->executeAffected("DELETE FROM {$this->schema}.oghma WHERE source_type = 'custom'");
             $restored = $this->restoreFactoryProjection();
             $result = ['deleted' => $deleted, 'factory_restored' => $restored];
         });
@@ -333,7 +336,7 @@ final class ChimOghmaCatalogManager
     /** Serialize factory/custom lifecycle changes in the same order as catalog synchronization. */
     private function lockLifecycleTables(): void
     {
-        $this->execute('LOCK TABLE public.oghma_catalogs, public.oghma_catalog_entries, public.oghma_factory_overrides, public.oghma IN SHARE ROW EXCLUSIVE MODE');
+        $this->execute('LOCK TABLE ' . $this->schema . '.oghma_catalogs, ' . $this->schema . '.oghma_catalog_entries, ' . $this->schema . '.oghma_factory_overrides, ' . $this->schema . '.oghma IN SHARE ROW EXCLUSIVE MODE');
     }
 
     /** Rebuild missing effective rows from the active factory source without disturbing custom rows. */
@@ -341,22 +344,22 @@ final class ChimOghmaCatalogManager
     {
         $topicFilter = $topic === null ? '' : ' AND entry.topic = ' . $this->literal($topic);
         $restored = $this->executeAffected(
-            'INSERT INTO public.oghma '
+            'INSERT INTO ' . $this->schema . '.oghma '
             . '(topic, aliases, retrieval_phrases, topic_desc, knowledge_class, topic_desc_basic, knowledge_class_basic, tags, category, '
             . 'source_type, source_catalog_version, source_checksum, updated_at) '
             . 'SELECT entry.topic, entry.aliases, entry.retrieval_phrases, entry.topic_desc, entry.knowledge_class, '
             . 'entry.topic_desc_basic, entry.knowledge_class_basic, entry.tags, entry.category, '
             . "'factory', entry.catalog_version, entry.row_sha256, CURRENT_TIMESTAMP "
-            . 'FROM public.oghma_catalog_entries entry '
-            . "JOIN public.oghma_catalogs catalog ON catalog.catalog_version = entry.catalog_version AND catalog.state = 'active' "
-            . 'WHERE NOT EXISTS (SELECT 1 FROM public.oghma current_row WHERE current_row.topic = entry.topic) '
-            . "AND NOT EXISTS (SELECT 1 FROM public.oghma_factory_overrides hidden WHERE hidden.topic = entry.topic AND hidden.action = 'hide')"
+            . 'FROM ' . $this->schema . '.oghma_catalog_entries entry '
+            . "JOIN {$this->schema}.oghma_catalogs catalog ON catalog.catalog_version = entry.catalog_version AND catalog.state = 'active' "
+            . 'WHERE NOT EXISTS (SELECT 1 FROM ' . $this->schema . '.oghma current_row WHERE current_row.topic = entry.topic) '
+            . "AND NOT EXISTS (SELECT 1 FROM {$this->schema}.oghma_factory_overrides hidden WHERE hidden.topic = entry.topic AND hidden.action = 'hide')"
             . $topicFilter
         );
         if ($restored > 0) {
             $topicVectorFilter = $topic === null ? '' : ' AND topic = ' . $this->literal($topic);
             $this->execute(
-                "UPDATE public.oghma SET native_vector = "
+                "UPDATE {$this->schema}.oghma SET native_vector = "
                 . "setweight(to_tsvector('simple', coalesce(topic, '')), 'A') "
                 . "|| setweight(to_tsvector('simple', coalesce(aliases, '')), 'A') "
                 . "|| setweight(to_tsvector(coalesce(topic_desc, '')), 'B') "
@@ -369,12 +372,14 @@ final class ChimOghmaCatalogManager
 
     private function transaction(callable $callback): void
     {
-        $this->execute('BEGIN');
+        // Snapshot upgrades participate in the restore transaction; never commit it here.
+        $nested = $this->schema !== 'public';
+        $this->execute($nested ? 'SAVEPOINT oghma_snapshot_upgrade' : 'BEGIN');
         try {
             $callback();
-            $this->execute('COMMIT');
+            $this->execute($nested ? 'RELEASE SAVEPOINT oghma_snapshot_upgrade' : 'COMMIT');
         } catch (Throwable $error) {
-            try {$this->db->execQuery('ROLLBACK');} catch (Throwable) {}
+            try {$this->db->execQuery($nested ? 'ROLLBACK TO SAVEPOINT oghma_snapshot_upgrade' : 'ROLLBACK');} catch (Throwable) {}
             throw $error;
         }
     }
