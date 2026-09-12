@@ -69,3 +69,8 @@
 - Automatic saves and rollback failures must never pause mod processing. The rollback journal is diagnostic only; legacy pending markers and unreadable journals must not block requests, workers or cleanup. Keep the existing barrier for explicit manual playthrough switching separate from automatic saves.
 - Failed capture skips pruning for that request while normal request processing continues. A later pruning failure may be partial: keep its recovery copy pinned, report the failure, and continue processing. A new attempt captures current progress again rather than reusing a copy from before intervening gameplay writes.
 - `X-Playthrough-Save` carries fixed versioned operation IDs/statuses to the plugin's existing HTTP path. Keep all three products' notification wording aligned, deduplicate repeated notices, and display them through the game HUD after loading. Preserve each product's existing day threshold and saved preferences.
+
+### CHIM interaction switch
+
+- `lib/chim_interaction.php` separates passive Skyrim observations from AI triggers. Off must keep real event recording and load/quest synchronization working; bored and CHIM input must be rejected before synthetic event logging.
+- The global switch lives in `conf/chim_interaction/state.json`, outside saved gameplay and log cleanup. `responselog.interaction_generation` rejects output from requests invalidated by Off/On; never replay that backlog.

@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/chim_interaction.php';
 require_once __DIR__ . '/playthrough_runtime.php';
 require_once("logger.php");
 
@@ -129,6 +130,11 @@ class sql
 
     public function insert($table, $data)
     {
+        if ($table === 'responselog' && chimInteractionIsGameOutput((string)($data['action'] ?? ''))
+            && !chimInteractionAllowed()) return false;
+        if ($table === 'responselog') $data['interaction_generation'] = $GLOBALS['chim_interaction_generation'];
+        if ($table === 'eventlog' && !empty($GLOBALS['chim_interaction_generated'])
+            && !chimInteractionAllowed()) return false;
         $startTime = microtime(true);
         $this->re_connect();
         $i=0;
@@ -161,6 +167,11 @@ class sql
 
     public function insertReturningId($table, $data, $idColumn = 'id')
     {
+        if ($table === 'responselog' && chimInteractionIsGameOutput((string)($data['action'] ?? ''))
+            && !chimInteractionAllowed()) return false;
+        if ($table === 'responselog') $data['interaction_generation'] = $GLOBALS['chim_interaction_generation'];
+        if ($table === 'eventlog' && !empty($GLOBALS['chim_interaction_generated'])
+            && !chimInteractionAllowed()) return false;
         $startTime = microtime(true);
         $this->re_connect();
 

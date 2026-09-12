@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/chim_interaction.php';
 
 require_once(__DIR__ . DIRECTORY_SEPARATOR . "settings.php");
 
@@ -53,6 +54,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
         }
 
         $requiredVersions = [
+            'responselog_interaction' => 20260912001,
             'general_settings' => 20260720002,
             'core_stt_connector' => 20260502002,
             'core_itt_connector' => 20260502002,
@@ -68,7 +70,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             $versionRows = $db->fetchAll(
                 "SELECT tablename, version
                  FROM public.database_versioning
-                 WHERE tablename IN ('general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog')"
+                 WHERE tablename IN ('responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog')"
             );
         } catch (\Throwable $e) {
             $decision = true;

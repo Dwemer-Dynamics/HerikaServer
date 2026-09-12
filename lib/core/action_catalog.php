@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../chim_interaction.php';
 
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'game_plugins.php');
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'npc_master.class.php');
@@ -3785,6 +3786,7 @@ function herikaActionCatalogLogScriptProxyInfoAction($codeName, $context, $row)
 
 function herikaActionCatalogRunScriptProxyProgram($program, $context)
 {
+    if (!chimInteractionAllowed()) return false;
     if (!is_array($program) || count($program) === 0) {
         return false;
     }
@@ -3808,6 +3810,7 @@ function herikaActionCatalogRunScriptProxyProgram($program, $context)
 
 function herikaActionCatalogExecuteScriptProxyAction($action)
 {
+    if (!chimInteractionAllowed()) return false;
     if (!herikaActionCatalogDbReady()) {
         return false;
     }

@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . '/lib/chim_interaction.php';
+chimInteractionRequire();
 // Dispatch only actions previously validated and stored by the Director worker.
 ini_set('display_errors', '0');
 require_once __DIR__ . '/lib/runtime_bootstrap.php';

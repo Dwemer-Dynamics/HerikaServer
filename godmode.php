@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . '/lib/chim_interaction.php';
+chimInteractionRequire();
 // Forward the exact off-stage request to the same authored-scene worker as Director mode.
 ignore_user_abort(true);
 $receivedData = base64_decode((string)($_GET['DATA'] ?? ''), true);

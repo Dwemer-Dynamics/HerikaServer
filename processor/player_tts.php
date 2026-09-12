@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . '/../lib/chim_interaction.php';
+chimInteractionRequire();
 
 $playerTtsSourceText = function_exists('chimResolvePlayerTtsSourceText')
     ? chimResolvePlayerTtsSourceText($gameRequest[3] ?? '')

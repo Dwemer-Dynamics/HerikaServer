@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/chim_interaction.php';
 
 require_once(__DIR__."/utils.php");
 // used for openai_token_count table
@@ -902,6 +903,12 @@ function DataDequeue($timestamp = 0)
         $finalData[] = $row;
     }
 
+    $interactionAllowed = chimInteractionAllowed();
+    $generation = $GLOBALS['chim_interaction_generation'];
+    $finalData = array_values(array_filter($finalData, static function ($row) use ($interactionAllowed, $generation) {
+        if (!chimInteractionIsGameOutput((string)($row['action'] ?? ''))) return true;
+        return $interactionAllowed && (int)($row['interaction_generation'] ?? 0) === $generation;
+    }));
     return $finalData;
 
 }
@@ -5854,6 +5861,7 @@ function call_llm() {
 }
 
 function call_llm_internal() {
+    chimInteractionRequire();
     global $contextData, $gameRequest, $receivedData, $startTime, $db;
     global $ERROR_TRIGGERED, $talkedSoFar, $alreadysent, $FUNCTIONS_ARE_ENABLED;
     global $overrideParameters, $request;
@@ -5878,6 +5886,10 @@ function call_llm_internal() {
         $connectionHandler,
         &$connectionOpened
     ) {
+        if (!chimInteractionAllowed()) {
+            if ($connectionOpened) $connectionHandler->close();
+            exit;
+        }
         $supersedingInput = chimFindSupersedingUserInput(
             $db,
             $gameRequest[1] ?? '',

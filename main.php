@@ -1,4 +1,8 @@
 <?php
+require_once __DIR__ . '/lib/chim_interaction.php';
+$interactionData = base64_decode((string)($_GET['DATA'] ?? ''), true);
+$interactionType = strtolower(explode('|', (string)$interactionData, 2)[0]);
+if (chimInteractionIsTrigger($interactionType)) chimInteractionRequire();
 require_once __DIR__ . "/lib/playthrough_guard.php";
 pgr_http_preflight("main");
 
@@ -137,6 +141,7 @@ MAIN FLOW
 
 $gameRequest = explode("|", $receivedData);
 $GLOBALS["gameRequest"] = &$gameRequest;
+if (chimInteractionIsTrigger($gameRequest[0])) chimInteractionRequire();
 unset($GLOBALS["CHIM_TURN_PEOPLE_SNAPSHOT"]);
 unset($GLOBALS["CHIM_CHAT_SHORTCUT_ROUTED"]);
 $requestRoutingSnapshot = chimDecodePlayerRoutingSnapshotField($gameRequest[4] ?? "");
@@ -1125,6 +1130,14 @@ requireFilesRecursively(__DIR__.DIRECTORY_SEPARATOR."ext".DIRECTORY_SEPARATOR,"p
 // Most called events: 'request,'infonpc','infonpc_close'.
 
 require(__DIR__.DIRECTORY_SEPARATOR."processor".DIRECTORY_SEPARATOR."comm.php");
+// Communication handlers still record quests, loads and vanilla dialogue while interaction is Off.
+if (!chimInteractionAllowed()) {
+    if (!$MUST_END && empty($GLOBALS['chim_interaction_observed']) && !chimInteractionIsTrigger($gameRequest[0])) {
+        logEvent($gameRequest);
+    }
+    terminate();
+}
+
 
 
 if (in_array($gameRequest[0],["rechat","narration"]) ) {
@@ -1530,6 +1543,8 @@ if ($EXECUTION_MODE=="INJECTION_LOG") {
     terminate();
 
 }
+
+chimInteractionRequire();
 
 // What is this for?
 if (in_array($gameRequest[0], ["continue", "continue_group"], true) && empty($GLOBALS["RECHAT_PREVIOUS_SPEAKER"])) {
