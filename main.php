@@ -263,6 +263,8 @@ if (in_array($gameRequest[0],["addnpc"])) {
 if (($gameRequest[0]=="playerinfo")||(($gameRequest[0]=="newgame"))) {
     sleep(1);   // Give time to populate data
 
+    chimMaybeSyncPlayerName(chimExtractPlayerNameFromGamePayload($gameRequest[3] ?? ''), true);
+
     // Load/newgame is a hard scene boundary. Rolemaster scene notes are transient
     // director state; do not let them bleed across save/load into normal chat.
     try {
@@ -989,9 +991,7 @@ if (in_array($gameRequest[0],["info","infonpc","infonpc_close","infoloc","infoit
 
 // Check if the gameRequest matches specific types
 if (in_array($gameRequest[0], ["playerinfo", "newgame"])) {
-    // NOTE: Automatic player name detection from game is disabled
-    // Player name is now managed through Player Management UI or quickstart menu
-    // This was formerly: Update player name from playerinfo event
+    // Player identity was synced at the load boundary above.
     logEvent($gameRequest);
     terminate();
 }
