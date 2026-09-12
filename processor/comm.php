@@ -1,4 +1,6 @@
 <?php
+require_once $GLOBALS['ENGINE_PATH'] . '/lib/chim_interaction.php';
+if (chimInteractionIsTrigger($gameRequest[0] ?? '')) chimInteractionRequire();
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/dynamic_update_util.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/utils_game_timestamp.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/playthrough_autosave.php");
@@ -93,6 +95,7 @@ if (!function_exists("emitPlayerMenuScriptQueueLine")) {
             return;
         }
 
+        chimInteractionRequire();
         echo "Player|ScriptQueue|{$subtitle}//__player_menu_tts///1.0\r\n";
         if (ob_get_level()) {
             @ob_flush();

@@ -1,4 +1,5 @@
-<?php 
+<?php
+require_once __DIR__ . '/../lib/chim_interaction.php';
 
 @ob_end_clean();
 
@@ -33,6 +34,7 @@ requireFilesRecursivelyByPattern($GLOBALS["ENGINE_ROOT"]."/service/processors/",
 
 // Helper function to execute task in forked process
 function executeTaskAsync($taskname, $task) {
+    if (!in_array($taskname, ['retention', 'player2health'], true) && !chimInteractionAllowed()) return 0;
     $pid = pcntl_fork();
     
     if ($pid == -1) {
@@ -40,6 +42,7 @@ function executeTaskAsync($taskname, $task) {
         Logger::error("Failed to fork process for task: $taskname");
         echo "Failed to fork process for task $taskname ".PHP_EOL;
     } else if ($pid == 0) {
+        if (!in_array($taskname, ['retention', 'player2health'], true)) chimInteractionRequire();
         // Child process - execute the task
         echo "[CHILD-$taskname] Starting task execution".PHP_EOL;
         

@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/chim_interaction.php';
 
 define("_MINIMAL_DISTANCE_TO_BE_THE_SAME", 0.0);
 define("_MAXIMAL_DISTANCE_TO_BE_RELATED", 0.8);
@@ -1316,6 +1317,7 @@ function unmoodSentence($sentence) {
 
 function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
 {
+    chimInteractionRequire();
     global $db, $startTime, $forceMood, $staticMood, $talkedSoFar, $FORCED_STOP, $TRANSFORMER_FUNCTION,$receivedData;
 
     $inlineNarrationMode = getInlineNarrationMode();
@@ -2034,6 +2036,7 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
 
                 $volumeBoost = 1.0;
 
+                chimInteractionRequire();
                 // Output here with volumeBoost appended
                 echo "{$outBuffer["actor"]}|ScriptQueue|$responseForSubtitles/{$GLOBALS["SCRIPTLINE_EXPRESSION"]}/{$GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]}/{$GLOBALS["SCRIPTLINE_ANIMATION"]}/$responseTextPhonetic/$volumeBoost/{$GLOBALS["SCRIPTLINE_RECHAT_TARGET"]}/{$currentUtteranceId}\r\n";
 
@@ -5547,6 +5550,8 @@ function chimGenerateUtteranceId()
 
 function logEvent($dataArray,$forcePeople='')
 {
+    if (!empty($GLOBALS['chim_interaction_generated']) && !chimInteractionAllowed()) return;
+    $GLOBALS['chim_interaction_observed'] = true;
     global $db;
 
     if (!isset($GLOBALS["CACHE_PEOPLE_LIMITED"])) {

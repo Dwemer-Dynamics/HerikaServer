@@ -8349,6 +8349,12 @@ if ($checkVersion("core_tts_pronunciation") < 20260901002) {
     }
 }
 
+if ($checkVersion('responselog_interaction') < 20260912001) {
+    if ($GLOBALS['db']->query('ALTER TABLE public.responselog ADD COLUMN IF NOT EXISTS interaction_generation bigint')) {
+        $updateVersion('responselog_interaction', 20260912001);
+    }
+}
+
 Logger::info(__FILE__." update file processed");
 
 //----------------------------------------------------
