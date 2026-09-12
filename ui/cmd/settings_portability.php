@@ -20,7 +20,6 @@ const CHIM_PORTABLE_MAX_BYTES = 1048576;
 function chimPortablePlayerFields(): array
 {
     return [
-        'player_name' => 'string',
         'appearance' => 'string',
         'bio' => 'string',
         'bio_known_by_all' => 'boolean_true_false',

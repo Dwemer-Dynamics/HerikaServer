@@ -39,10 +39,7 @@ $saveMessage = '';
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_player'])) {
     try {
-        // Save player name
-        if (isset($_POST['player_name'])) {
-            $player->set('player_name', $_POST['player_name']);
-        }
+        // Player name comes from game events; form submissions must not overwrite it.
         // Save player info
         if (isset($_POST['appearance'])) {
             $player->set('appearance', $_POST['appearance']);
@@ -78,13 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_player'])) {
         $player->set('tts_elevenlabs_use_speaker_boost', trim(strval($_POST['tts_elevenlabs_use_speaker_boost'] ?? '')));
         $player->set('tts_elevenlabs_v3_audio_tags', trim(strval($_POST['tts_elevenlabs_v3_audio_tags'] ?? '')));
         
-        // Save any editable stats if provided
-        foreach ($_POST as $key => $value) {
-            if (strpos($key, 'stat_') === 0) {
-                $statKey = substr($key, 5); // Remove 'stat_' prefix
-                $player->set($statKey, $value);
-            }
-        }
+        // Only the explicit settings above are editable; game data must not be posted as stat_* fields.
         
         $saveSuccess = true;
         $saveMessage = 'Player settings saved successfully!';
@@ -1184,8 +1175,8 @@ if (!$isEmbed) {
             <div class="content-section">
                 <h2>🏷️ Player Information</h2>
                 <label for="player_name">Player Name</label>
-                <input type="text" id="player_name" name="player_name" value="<?php echo htmlspecialchars($playerName); ?>">
-                <span class="hint">Your character's name.</span>
+                <input type="text" id="player_name" value="<?php echo htmlspecialchars(chimNormalizeDetectedPlayerName($playerName) ?? ''); ?>" placeholder="Waiting for game" readonly aria-describedby="player-name-hint">
+                <span class="hint" id="player-name-hint"><?php echo chimNormalizeDetectedPlayerName($playerName) !== null ? 'Synced from your Skyrim character.' : 'Load your game to detect your character’s name.'; ?></span>
             </div>
 
             <!-- Appearance Section -->
