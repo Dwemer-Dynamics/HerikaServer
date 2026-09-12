@@ -2097,7 +2097,10 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
 } elseif (strpos($gameRequest[0], "updateprofiles_batch_async") === 0) {
 
-    // Async batch processing for timer-based dynamic profile updates
+    // Automatic scheduling belongs to the server; only explicit manual batches queue work.
+    if ($gameRequest[0] !== 'updateprofiles_batch_async_manual') terminate();
+
+    // Explicit manual profile updates
     // Format: updateprofiles_batch_async|timestamp|gamestamp|NPC1,NPC2,NPC3,NPC4
 
     if (!isset($gameRequest[3]) || empty($gameRequest[3])) {

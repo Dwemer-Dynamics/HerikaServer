@@ -8361,6 +8361,11 @@ Logger::info(__FILE__." update file processed");
         
 Logger::info(__FILE__." update file processed. This file has ".__LINE__." lines.");
 
+// Install durable event accounting before refreshing the snapshot schema.
+if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_profile_scheduler.sql')) === false) {
+    throw new RuntimeException('Dynamic profile migration failed.');
+}
+
 // Keep the installed snapshot functions and pgAdmin comments aligned with the current table policy.
 require_once dirname(__DIR__) . '/lib/playthrough_schema.php';
 require_once dirname(__DIR__) . '/lib/playthrough_preferences.php';

@@ -160,6 +160,9 @@ BEGIN
                 WHEN item.expression IS NOT NULL THEN ' DEFAULT ' || item.expression ELSE '' END;
             EXECUTE format('ALTER TABLE %I.%I ADD COLUMN %I %s%s%s', stage_schema, table_name, item.attname,
                 format_type(item.atttypid, item.atttypmod), default_sql, CASE WHEN item.attnotnull THEN ' NOT NULL' ELSE '' END);
+            IF table_name='eventlog' AND item.attname='dynamic_profile_pending' THEN
+                EXECUTE format('UPDATE %I.eventlog SET dynamic_profile_pending=false',stage_schema);
+            END IF;
         END LOOP;
     END LOOP;
     IF EXISTS (
@@ -210,4 +213,4 @@ END;
 $$ LANGUAGE plpgsql SET lock_timeout = '10s';
 
 CREATE OR REPLACE FUNCTION chim_meta.playthrough_api_version()
-RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 4';
+RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 5';

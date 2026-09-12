@@ -220,6 +220,17 @@ function pgr_http_preflight(string $endpoint): void {
             pgr_notice(['id'=>str_repeat('0',32)],'failed');
         }
     }
+    // Profile scheduling uses accepted live traffic, never a historical MAX timestamp.
+    if ($incoming > 0 && $event !== '' && !str_starts_with($event, 'updateprofile')) {
+        require_once __DIR__ . '/dynamic_profile_scheduler.php';
+        ptr_runtime_enter();
+        $profileClockConn = ptp_connect();
+        if ($profileClockConn) {
+            try { dps_clock($profileClockConn, $incoming, $eligible); }
+            catch (Throwable $error) { error_log('Dynamic Profiles clock: '.$error->getMessage()); }
+            finally { pg_close($profileClockConn); }
+        }
+    }
     // Replay completed outcomes on existing traffic without using the journal as a processing gate.
     if (empty($GLOBALS['pgr_operation']) && empty($GLOBALS['pgr_skip_rollback']) && ($state['phase'] ?? '') === 'complete') {
         $generation = trim((string)@file_get_contents(dirname(__DIR__) . '/log/playthrough_runtime/generation'));
