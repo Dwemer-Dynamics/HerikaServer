@@ -75,13 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_player'])) {
         $player->set('tts_elevenlabs_use_speaker_boost', trim(strval($_POST['tts_elevenlabs_use_speaker_boost'] ?? '')));
         $player->set('tts_elevenlabs_v3_audio_tags', trim(strval($_POST['tts_elevenlabs_v3_audio_tags'] ?? '')));
         
-        // Save any editable stats if provided
-        foreach ($_POST as $key => $value) {
-            if (strpos($key, 'stat_') === 0) {
-                $statKey = substr($key, 5); // Remove 'stat_' prefix
-                $player->set($statKey, $value);
-            }
-        }
+        // Only the explicit settings above are editable; game data must not be posted as stat_* fields.
         
         $saveSuccess = true;
         $saveMessage = 'Player settings saved successfully!';
