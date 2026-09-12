@@ -74,3 +74,11 @@
 
 - `lib/chim_interaction.php` separates passive Skyrim observations from AI triggers. Off must keep real event recording and load/quest synchronization working; bored and CHIM input must be rejected before synthetic event logging.
 - The global switch lives in `conf/chim_interaction/state.json`, outside saved gameplay and log cleanup. `responselog.interaction_generation` rejects output from requests invalidated by Off/On; never replay that backlog.
+
+### Game-time dynamic profiles
+
+`lib/dynamic_profile_scheduler.php` owns automatic scheduling. Profile metadata sets `DYNAMIC_PROFILE_INTERVAL_DAYS` (default 1), `DYNAMIC_PROFILE_MIN_EVENTS` (30), and `DYNAMIC_PROFILE_COOLDOWN_MINUTES` (5 real minutes per NPC). All three conditions must pass. Narrator settings use the same keys in `core_narrator`.
+
+`DYNAMIC_PROFILE_CLOCK` and `DYNAMIC_PROFILE_STATE_*` in `conf_opts` are playthrough data, as are explicit manual requests under `DYNAMIC_PROFILE_MANUAL_*`. Reusable profile policy stays global. Eventlog's `dynamic_profile_pending` flag lets the worker account delivered, relevant events before age cleanup; old restored rows start accounted. Combat barks remain context but do not count toward the trigger.
+
+The worker visits all known eligible NPCs, accounts at most 200 events per pass, and generates for at most one NPC per pass. It respects profile/NPC disables, locks, selected fields and the interaction switch. Failed attempts consume cooldown only. Generated fields, recovery history and progress commit together after checking the timeline and current profile. Legacy client timer batches are ignored; manual actions use the explicit manual route.

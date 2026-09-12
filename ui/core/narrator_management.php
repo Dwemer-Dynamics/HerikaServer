@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . '/tmpl/dynamic_profile_schedule.php';
 
 $enginePath = __DIR__ . DIRECTORY_SEPARATOR . "../../";
 
@@ -258,6 +259,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_narrator'])) {
             $narrator->set('quest_comment_cooldown', (string)$cooldown);
         }
         
+        foreach (dps_policy((array)($_POST['dynamic_schedule'] ?? [])) as $key=>$value) $narrator->set($key,(string)$value);
         // Save dynamic profile settings
         $narrator->set('dynamic_profile', isset($_POST['dynamic_profile']) && $_POST['dynamic_profile'] === '1' ? '1' : '0');
         
@@ -1929,9 +1931,10 @@ if (!$isEmbed) {
                         </div>
                         <span class="toggle-label">Enable Dynamic Profile</span>
                     </label>
-                    <span class="hint">Allow systems to evolve the narrator profile based on gameplay events. Triggered by MCM Dynamic Profile Timer.</span>
+                    <span class="hint">Allow systems to evolve the narrator profile based on gameplay events. Configured here and processed automatically by the server.</span>
                     
-                    <label class="field-selection-label">Field Selection (choose 1-3)</label>
+                    <?php dps_render_controls($narrator->getAll(), true); ?>
+                    <label class="field-selection-label">Fields to update</label>
                     <span class="hint">Select which fields should be dynamically updated:</span>
                     
                     <div class="field-chips">

@@ -142,7 +142,7 @@ function ptr_identity($conn): string {
 // Recheck at execution too: keep recent writes, unfinished replies and the newest
 // event of each type. Age alone does not prove that history is no longer useful.
 function ptr_event_guard(): string {
-    return "t.gamets > 0 AND t.gamets < $1 AND t.localts > 0 AND t.localts < $2
+    return "COALESCE((to_jsonb(t)->>'dynamic_profile_pending')::boolean,false)=false AND t.gamets > 0 AND t.gamets < $1 AND t.localts > 0 AND t.localts < $2
         AND t.type <> '' AND t.gamets < (SELECT MAX(newer.gamets) FROM public.eventlog newer WHERE newer.type=t.type)
         AND LOWER(COALESCE(to_jsonb(t)->>'delivery_state','')) IN ('','spoken','cancelled','interrupted')";
 }

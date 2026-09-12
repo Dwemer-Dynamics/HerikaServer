@@ -212,33 +212,24 @@ final class CoreRequestStabilityTest extends TestCase
         $this->assertFalse(zonosIsActive());
     }
 
-    public function testDynamicProfileBatchIsQueuedAndConsumedOnce(): void
+    public function testLegacyDynamicProfileTimerCannotQueueWork(): void
     {
         $db = new DynamicProfileQueueTestDb();
         $GLOBALS['db'] = $db;
-
-        $queueId = queueDynamicProfileBatch([' Lydia ', 'Lydia', 'Aela'], ['updateprofiles_batch_async', '1', '2']);
-        $processed = [];
-        $result = triggerImmediateProfileProcessing(static function (string $npcName, array $gameRequest) use (&$processed): bool {
-            $processed[] = [$npcName, $gameRequest[0]];
-            return true;
-        });
-
-        $this->assertArrayNotHasKey($queueId, $db->rows);
-        $this->assertSame([['Lydia', 'updateprofiles_batch_async'], ['Aela', 'updateprofiles_batch_async']], $processed);
-        $this->assertSame(['locked' => true, 'jobs' => 1, 'npcs' => 2, 'updated' => 2], $result);
+        $result = queueDynamicProfileBatch(['Lydia'], ['updateprofiles_batch_async', '1', '2']);
+        $this->assertSame('server-managed', $result);
+        $this->assertSame([], $db->rows);
     }
 
-    public function testDynamicProfileQueueDoesNothingWhenAnotherWorkerOwnsLock(): void
+    public function testDynamicProfileRequiresAllThresholdsAndAppliesRetryCooldown(): void
     {
-        $db = new DynamicProfileQueueTestDb();
-        $GLOBALS['db'] = $db;
-        $queueId = queueDynamicProfileBatch(['Lydia'], ['updateprofiles_batch_async', '1', '2']);
-        $db->lockAvailable = false;
-
-        $result = triggerImmediateProfileProcessing(static fn(): bool => true);
-
-        $this->assertArrayHasKey($queueId, $db->rows);
-        $this->assertSame(['locked' => false, 'jobs' => 0, 'npcs' => 0, 'updated' => 0], $result);
+        require_once __DIR__ . '/../../lib/dynamic_profile_scheduler.php';
+        $policy = dps_policy([]);
+        $state = ['attempt'=>1000, 'last_game'=>10000000, 'total'=>30, 'consumed'=>0];
+        $this->assertFalse(dps_due($state, $policy, 20000000, 1299));
+        $this->assertTrue(dps_due($state, $policy, 20000000, 1300));
+        $this->assertFalse(dps_due($state, $policy, 19999999, 1300));
+        $state['total'] = 29;
+        $this->assertFalse(dps_due($state, $policy, 20000000, 1300));
     }
 }

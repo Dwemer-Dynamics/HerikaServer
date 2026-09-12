@@ -100,6 +100,7 @@ function chimProfileManagerDetail(CoreProfile $profiles, int $id): array
     foreach (chimPrismaProfileMetadataCatalog() as $section => $fields) {
         $items = [];
         foreach ($fields as $field) {
+            if (!empty($field['web_only'])) continue;
             $name = $field['name'];
             $field['label'] = chimProfileManagerLabel($name);
             $field['value'] = $metadata[$name] ?? ($field['type'] === 'boolean' ? false : '');
@@ -123,7 +124,7 @@ function chimProfileManagerDetail(CoreProfile $profiles, int $id): array
     }
     $overrideSections = [];
     foreach (chimGetOverrideableGeneralSettingsCatalog() as $name => $definition) {
-        if (isset($reservedOverrideKeys[$name])) continue;
+        if (isset($reservedOverrideKeys[$name]) || str_starts_with($name,'DYNAMIC_PROFILE_') || $name==='CONTEXT_HISTORY_DYNAMIC_PROFILE') continue;
         $category = trim((string)($definition['category'] ?? 'Other')) ?: 'Other';
         $field = [
             'name' => $name,
