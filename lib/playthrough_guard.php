@@ -183,6 +183,7 @@ function pgr_complete(bool $success = true): bool {
 // Inspect only routing/timestamps before bootstrap can write player data or start background work.
 function pgr_http_preflight(string $endpoint): void {
     if (PHP_SAPI === 'cli') return;
+    require_once __DIR__ . '/playthrough_switching.php';
     $meta = ptp_product()['meta'];
     $state = pgr_state();
     $event = ''; $incoming = 0;
@@ -211,6 +212,7 @@ function pgr_http_preflight(string $endpoint): void {
         ptr_runtime_enter();
         $conn = ptp_connect();
         if ($conn) {
+            pas_guard($conn, true);
             try { $previous = pgr_clock($conn); }
             catch (Throwable $error) { $previous = 0; $GLOBALS['pgr_skip_rollback'] = true; pgr_notice(['id'=>str_repeat('0',32)],'failed'); }
             finally { pg_close($conn); }
@@ -226,6 +228,7 @@ function pgr_http_preflight(string $endpoint): void {
         ptr_runtime_enter();
         $profileClockConn = ptp_connect();
         if ($profileClockConn) {
+            pas_guard($profileClockConn, true);
             try { dps_clock($profileClockConn, $incoming, $eligible); }
             catch (Throwable $error) { error_log('Dynamic Profiles clock: '.$error->getMessage()); }
             finally { pg_close($profileClockConn); }
