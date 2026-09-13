@@ -196,11 +196,13 @@ if (!function_exists('chimRuntimeBootstrap')) {
         $confPath = $enginePath . "conf" . DIRECTORY_SEPARATOR . "conf.php";
         $confSamplePath = $enginePath . "conf" . DIRECTORY_SEPARATOR . "conf.sample.php";
 
+        // Preflight may have included these files in a private scope. Load them here
+        // so their variables can be imported, with saved settings overriding defaults.
         if (file_exists($confSamplePath)) {
-            require_once($confSamplePath);
+            require($confSamplePath);
         }
         if (file_exists($confPath)) {
-            require_once($confPath);
+            require($confPath);
         }
 
         chimRuntimeImportConfigVariables(get_defined_vars());
