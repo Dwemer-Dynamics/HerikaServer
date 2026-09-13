@@ -19,6 +19,10 @@ try {
     if (!pas_enabled($conn)) $result = ['ok'=>true,'status'=>'off'];
     else $result = pas_handshake($conn, $input);
     echo json_encode($result, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
+} catch (PlaythroughSwitchBusyException $error) {
+    http_response_code(503);
+    header('Retry-After: 1');
+    echo json_encode(['ok'=>false,'status'=>'busy','message'=>'Another playthrough is still loading. Reload this save shortly.']);
 } catch (Throwable $error) {
     error_log('Automatic playthrough switch: ' . $error->getMessage());
     if (http_response_code() < 400) http_response_code(409);

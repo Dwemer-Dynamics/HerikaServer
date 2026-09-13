@@ -176,6 +176,9 @@ function pth_change($conn, string $action, array $input, bool $runtimeManaged = 
         } elseif (ptr_read($conn,'PLAYTHROUGH_AUTO_SWITCH',false) === true) {
             // Manual restoration invalidates any previously admitted game session.
             require_once __DIR__ . '/playthrough_switching.php';
+            // A deliberate manual restore becomes this character's destination for later loads.
+            $identity = pg_fetch_assoc(pth_query($conn, "SELECT value FROM public.core_player WHERE id='playthrough_id'"));
+            if (preg_match('/^[a-f0-9]{32}$/D', $identity['value'] ?? '')) pas_link($conn, $identity['value'], $id);
             pas_invalidate($conn);
         }
         ptr_write($conn,'PLAYTHROUGH_HOME_REVISION',bin2hex(random_bytes(16)));

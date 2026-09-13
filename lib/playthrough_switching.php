@@ -2,33 +2,48 @@
 require_once __DIR__ . '/playthrough_home.php';
 
 // Match frozen character metadata, never mutable display labels or approximate names.
-function pas_select(array $rows, string $character, string $name, int $gamets, bool $allowLegacy = true): ?array {
+function pas_select(array $rows, string $character, string $name, int $gamets, bool $allowLegacy = true, array $links = []): ?array {
+    if ($character !== '' && isset($links[$character])) {
+        foreach ($rows as $row) {
+            if ($row['id'] === $links[$character] && !empty($row['available']) && ($row['character_id'] ?? '') === $character) return $row;
+        }
+        throw new RuntimeException('The linked Playthrough Save is unavailable. Choose a Playthrough Save for this character.');
+    }
     $matches = array_values(array_filter($rows, static function ($row) use ($character, $name) {
         if (empty($row['available'])) return false;
         if ($character !== '') return ($row['character_id'] ?? '') === $character;
         return mb_strtolower(trim($row['player_name'] ?? ''), 'UTF-8') === mb_strtolower(trim($name), 'UTF-8');
     }));
     if (!$matches && $character !== '' && $allowLegacy) {
-        // A legacy archive may be associated once, only if the exact name is unique.
-        $legacy = array_values(array_filter($rows, static fn($row) => !empty($row['available'])
+        // Older saves have no character ID; rank their exact-name snapshots below.
+        $matches = array_values(array_filter($rows, static fn($row) => !empty($row['available'])
             && empty($row['character_id']) && mb_strtolower(trim($row['player_name'] ?? ''), 'UTF-8') === mb_strtolower(trim($name), 'UTF-8')));
-        return count($legacy) === 1 ? $legacy[0] : null;
     }
     if (!$matches) return null;
     if ($character === '') {
-        $identities = array_unique(array_column($matches, 'character_id'));
-        if (count($matches) > 1 && (count($identities) !== 1 || $identities[0] === '')) return null;
+        // Old Skyrim saves may lack our co-save ID; honor an existing unique name association.
+        $known = array_values(array_unique(array_filter(array_column($matches, 'character_id'), static fn($id) => isset($links[$id]))));
+        if (count($known) === 1) return pas_select($rows, $known[0], $name, $gamets, $allowLegacy, $links);
+        if (count($known) > 1) throw new RuntimeException('More than one character has this name. Choose its Playthrough Save.');
     }
     foreach ($matches as $row) if ($row['active']) return $row;
     usort($matches, static function ($a, $b) use ($gamets) {
-        $aBefore = $a['last_gamets'] <= $gamets; $bBefore = $b['last_gamets'] <= $gamets;
-        if ($aBefore !== $bBefore) return $aBefore ? -1 : 1;
+        $distance = abs($a['last_gamets'] - $gamets) <=> abs($b['last_gamets'] - $gamets);
+        if ($distance !== 0) return $distance;
         return ($b['last_gamets'] <=> $a['last_gamets']) ?: ($b['id'] <=> $a['id']);
     });
     return $matches[0];
 }
 
 function pas_enabled($conn): bool { return ptr_read($conn, 'PLAYTHROUGH_AUTO_SWITCH', false) === true; }
+
+// Character destinations are global metadata, never part of a restored gameplay snapshot.
+function pas_link($conn, string $character, int $profile): void {
+    $links = ptr_read($conn, 'PLAYTHROUGH_CHARACTER_LINKS', []);
+    foreach ($links as $other => $id) if ($id === $profile && $other !== $character) unset($links[$other]);
+    $links[$character] = $profile;
+    ptr_write($conn, 'PLAYTHROUGH_CHARACTER_LINKS', $links);
+}
 
 // Keep the load high-water mark when manual actions revoke a receipt.
 function pas_invalidate($conn): void {
@@ -76,11 +91,25 @@ function pas_bind($conn, array $session, int $profile): array {
     foreach (['playthrough_id'=>$character, 'player_name'=>$session['player_name']] as $key=>$value) {
         pth_query($conn, 'INSERT INTO public.core_player(id,value) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET value=EXCLUDED.value', [$key,$value]);
     }
+    // Replace only the initial placeholder name; keep custom names and existing saves intact.
+    $meta = ptp_product()['meta'];
+    $row = pg_fetch_assoc(pth_query($conn, "SELECT name FROM {$meta}.playthrough_profiles WHERE id=$1 FOR UPDATE", [$profile]));
+    if ($row && strtolower($row['name']) === 'default') {
+        $name = $session['player_name'];
+        $suffix = 2;
+        while (pg_num_rows(pth_query($conn, "SELECT id FROM {$meta}.playthrough_profiles WHERE id<>$1 AND lower(name)=lower($2)", [$profile,$name]))) {
+            $name = $session['player_name'] . ' (' . $suffix++ . ')';
+        }
+        // The default was protected from deletion by its name; retain that protection after renaming.
+        pth_query($conn, "UPDATE {$meta}.playthrough_profiles SET name=$1,retention_pinned=true WHERE id=$2", [$name,$profile]);
+        ptr_write($conn, 'PLAYTHROUGH_HOME_REVISION', bin2hex(random_bytes(16)));
+    }
     $session['character_id'] = $character;
     $session['profile_id'] = $profile;
     $session['status'] = 'ready';
     $session['token'] = bin2hex(random_bytes(16));
-    $session['message'] = 'Playthrough ready. Previous progress was kept.';
+    $session['message'] = '';
+    pas_link($conn, $character, $profile);
     ptr_write($conn, 'PLAYTHROUGH_SESSION', $session);
     return $session;
 }
@@ -121,7 +150,7 @@ function pas_handshake($conn, array $input): array {
     if (isset($input['new_game']) && (!is_bool($input['new_game']) || ($input['new_game'] && $input['character_id'] === ''))) throw new InvalidArgumentException('Invalid new-character identity.');
     $name = trim($input['player_name']);
     if ($name === '' || !preg_match('//u', $name) || mb_strlen($name) > 80 || preg_match('/[\x00-\x1f\x7f]/u', $name)
-        || in_array(mb_strtolower($name), ['player','prisoner','unknown','unknown player','null','none','the narrator'], true)) {
+        || (empty($input['new_game']) && in_array(mb_strtolower($name), ['player','prisoner','unknown','unknown player','null','none','the narrator'], true))) {
         return ['ok'=>false,'status'=>'pending','message'=>'Waiting for your Skyrim character name. Reload the save after naming your character.'];
     }
     $runtime = ptr_runtime_begin_switch(30.0, $conn);
@@ -144,16 +173,31 @@ function pas_handshake($conn, array $input): array {
         ptr_write($conn, 'PLAYTHROUGH_SESSION', $session);
         $state = pth_state($conn);
         if (!$state['available']) return ['ok'=>false] + $session;
-        $target = pas_select($state['playthroughs'], $input['character_id'], $name, $input['gamets'], empty($input['new_game']));
-        if (!$target) return ['ok'=>false] + $session;
-        if ($target['active']) {
+        try {
+            $target = pas_select($state['playthroughs'], $input['character_id'], $name, $input['gamets'], empty($input['new_game']), ptr_read($conn, 'PLAYTHROUGH_CHARACTER_LINKS', []));
+        } catch (RuntimeException $error) {
+            $session['message'] = $error->getMessage();
+            ptr_write($conn, 'PLAYTHROUGH_SESSION', $session);
+            return ['ok'=>false] + $session;
+        }
+        if (!$target) {
+            // Reuse the transactional fresh-start path: preserve outgoing progress before clearing gameplay.
+            $newName = $name;
+            $suffix = 2;
+            while (pg_num_rows(pth_query($conn, 'SELECT id FROM ' . ptp_product()['meta'] . '.playthrough_profiles WHERE lower(name)=lower($1)', [$newName]))) {
+                $newName = $name . ' (' . $suffix++ . ')';
+            }
+            pth_change($conn, 'new', ['name'=>$newName, 'expected_token'=>$state['token'], '_session'=>$session], true);
+            $session = ptr_read($conn, 'PLAYTHROUGH_SESSION', []);
+            $session['message'] = 'Created playthrough for ' . $name . '. Previous playthrough saved.';
+        } elseif ($target['active']) {
             pth_query($conn, 'BEGIN');
             $session = pas_bind($conn, $session, $target['id']);
             pth_query($conn, 'COMMIT');
         } else {
             pth_change($conn, 'switch', ['profile_id'=>$target['id'], 'expected_token'=>$state['token'], '_session'=>$session], true);
             $session = ptr_read($conn, 'PLAYTHROUGH_SESSION', []);
-            $session['message'] = 'Switched to ' . $target['name'] . '. Previous playthrough saved.';
+            $session['message'] = 'Switched to ' . $target['name'] . ' playthrough. Previous playthrough saved.';
         }
         $ready = ptr_runtime_finish_switch($runtime);
         if (!$ready) {
