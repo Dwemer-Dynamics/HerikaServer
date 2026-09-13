@@ -203,7 +203,7 @@ $extdata = $npcMaster->getExtendedData($currentNpcData);
 $metadata = $npcMaster->getMetadata($currentNpcData);
 
 
-// Guardrail, if background_life_last_updated_ec exceeds 2, skip processing to avoid infinite loops or repeated errors
+// Guard, if background_life_last_updated_ec exceeds 2, skip processing to avoid infinite loops or repeated errors
 // background_life_last_updated_ec is incremented each time an error occurs during processing, and reset to 0 on successful completion.
 
 $backgroundLifeErrorCount = (int) ($extdata['background_life_last_updated_ec'] ?? 0);
@@ -227,7 +227,6 @@ $momentum = time();
 $gameRequest = ['inputtext', '0', $last_gamets, $npcName];
 $npcNameEsc = $db->escape($npcName);
 
-// Last action issued by the NPC (if any) in the last 24 in-game hours
 
 // Guard: Avoid running if game is paused.
 if (isset($extdata["background_life_last_run"]) && $extdata["background_life_last_run"] >= $GLOBALS["LAST_GAMETS_BGL"]) {
@@ -237,12 +236,30 @@ if (isset($extdata["background_life_last_run"]) && $extdata["background_life_las
     error_log("[BGL RUN] $npcName — background_life_last_run: {$extdata["background_life_last_run"]}, LAST_GAMETS_BGL: {$GLOBALS["LAST_GAMETS_BGL"]}");
 }
 
+// Last action issued by the NPC (if any) in the last 24 in-game hours
+
 $lastIssuedAction = $db->fetchOne(
     "SELECT gamets, action,fullcall FROM actions_issued
      WHERE actorname='$npcNameEsc' 
      and gamets is not null
      ORDER BY gamets DESC, ts ASC"
 );
+
+// Guard: SpreadRumors cooldown check
+
+$spreadRumorsCooldownGamets = 48 / GAMETS_TO_HOURS;
+$recentSpreadRumor = $db->fetchOne(
+    "SELECT gamets FROM actions_issued
+         WHERE actorname='$npcNameEsc'
+             AND action='SpreadRumors'
+             AND gamets > ($last_gamets - $spreadRumorsCooldownGamets)
+         ORDER BY gamets DESC, ts DESC
+         LIMIT 1"
+);
+$spreadRumorsAvailable = empty($recentSpreadRumor);
+if (!$spreadRumorsAvailable) {
+    error_log("[BGL RUN] $npcName — SpreadRumors is on cooldown for 48 in-game hours.");
+}
 
 if ($lastIssuedAction["gamets"] && ($lastIssuedAction["action"] == "TravelTo" || $lastIssuedAction["action"] == "MoveTo")) {
     $npcIsTravelling = true;
@@ -291,6 +308,8 @@ if (empty($lastInteractionRow['gamets'])) {
 $lastItGamets = (int) $lastInteractionRow['gamets'];
 
 $npcNameEscDb = $db->escape($GLOBALS['HERIKA_NAME']);
+
+// Check if there are more than 10 journal notes since last interaction, and if so, update lastItGamets to the gamets of the last diary entry
 $diaryEntryRowsCheck = $db->fetchAll(
     "SELECT content, gamets, topic FROM diarylog
      WHERE people='$npcNameEscDb'
@@ -334,57 +353,45 @@ $daysPassed = round(($last_gamets - $lastItGamets) * GAMETS_TO_HOURS / 24, 2);
 $hoursPassed = round(($last_gamets - $lastItGamets) * GAMETS_TO_HOURS, 2);
 $history = "";
 
+$GUARD_TRAVELTO = true;
 
 // TravelTo Guard. 
 // Sometimes NPCs get stuck inside a building (probably locked doors?)
 // We must detect if last 2 actions were TravelTo or MoveTo, and if so, we can assume NPC is stuck and we should solve it
-// Exammple
-//"action","fullcall","actorname","ts","localts","gamets","original","rowid"
-//"TravelTo","TravelTo:Elysium Estate:I have successfully completed my business in Whiterun, having finalized wholesale agreements with Ysolda and liquidated gemstones and a Grand Soul Gem with Belethor. Now that the treasury has been bolstered and the supply lines secured, it is time to return to the estate to record these profits in the master ledger and report my success to Varek.","Orianne Marius","273604281978300","1787053128","198555825","backgroundaction","497"
-//"TravelTo","TravelTo:Elysium Estate:I have successfully completed my business in Whiterun, having finalized wholesale agreements with Ysolda and liquidated gemstones and a Grand Soul Gem with Belethor. Now that the treasury has been bolstered and the supply lines secured, it is time to return to the estate to record these profits in the master ledger and report my success to Varek.","Orianne Marius","275230813533300","1787054759","203116385","backgroundaction","500"
-//"TravelTo","TravelTo:Elysium Estate:I have successfully completed my business in Whiterun, having finalized wholesale agreements with Ysolda and liquidated gemstones and a Grand Soul Gem with Belethor. Now that the treasury has been bolstered and the supply lines secured, it is time to return to the estate to record these profits in the master ledger and report my success to Varek.","Orianne Marius","282335400088300","1787061864","206665217","backgroundaction","510"
-// Exmaple 2
-//"action","fullcall","actorname","ts","localts","gamets","original","rowid"
-//"FindNPC","FindNPC:Orianne Marius","Ingesh the Miner","1787485589","1787485599","455147659","backgroundaction","1053"
-//"FindNPC","FindNPC:Orianne Marius","Ingesh the Miner","1787485580","1787485587","455147638","backgroundaction","1052"
-//"FindNPC","FindNPC:Orianne Marius","Ingesh the Miner","706053222187800","1787485578","455147617","backgroundaction","1051"
-//"MoveTo","MoveTo:Orianne Marius","Ingesh the Miner","706046609647600","1787485568","455132289","backgroundaction","1050"
-//"FindNPC","FindNPC:Orianne Marius","Ingesh the Miner","706036532583200","1787485559","455108865","backgroundaction","1049"
-//"MoveTo","MoveTo:Orianne Marius","Ingesh the Miner","706031002810800","1787485551","455096065","backgroundaction","1048"
-//"FindNPC","FindNPC:Orianne Marius","Ingesh the Miner","706021437690800","1787485542","455080993","backgroundaction","1047"
-//"MoveTo","MoveTo:Orianne Marius","Ingesh the Miner","706013937821600","1787485535","455063585","backgroundaction","1046
 
-$actionsRows = $db->fetchAll(
-    "SELECT action,actorname,gamets,fullcall FROM actions_issued
+if ($GUARD_TRAVELTO) {
+
+    $actionsRows = $db->fetchAll(
+        "SELECT action,actorname,gamets,fullcall FROM actions_issued
      WHERE actorname='$npcNameEscDb' 
        AND gamets > $lastItGamets
      ORDER BY gamets DESC, ts DESC
      LIMIT 10 OFFSET 0"
-);
+    );
 
-// Prepare the values used by the stuck checks.
+    // Prepare the values used by the stuck checks.
 // We only need the action type and the first argument after the action name.
 // Examples:
 //   TravelTo:Elysium Estate:...
 //   MoveTo:Orianne Marius
 //   FindNPC:Orianne Marius
-foreach ($actionsRows as &$row) {
-    $parts = explode(':', $row['fullcall'], 3);
-    $row['destination'] = $parts[1] ?? '';
+    foreach ($actionsRows as &$row) {
+        $parts = explode(':', $row['fullcall'], 3);
+        $row['destination'] = $parts[1] ?? '';
 
-    // TravelTo and MoveTo are considered the same family for the travel stuck check.
-    $row['action_stuck_check1'] = in_array($row['action'], ['TravelTo', 'MoveTo'], true)
-        ? 'TravelTo'
-        : '';
+        // TravelTo and MoveTo are considered the same family for the travel stuck check.
+        $row['action_stuck_check1'] = in_array($row['action'], ['TravelTo', 'MoveTo'], true)
+            ? 'TravelTo'
+            : '';
 
-    // MoveTo and FindNPC are considered the same family for the NPC-target stuck check.
-    $row['action_stuck_check2'] = in_array($row['action'], ['MoveTo', 'FindNPC'], true)
-        ? 'FindNPC'
-        : '';
-}
-unset($row);
+        // MoveTo and FindNPC are considered the same family for the NPC-target stuck check.
+        $row['action_stuck_check2'] = in_array($row['action'], ['MoveTo', 'FindNPC'], true)
+            ? 'FindNPC'
+            : '';
+    }
+    unset($row);
 
-// We deliberately require 3 consecutive actions now.
+    // We deliberately require 3 consecutive actions now.
 // This catches patterns such as:
 //   TravelTo -> MoveTo -> TravelTo
 //   TravelTo -> TravelTo -> TravelTo
@@ -393,76 +400,35 @@ unset($row);
 //
 // For the NPC-target check it also requires all 3 actions to point to the
 // exact same NPC, so different FindNPC/MoveTo targets do not trigger it.
-if ($actionsRows && sizeof($actionsRows) >= 3) {
+    if ($actionsRows && sizeof($actionsRows) >= 3) {
 
-    // ---------------------------------------------------------------------
-    // TravelTo / MoveTo stuck check
-    // ---------------------------------------------------------------------
-    $lastThreeTravelActions = array_slice($actionsRows, 0, 3);
+        // ---------------------------------------------------------------------
+        // TravelTo / MoveTo stuck check
+        // ---------------------------------------------------------------------
+        $lastThreeTravelActions = array_slice($actionsRows, 0, 3);
 
-    $allTravelActions = count(array_filter(
-        $lastThreeTravelActions,
-        fn($row) => $row['action_stuck_check1'] === 'TravelTo'
-    )) === 3;
+        $allTravelActions = count(array_filter(
+            $lastThreeTravelActions,
+            fn($row) => $row['action_stuck_check1'] === 'TravelTo'
+        )) === 3;
 
-    if ($allTravelActions) {
-        $sameDestination = (
-            $lastThreeTravelActions[0]['destination'] !== '' &&
-            $lastThreeTravelActions[0]['destination'] === $lastThreeTravelActions[1]['destination'] &&
-            $lastThreeTravelActions[1]['destination'] === $lastThreeTravelActions[2]['destination']
-        );
+        if ($allTravelActions) {
+            $sameDestination = (
+                $lastThreeTravelActions[0]['destination'] !== '' &&
+                $lastThreeTravelActions[0]['destination'] === $lastThreeTravelActions[1]['destination'] &&
+                $lastThreeTravelActions[1]['destination'] === $lastThreeTravelActions[2]['destination']
+            );
 
-        if ($sameDestination) {
-            $destination = $lastThreeTravelActions[0]['destination'];
+            if ($sameDestination) {
+                $destination = $lastThreeTravelActions[0]['destination'];
 
-            error_log("[BGL RUN] $npcNameEsc — last 3 actions were TravelTo/MoveTo to the same destination ({$destination}), assuming NPC is stuck. Teleport it near destination");
+                error_log("[BGL RUN] $npcNameEsc — last 3 actions were TravelTo/MoveTo to the same destination ({$destination}), assuming NPC is stuck. Teleport it near destination");
 
-            $candidateLocation = resolveTravelLocation($destination, $currentNpcData, $GLOBALS['db']);
-
-            if ($candidateLocation["sim"] > _LOCATION_RESOLVE_SIM_THRESHOLD && $candidateLocation["refs"] != "") {
-                // Extract first ref if any, e.g.
-                // [refs] => 0x0001bdf1:0x2101e6ec;0x0001bdf1:0x2101e6ec
-                $refs = explode(';', $candidateLocation['refs']);
-                $firstReferencePair = explode(":", $refs[0]);
-
-                $skyrimCmd = new SkyrimCommandBuilder();
-                $json = $skyrimCmd->ObjectReference->MoveTo(
-                    "0x{$currentNpcData['refid']}",
-                    "{$firstReferencePair[1]}"
-                );
-                $skyrimCmd->send(cmd: $json);
-
-                error_log("[BGL RUN] $npcNameEsc — Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
-
-                $db->insert('actions_issued', [
-                    'action' => 'TeleportTo',
-                    'fullcall' => "TeleportTo:{$candidateLocation['name']}:Teleporting to resolve stuck NPC",
-                    'actorname' => $npcName,
-                    'ts' => $last_ts,
-                    'gamets' => $last_gamets,
-                    'localts' => time(),
-                    'original' => 'backgroundaction',
-                ]);
-
-                die();
-            } else {
-                error_log("[BGL RUN] $npcNameEsc — Could not resolve a valid location for destination: $destination");
-            }
-        }
-
-        // If the last 3 actions are TravelTo/MoveTo but their destinations
-        // differ, fall back to the coordinate-history check.
-        if (isset($extdata['last_coords']) && is_array($extdata['last_coords'])) {
-            $coordsHistory = $extdata['last_coords'];
-            $recentCoords = array_slice($coordsHistory, -3);
-            $uniqueLocations = array_unique(array_column($recentCoords, 3));
-
-            if (count($uniqueLocations) === 1) {
-                error_log("[BGL RUN] $npcNameEsc — last 3 coordinates are the same location ({$uniqueLocations[0]}), assuming NPC is stuck. Teleporting to resolve.");
-
-                $candidateLocation = resolveTravelLocation($uniqueLocations[0], $currentNpcData, $GLOBALS['db']);
+                $candidateLocation = resolveTravelLocation($destination, $currentNpcData, $GLOBALS['db']);
 
                 if ($candidateLocation["sim"] > _LOCATION_RESOLVE_SIM_THRESHOLD && $candidateLocation["refs"] != "") {
+                    // Extract first ref if any, e.g.
+                    // [refs] => 0x0001bdf1:0x2101e6ec;0x0001bdf1:0x2101e6ec
                     $refs = explode(';', $candidateLocation['refs']);
                     $firstReferencePair = explode(":", $refs[0]);
 
@@ -487,76 +453,145 @@ if ($actionsRows && sizeof($actionsRows) >= 3) {
 
                     die();
                 } else {
-                    error_log("[BGL RUN] $npcNameEsc — Could not resolve a valid location for destination: {$uniqueLocations[0]}");
+                    error_log("[BGL RUN] $npcNameEsc — Could not resolve a valid location for destination: $destination");
+                }
+            }
+
+            // If the last 3 actions are TravelTo/MoveTo but their destinations
+            // differ, fall back to the coordinate-history check.
+            if (isset($extdata['last_coords']) && is_array($extdata['last_coords'])) {
+                $coordsHistory = $extdata['last_coords'];
+                $recentCoords = array_slice($coordsHistory, -3);
+                $uniqueLocations = array_unique(array_column($recentCoords, 3));
+
+                if (count($uniqueLocations) === 1) {
+                    error_log("[BGL RUN] $npcNameEsc — last 3 coordinates are the same location ({$uniqueLocations[0]}), assuming NPC is stuck. Teleporting to resolve.");
+
+                    $candidateLocation = resolveTravelLocation($uniqueLocations[0], $currentNpcData, $GLOBALS['db']);
+
+                    if ($candidateLocation["sim"] > _LOCATION_RESOLVE_SIM_THRESHOLD && $candidateLocation["refs"] != "") {
+                        $refs = explode(';', $candidateLocation['refs']);
+                        $firstReferencePair = explode(":", $refs[0]);
+
+                        $skyrimCmd = new SkyrimCommandBuilder();
+                        $json = $skyrimCmd->ObjectReference->MoveTo(
+                            "0x{$currentNpcData['refid']}",
+                            "{$firstReferencePair[1]}"
+                        );
+                        $skyrimCmd->send(cmd: $json);
+
+                        error_log("[BGL RUN] $npcNameEsc — Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
+
+                        $db->insert('actions_issued', [
+                            'action' => 'TeleportTo',
+                            'fullcall' => "TeleportTo:{$candidateLocation['name']}:Teleporting to resolve stuck NPC",
+                            'actorname' => $npcName,
+                            'ts' => $last_ts,
+                            'gamets' => $last_gamets,
+                            'localts' => time(),
+                            'original' => 'backgroundaction',
+                        ]);
+
+                        die();
+                    } else {
+                        error_log("[BGL RUN] $npcNameEsc — Could not resolve a valid location for destination: {$uniqueLocations[0]}");
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // MoveTo / FindNPC stuck check
+        // ---------------------------------------------------------------------
+        $lastThreeNpcActions = array_slice($actionsRows, 0, 3);
+
+        $allNpcActions = count(array_filter(
+            $lastThreeNpcActions,
+            fn($row) => $row['action_stuck_check2'] === 'FindNPC'
+        )) === 3;
+
+        if ($allNpcActions) {
+            // All 3 actions must target the exact same NPC.
+            $targetNpcName = $lastThreeNpcActions[0]['destination'];
+
+            $sameTargetNpc = (
+                $targetNpcName !== '' &&
+                $targetNpcName === $lastThreeNpcActions[1]['destination'] &&
+                $targetNpcName === $lastThreeNpcActions[2]['destination']
+            );
+
+            if ($sameTargetNpc) {
+                $targetNpcData = $npcMaster->getByName($targetNpcName);
+
+                if ($targetNpcData && isset($targetNpcData['refid'])) {
+                    $skyrimCmd = new SkyrimCommandBuilder();
+                    $json = $skyrimCmd->ObjectReference->MoveTo(
+                        "0x{$currentNpcData['refid']}",
+                        "0x{$targetNpcData['refid']}"
+                    );
+                    $skyrimCmd->send(cmd: $json);
+
+                    error_log("[BGL RUN] $npcNameEsc — Last 3 MoveTo/FindNPC actions target the same NPC {$targetNpcName}. Teleported to resolve stuck NPC.");
+
+                    $db->insert('actions_issued', [
+                        'action' => 'TeleportTo',
+                        'fullcall' => "TeleportTo:{$targetNpcName}:Teleporting to resolve stuck NPC",
+                        'actorname' => $npcName,
+                        'ts' => $last_ts,
+                        'gamets' => $last_gamets,
+                        'localts' => time(),
+                        'original' => 'backgroundaction',
+                    ]);
+
+                    die();
+                } else {
+                    error_log("[BGL RUN] $npcNameEsc — Could not resolve target NPC {$targetNpcName} for teleportation.");
                 }
             }
         }
     }
-
-    // ---------------------------------------------------------------------
-    // MoveTo / FindNPC stuck check
-    // ---------------------------------------------------------------------
-    $lastThreeNpcActions = array_slice($actionsRows, 0, 3);
-
-    $allNpcActions = count(array_filter(
-        $lastThreeNpcActions,
-        fn($row) => $row['action_stuck_check2'] === 'FindNPC'
-    )) === 3;
-
-    if ($allNpcActions) {
-        // All 3 actions must target the exact same NPC.
-        $targetNpcName = $lastThreeNpcActions[0]['destination'];
-
-        $sameTargetNpc = (
-            $targetNpcName !== '' &&
-            $targetNpcName === $lastThreeNpcActions[1]['destination'] &&
-            $targetNpcName === $lastThreeNpcActions[2]['destination']
-        );
-
-        if ($sameTargetNpc) {
-            $targetNpcData = $npcMaster->getByName($targetNpcName);
-
-            if ($targetNpcData && isset($targetNpcData['refid'])) {
-                $skyrimCmd = new SkyrimCommandBuilder();
-                $json = $skyrimCmd->ObjectReference->MoveTo(
-                    "0x{$currentNpcData['refid']}",
-                    "0x{$targetNpcData['refid']}"
-                );
-                $skyrimCmd->send(cmd: $json);
-
-                error_log("[BGL RUN] $npcNameEsc — Last 3 MoveTo/FindNPC actions target the same NPC {$targetNpcName}. Teleported to resolve stuck NPC.");
-
-                $db->insert('actions_issued', [
-                    'action' => 'TeleportTo',
-                    'fullcall' => "TeleportTo:{$targetNpcName}:Teleporting to resolve stuck NPC",
-                    'actorname' => $npcName,
-                    'ts' => $last_ts,
-                    'gamets' => $last_gamets,
-                    'localts' => time(),
-                    'original' => 'backgroundaction',
-                ]);
-
-                die();
-            } else {
-                error_log("[BGL RUN] $npcNameEsc — Could not resolve target NPC {$targetNpcName} for teleportation.");
-            }
-        }
-    }
 }
+
 // ─── Dynamic Biography ────────────────────────────────────────────────────────
 
 $dynamicBiography = buildDynamicBiography($GLOBALS, true, true, true);
 $dynamicBiography = $npcMaster->appendBackgroundLifeGoals($dynamicBiography, $currentNpcData);
 
+// Remove equipment from bio, as probably will be outdated.
+// Just remove everyting between <equipment> and </equipment>
+$dynamicBiography = preg_replace('/<equipment>.*?<\/equipment>/s', '', $dynamicBiography);
+
+// ─── NEW: Token Reduction Strategies ──────────────────────────────────────────
+
+// 1. Strip verbose item descriptions and gold values from inventory lists.
+// Matches lines like: "- `0x0003133B:Alto Wine` (1) - A tall glass bottle..."
+// Reduces them to: "- `0x0003133B:Alto Wine` (1)"
+// The regex safely handles item names with hyphens by targeting the " (qty) - " separator.
+$dynamicBiography = preg_replace('/^(\s*-\s*.+?\(\d+\))\s+-\s+.+$/m', '$1', $dynamicBiography);
+
+// 2. Remove RPG skills and spells sections. 
+// The LLM primarily needs <goals>, <personality>, and <occupation> for background life behavioral choices.
+// Dropping these saves ~150-250 tokens per request with zero impact on decision quality.
+$dynamicBiography = preg_replace('/<rpg_skills>.*?<\/rpg_skills>/s', '', $dynamicBiography);
+$dynamicBiography = preg_replace('/<spells>.*?<\/spells>/s', '', $dynamicBiography);
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 if (isset($extdata['middle_term_memory'])) {
     $middleTermMemory = end($extdata['middle_term_memory']);
+    $middleTerm_memoryTs = array_keys($extdata['middle_term_memory']);
+    $middleTermMemorygameTs = end($middleTerm_memoryTs);
     $dynamicBiography .= "\n\n<middle_term_memory>\nPast events\n{$middleTermMemory}\n</middle_term_memory>";
 }
 
 // ─── Dialogue History ─────────────────────────────────────────────────────────
 
-if ($extdata["background_life_player_unattached"] === true) {
+// background_life_player_unattached is intended to be set to NPCs that are not attached to the player, e.g. 
+// NPCs that are not companions or followers.
+// if false, we exclude inner thoughts, as they will be appended later.
 
+// ─── Dialogue History ─────────────────────────────────────────────────────────
+if ($extdata["background_life_player_unattached"] === true) {
     $sqlFilter = " AND gamets < $lastItGamets"
         . " AND type NOT IN ('prechat','itemfound','npcspellcast','innerchat','infoaction')";
 } else {
@@ -565,32 +600,57 @@ if ($extdata["background_life_player_unattached"] === true) {
         . " AND data NOT LIKE '%inner thoughts%'";
 }
 
-$contextDataHistoric = DataLastDataExpandedFor($GLOBALS['HERIKA_NAME'], -100, $sqlFilter);
-/*$contextDataHistoric = filterHistoricContextForNarratorVisibility(
-    $contextDataHistoric,
-    $GLOBALS['HERIKA_NAME'] ?? ''
-);*/
+// We can skip history if the last middle term memory is more recent than the last interaction with the player.
+// Threshold: Only include dialogue history if the last middle term memory is older than 24 hours from the last interaction with the player.
 
-if ($extdata['background_life_player_unattached']) {
-    // NPC unattached, so maybe does not know anything about player
-    foreach ($contextDataHistoric as $entry) {
-        $line = trim($entry['content']);
-        $history .= ($entry['role'] === 'assistant')
-            ? "{$GLOBALS['HERIKA_NAME']}: $line\n\n"
-            : "$line\n\n";
+if ($middleTermMemorygameTs > ($lastItGamets + (24 / GAMETS_TO_HOURS)))  {
+    $contextDataHistoric = DataLastDataExpandedFor($GLOBALS['HERIKA_NAME'], -100, $sqlFilter);
+
+    if ($extdata['background_life_player_unattached']) {
+        // NPC unattached, so maybe does not know anything about player
+        foreach ($contextDataHistoric as $entry) {
+            $line = trim($entry['content']);
+
+            // NEW: Strip verbose JSON action blobs and replace with a clean [Action: <Name>] format
+            // Matches {"...": "...", "action": "Travel_To", ...} and replaces with [Action: Travel_To]
+            $line = preg_replace('/\{[^{}]*"action"\s*:\s*"([^"]+)"[^{}]*\}/is', '[Action: $1]', $line);
+
+            $history .= ($entry['role'] === 'assistant')
+                ? "{$GLOBALS['HERIKA_NAME']}: $line\n"
+                : "$line\n";
+        }
+    } else {
+        $history = "\n<last_dialogue>\nThis represents last dialogue where player ({$GLOBALS['PLAYER_NAME']}) was present. Can be more dialogues with other NPCs from this point.\n";
+        foreach ($contextDataHistoric as $entry) {
+            $line = trim($entry['content']);
+
+            // NEW: Strip verbose JSON action blobs and replace with a clean [Action: <Name>] format
+            $line = preg_replace('/\{[^{}]*"action"\s*:\s*"([^"]+)"[^{}]*\}/is', '[Action: $1]', $line);
+
+            $history .= ($entry['role'] === 'assistant')
+                ? "{$GLOBALS['HERIKA_NAME']}: $line\n"
+                : "$line\n";
+        }
+        $history .= "\nNote: {$GLOBALS['PLAYER_NAME']} is absent from this point on.\n</last_dialogue>\n";
     }
+
 } else {
-    $history = "\n<last_dialogue>
-This represents last dialogue where player ({$GLOBALS['PLAYER_NAME']}) was present. Can be more dialogues with other NPCs from this point.\n";
-    foreach ($contextDataHistoric as $entry) {
-        $line = trim($entry['content']);
-        $history .= ($entry['role'] === 'assistant')
-            ? "{$GLOBALS['HERIKA_NAME']}: $line\n\n"
-            : "$line\n\n";
+    //Append also last memories to the history, as they are more recent than the last interaction with the player.
+    
+    $lastMemory=$db->fetchOne("select * from memory_summary
+     where gamets_truncated>$middleTermMemorygameTs 
+     and companions like '%$npcNameEsc%' 
+     and summary is not null
+     order by gamets_truncated asc limit 1");
+    if ($lastMemory) {
+        $history = "\n<last_memory>\nThis represents last memory of {$GLOBALS['HERIKA_NAME']} after the last interaction with player ({$GLOBALS['PLAYER_NAME']}).\n";
+        $history .= "Memory: {$lastMemory['summary']}\n";
+        $history .= "</last_memory>\n";
+    } else {
+        $history = "";
     }
-    $history .= "\nNote: {$GLOBALS['PLAYER_NAME']} is absent from this point on.\n</last_dialogue>\n";
+    // $history = ""; // This line is redundant and would overwrite the last memory history
 }
-
 // ─── Last Known Location ──────────────────────────────────────────────────────
 
 $lastLocRow = $db->fetchOne(
@@ -767,8 +827,8 @@ if (isset($metadata['last_coords']) && !empty($metadata['last_coords'][3])) {
 
 if (isset($metadata['low_process_actors'])) {
 
-    // Keep only the last 5 entries.
-    $metadataLow_process_actors = array_slice($metadata['low_process_actors'], -5, 5, true);
+    // Keep only the last 3 entries.
+    $metadataLow_process_actors = array_slice($metadata['low_process_actors'], -3, 3, true);
     $metadataLow_process_actors = ($metadata['low_process_actors']);
     foreach ($metadataLow_process_actors as $gamets_lpa_processed => $actorList) {
         if ($gamets_lpa_processed <= $lastItGamets) {
@@ -904,13 +964,14 @@ $actionIdleRows = $db->fetchAll(
      ORDER BY gamets DESC, ts DESC
      LIMIT 10 OFFSET 0"
 );
-if (sizeof($actionIdleRows) > 3) {
+if (sizeof($actionIdleRows) > 2) {
 
     $summaryIdleActions = [];
     $summaryIdleActions['Sleep'] = 0;
     $summaryIdleActions['Work'] = 0;
     $summaryIdleActions['Relax'] = 0;
     $summaryIdleActions['Socialize'] = 0;
+    $summaryIdleActions['Guard'] = 0;
 
     foreach ($actionIdleRows as $row) {
         $data = explode(":", $row['fullcall']);
@@ -927,6 +988,9 @@ if (sizeof($actionIdleRows) > 3) {
     if ($summaryIdleActions['Work'] >= 3) {
         $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} has been working too much for the last 48h. This may affect health and well-being.\n";
     }
+    if ($summaryIdleActions['Guard'] == 0) {
+        $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} hasn't been guarding for the last 48h. This may affect security well-being.\n";
+    }
     if ($summaryIdleActions['Socialize'] == 0) {
         $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} hasn't been properly socializing for the last 48h. This may affect health and well-being. Should make an effort to interact with others at a inn or tavern by staying with intent 'Socialize'.\n";
     }
@@ -942,6 +1006,24 @@ if ($lastIssuedAction['action'] === 'StayAtPlace') {
         error_log("[BGL RUN] $npcNameEscDb — last issued action was StayAtPlace:Sleep, indicating the NPC is currently sleeping and waking up.");
         $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} wakes up, has been sleeping since " . convert_gamets2skyrim_long_date($lastIssuedAction['gamets']) . ".\n";
     }
+}
+
+
+// Check excessive use of MoveTo.
+
+// ─── Check last Idles  ───────────────────────────────────
+
+$lastMinuteNotes .= "\n";
+$fortyEightHoursAgo = $last_gamets - 48 / GAMETS_TO_HOURS;
+$actionMoveTo = $db->fetchAll(
+    "SELECT action,actorname,gamets,fullcall FROM actions_issued
+     WHERE actorname='$npcNameEscDb' and action in ('MoveTo')
+       AND gamets > $fortyEightHoursAgo
+     ORDER BY gamets DESC, ts DESC
+     LIMIT 10 OFFSET 0"
+);
+if (sizeof($actionMoveTo) > 5) {
+    error_log("[BGL RUN] $npcNameEscDb — EXCESSIVE use of MoveTo actions in the last 48h: " . json_encode($actionMoveTo));
 }
 
 // ─── Language Detection ───────────────────────────────────────────────────────
@@ -976,6 +1058,12 @@ $isIdleAction = !empty($lastBackgroundAction)
 $idleGamets = (int) ($lastBackgroundAction['gamets'] ?? 0);
 $idleHours = max(0, round(($last_gamets - $idleGamets) * GAMETS_TO_HOURS, 2));
 
+// Short version of history for LLM prompt. We only need the last 50 lines to determine if we consumed or produced something.
+$historyShort = implode("\n", array_slice(explode("\n", $history), -50));
+
+
+// Prerequest to gues production/consumption during idle period. 
+// We will ask LLM to determine if we consumed or produced something during the idle period.
 
 if ($isIdleAction && $idleHours > 1) { // If last Idle was Socialize, there a chance of a follow up.
     $intent = explode(':', (string) ($lastBackgroundAction['fullcall'] ?? ''));
@@ -1002,8 +1090,8 @@ if ($isIdleAction && $idleHours > 1) { // If last Idle was Socialize, there a ch
 
     if (!$bypassProduction) {
         // We don't need full history, just a short version to determine if we consumed or produced something
-        // We consider only the last 150 lines of history for this purpose
-        $historyShort = implode("\n", array_slice(explode("\n", $history), -150));
+        // We consider only the last 50 lines of history for this purpose
+        
 
         $preStep1Prompt = [
             ['role' => 'system', 'content' => 'Examine this text containing events that occurred in the fictional universe of Skyrim (The Elder Scrolls).'],
@@ -1020,7 +1108,7 @@ if ($isIdleAction && $idleHours > 1) { // If last Idle was Socialize, there a ch
             [
                 'role' => 'user',
                 'content' => "
-The character has been idle for the last `$idleHours` hours.
+{$GLOBALS['HERIKA_NAME']}, The character has been idle for the last `$idleHours` hours.
 
 Your task is to determine what happened during this idle period and return the single most appropriate action.
 
@@ -1246,7 +1334,7 @@ if (
     $bypassInnerThoughts = false;
 }
 
-// Avoid too much transactions.
+// Guard: Avoid too much transactions.
 
 $byspassTradingActions = false;
 if ($lastBackgroundAction['action'] === 'BuyItem' || $lastBackgroundAction['action'] === 'SellItem' || $lastBackgroundAction['action'] === 'SellService') {
@@ -1268,7 +1356,7 @@ if (sizeof($tradingGuard) > 3) {
 }
 
 
-// Socialize chain
+// Modifier: Socialize chain
 $wasSocializeIntentAction = false;
 if (
     !empty($lastBackgroundAction)
@@ -1413,7 +1501,7 @@ if (!$isSpeakAction) {
 
     if ($bypassInnerThoughts == false) {
         $connectionHandler = $connector->getConnector($currentConnectorData);
-        $innerThoughtBuffer = $connectionHandler->fast_request($step1Prompt, ['MAX_TOKENS' => 2048], 'backgroundlife');
+        $innerThoughtBuffer = $connectionHandler->fast_request($step1Prompt, ['MAX_TOKENS' => 1024], 'backgroundlife');
         updateLastLLMCall($GLOBALS['HERIKA_NAME']);
         $recordDiaryEntry = true;
     } else {
@@ -1449,7 +1537,11 @@ $step2Content = "You are responsible for deciding a single action"
     . "$dynamicBiography\n\n";
 
 if ($isFullMode) {
-    $step2Content .= "<context_history>\nContext History (chronological order)\n$history\n</context_history>{$postHistory} {$lastMinuteNotes}\n\n";
+
+// Ww use historyShort here. Action decision should be based on the last 50 lines of history, not the full history, 
+// to avoid overwhelming the LLM with too much context.
+
+    $step2Content .= "<context_history>\nContext History (chronological order)\n$historyShort\n</context_history>{$postHistory} {$lastMinuteNotes}\n\n";
 }
 
 $step2Content .= "<text>\n$innerThoughtBuffer\n</text>\n\n";
@@ -1488,12 +1580,21 @@ MoveTo:<NPC name>
 - Requires a clear reason.
 PROMPT;
 
+if ($spreadRumorsAvailable) {
+    $step2Content .= <<<PROMPT
+
+
+SpreadRumors:rumor
+- Spread a rumor within the NPC's social circle or the local community.
+PROMPT;
+}
+
 if (!$isSpeakAction) {
     $step2Content .= <<<PROMPT
 
 
 SpeakTo:<NPC name>:<npc_refid>
-- Start a conversation with another NPC (should be nearby).
+- Start a conversation with another NPC (should be nearby - check last <nearby_npcs> list-).
 - Avoid selecting SpeakTo repeatedly with no new purpose.
 - Prefer conversations that advance goals, exchange information, negotiate, or socialize.
 PROMPT;
@@ -1614,6 +1715,13 @@ if (!$isSpeakAction) {
         . "<action>SpeakTo:Adrianne Avenicci:0001A67C</action>\n"
         . "<reason>I need to speak to Adrianne Avenicci to progress in my current objectives.</reason>\n"
         . "```";
+
+    if ($spreadRumorsAvailable) {
+        $step2Content .= "Examples ```\n\n"
+            . "<action>SpreadRumors:The Jarl's steward is secretly buying forbidden relics.</action>\n"
+            . "<reason>I want this rumor to circulate and influence local opinion.</reason>\n"
+            . "```";
+    }
 }
 
 if (!$bypassTradingActions) {
@@ -1733,6 +1841,13 @@ if (!empty($parsed['action'])) {
             unset($parsed['notification']);   // Prevent letter dispatch if SpeakTo action is chosen
             //unset($parsed['rumor']);   // Prevent rumor dispatch if SpeakTo action is chosen
 
+            break;
+        case 'SpreadRumors':
+            $historyWithInnerThought = $history
+                . "\n{$postHistory}\n$lastMinuteNotesSpeakContext\n<inner_thought>\n{$innerThoughtBuffer}\n</inner_thought>\n";
+            handleSpreadRumorsAction($actionArg, $currentNpcData, $GLOBALS['HERIKA_NAME'], $last_ts, $last_gamets, $momentum, $db, $connectionHandler, $dynamicBiography, $historyWithInnerThought, $LAST_REPORTED_LOCATION);
+            unset($parsed['notification']);
+            unset($parsed['rumor']);
             break;
         case 'BuyItem':
         case 'SellItem':

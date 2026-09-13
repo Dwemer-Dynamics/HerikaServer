@@ -66,7 +66,7 @@ function internalDumbTranslatorOld($inputSentence)
 
 function internalDumbTranslator($inputSentence)
 {
-    if ((isset($GLOBALS["LLM_LANG"]) && $GLOBALS["LLM_LANG"] != "en") || true) {
+    if ((isset($GLOBALS["LLM_LANG"]) && $GLOBALS["LLM_LANG"] != "en") ) {
         $localStartTime = microtime(true);
 
         $lang = isset($GLOBALS["LLM_LANG"]) ? $GLOBALS["LLM_LANG"] : "en";

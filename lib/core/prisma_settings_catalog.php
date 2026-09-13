@@ -29,10 +29,12 @@ function chimPrismaGlobalSettingsSections(): array
         'Oghma' => [
             ['name' => 'OGHMA_INFINIUM', 'type' => 'boolean'],
             ['name' => 'OGHMA_AMOUNT', 'type' => 'select', 'values' => ['1', '2', '3']],
+            ['name' => 'OGHMA_RESULT_LIMIT', 'type' => 'select', 'values' => ['1', '2', '3', '4', '5']],
             ['name' => 'RACIAL_OGHMA', 'type' => 'boolean'],
             ['name' => 'LOCATION_OGHMA', 'type' => 'boolean'],
             ['name' => 'CORE_CONNECTOR_OGHMA_CUSTOM', 'type' => 'foreign:core_llm_connector:id:label'],
-            ['name' => 'OGHMA_CUSTOM', 'type' => 'boolean'],
+            ['name' => 'OGHMA_EXTRACTOR_FALLBACK', 'type' => 'boolean'],
+            ['name' => 'OGHMA_EXTRACTOR_TIMEOUT_MS', 'type' => 'integer', 'min' => 250, 'max' => 3000],
         ],
         'Memory' => [
             ['name' => 'FEATURES@MEMORY_EMBEDDING@ENABLED', 'type' => 'boolean'],
@@ -145,12 +147,12 @@ function chimPrismaProfileMetadataCatalog(): array
 {
     return [
         'Profiles & Memories' => [
-            ['name' => 'DYNAMIC_PROFILE_ENABLED', 'type' => 'boolean'],
-            ['name' => 'DYNAMIC_PROFILE_FIELDS', 'type' => 'multiselect', 'schema' => 'DYNAMIC_PROFILE_FIELDS'],
+            ['name' => 'DYNAMIC_PROFILE_ENABLED', 'type' => 'boolean', 'web_only' => true],
+            ['name' => 'DYNAMIC_PROFILE_FIELDS', 'type' => 'multiselect', 'schema' => 'DYNAMIC_PROFILE_FIELDS', 'web_only' => true],
             ['name' => 'MIDDLE_TERM_MEMORY_ENABLED', 'type' => 'boolean'],
             ['name' => 'SHORT_TERM_MEMORY_ENABLED', 'type' => 'boolean'],
             ['name' => 'SHORT_TERM_MEMORY_MAX', 'type' => 'integer', 'min' => 1, 'max' => 50],
-            ['name' => 'CONTEXT_HISTORY_DYNAMIC_PROFILE', 'type' => 'integer', 'min' => 0, 'max' => 400],
+            ['name' => 'CONTEXT_HISTORY_DYNAMIC_PROFILE', 'type' => 'integer', 'min' => 0, 'max' => 400, 'web_only' => true],
             ['name' => 'RPG_COMMENTS', 'type' => 'multiselect', 'schema' => 'RPG_COMMENTS'],
             ['name' => 'RPG_COMMENTS_CHANCE', 'type' => 'integer', 'min' => 0, 'max' => 100],
         ],

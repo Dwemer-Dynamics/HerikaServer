@@ -322,7 +322,7 @@ if (in_array($currentPageName, $roleplayPages, true)) {
 // Server version and dev-build detection
 // Read version from .version_number.txt
 $versionFile = dirname(__DIR__, 2) . '/.version_number.txt';
-$serverVersionRaw = '3.3.3'; // fallback
+$serverVersionRaw = '3.4.0'; // fallback
 if (file_exists($versionFile)) {
     $versionContent = trim(file_get_contents($versionFile));
     if ($versionContent !== '') {
@@ -390,8 +390,18 @@ $serverLogoFile = $isDevBuild ? 'serverlogodev.png' : 'serverlogo.png';
                     </li>
                     <li><hr class="dropdown-divider"></li>
                     <li><h6 class="dropdown-header">Database Controls</h6></li> <li>
-                    <a class="dropdown-item" href="<?php echo $webRoot; ?>/ui/import_db.php" title="Complete database management - backup, restore, maintenance, and pgAdmin access.">
-                        Database Manager
+                    <?php
+                    // One entry point for playthroughs, storage and database tools.
+                    $navStorageDashboardFile = dirname(__DIR__, 3) . DIRECTORY_SEPARATOR . 'Dwemer-Dashboard'
+                        . DIRECTORY_SEPARATOR . 'data_manager.php';
+                    $navStorageAvailable = is_file($navStorageDashboardFile) && is_file(dirname($navStorageDashboardFile) . '/lib/storage_fragment.php');
+                    $navStorageUrl = $navStorageAvailable
+                        ? preg_replace('#/HerikaServer$#', '/Dwemer-Dashboard', $webRoot) . '/data_manager.php?mod=chim&view=manage'
+                        : $webRoot . '/ui/import_db.php';
+                    $navStorageLabel = $navStorageAvailable ? 'Playthrough Saves' : 'Database Manager';
+                    ?>
+                    <a class="dropdown-item" href="<?php echo htmlspecialchars((string)$navStorageUrl, ENT_QUOTES, 'UTF-8'); ?>" title="Playthroughs, storage cleanup, backups, restore and maintenance.">
+                        <?php echo $navStorageLabel; ?>
                     </a>
                     </li>
                                          <li><hr class="dropdown-divider"></li>

@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/chim_interaction.php';
 
 require_once(__DIR__."/utils.php");
 // used for openai_token_count table
@@ -902,6 +903,12 @@ function DataDequeue($timestamp = 0)
         $finalData[] = $row;
     }
 
+    $interactionAllowed = chimInteractionAllowed();
+    $generation = $GLOBALS['chim_interaction_generation'];
+    $finalData = array_values(array_filter($finalData, static function ($row) use ($interactionAllowed, $generation) {
+        if (!chimInteractionIsGameOutput((string)($row['action'] ?? ''))) return true;
+        return $interactionAllowed && (int)($row['interaction_generation'] ?? 0) === $generation;
+    }));
     return $finalData;
 
 }
@@ -1070,6 +1077,7 @@ function DataLastInfoFor($actorBeingCalled, $lastNelements = -2,$addNPCDescripti
                     if ($nearbyActorsIncludeEquipment && is_array($equipmentData) && !empty($equipmentData)) {
                         $slots = chimEquipmentProfileSlotKeys();
                         $slots = chimProfileEquipmentSlotsFromData($equipmentData, $slots);
+                        
                         $equipmentParts = chimFormatProfileEquipmentParts($equipmentData, $slots, $nearbyActorsEquipmentDescriptions);
                         if (!empty($equipmentParts)) {
                             if ($hasProfileBody) {
@@ -1078,6 +1086,8 @@ function DataLastInfoFor($actorBeingCalled, $lastNelements = -2,$addNPCDescripti
                                 $profileString .= ": Equipment: " . implode(", ", $equipmentParts);
                                 $hasProfileBody = true;
                             }
+                        } else {
+                                $profileString .= ": Naked";
                         }
                     }
 
@@ -2022,7 +2032,56 @@ function DataQuestJournal($quest)
     }
 }
 
+/*
+Collects all targeted actors.
+Removes duplicate actor names case-insensitively.
+Preserves their original order.
+Moves one combined annotation to the end.
+*/
+
+function moveDialogueTargetSuffixToEnd($input) {
+    $input = trim((string)$input);
+    if ($input === "") {
+        return "";
+    }
+
+    $pattern = '/\s*\((talking|whispering|shouting|speaking privately|speaking loudly)\s+to\s+([^()]+?)\)\s*/i';
+    if (preg_match_all($pattern, $input, $matches, PREG_SET_ORDER) === false || empty($matches)) {
+        return trim(preg_replace('/\s+/', ' ', $input));
+    }
+
+    $speechMode = strtolower(trim($matches[0][1]));
+    $targets = [];
+    $seenTargets = [];
+    foreach ($matches as $match) {
+        $target = trim($match[2]);
+        $targetKey = strtolower($target);
+        if ($target !== '' && !isset($seenTargets[$targetKey])) {
+            $targets[] = $target;
+            $seenTargets[$targetKey] = true;
+        }
+    }
+
+    if (empty($targets)) {
+        return trim(preg_replace('/\s+/', ' ', $input));
+    }
+
+    $targetSuffix = '(' . $speechMode . ' to ' . implode(' and ', $targets) . ')';
+    $withoutSuffix = preg_replace($pattern, ' ', $input);
+    $withoutSuffix = trim(preg_replace('/\s+/', ' ', (string)$withoutSuffix));
+    if ($withoutSuffix === "") {
+        return $targetSuffix;
+    }
+
+    return "{$withoutSuffix} {$targetSuffix}";
+}
+
+
 function removeTalkingToOccurrences($input) {
+    if (true) {
+        return moveDialogueTargetSuffixToEnd($input);
+    }
+
     $pattern = '/\((?:(?:talking|whispering|shouting)|speaking privately)\s+to\s+[^()]+\)/i';
     preg_match_all($pattern, $input, $matches, PREG_OFFSET_CAPTURE);
 
@@ -2048,26 +2107,6 @@ function removeTalkingToOccurrences($input) {
     return $input;
 }
 
-function moveDialogueTargetSuffixToEnd($input) {
-    $input = trim((string)$input);
-    if ($input === "") {
-        return "";
-    }
-
-    $pattern = '/\s*(\((?:(?:talking|whispering|shouting)|speaking privately)\s+to [^()]+?\)|\(speaking loudly to [^()]+?\))\s*/i';
-    if (preg_match_all($pattern, $input, $matches) !== 1 || empty($matches[1])) {
-        return trim(preg_replace('/\s+/', ' ', $input));
-    }
-
-    $targetSuffix = trim((string)end($matches[1]));
-    $withoutSuffix = preg_replace($pattern, ' ', $input);
-    $withoutSuffix = trim(preg_replace('/\s+/', ' ', (string)$withoutSuffix));
-    if ($withoutSuffix === "") {
-        return $targetSuffix;
-    }
-
-    return "{$withoutSuffix} {$targetSuffix}";
-}
 
 
 function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") {
@@ -3001,19 +3040,26 @@ function compactHistoricContext($lastDialogFull,$actor,$compactContextInfo=false
                         //$regexpNpcName = strtr($GLOBALS["HERIKA_NAME"],["-"=>'\-', "["=>"\[", "]"=>"\]"]);
                         // Capture spoken text after a leading "Name:" (supports names with brackets and dashes)
                         // and optionally strip a trailing parenthetical note like "(talking to X)".
-                        preg_match('/^\s*[^:]+:\s*(.*?)\s*(?:\([^)]*\))?\s*$/s', $singleline, $matches);
+                        //preg_match('/^\s*[^:]+:\s*(.*?)\s*(?:\([^)]*\))?\s*$/s', $singleline, $matches);
+                        preg_match('/^\s*[^:]+:\s*(.*?)\s*$/s', $singleline, $matches);
                         $extracted=$matches[1] ?? $singleline;
                         $compactedBuffer .= trim(removeTalkingToOccurrences($extracted));
                         $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]};","",$compactedBuffer);
+                        error_log("[compactHistoricContext] Extracted line: " . $extracted)      ;
+                        error_log("[compactHistoricContext] Compacted buffer so far: " . $compactedBuffer);
 
                     } else {
                         $compactedBuffer .= trim(removeTalkingToOccurrences($singleline));
                         $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]}:","",$compactedBuffer);
+
+                        error_log("[compactHistoricContext] Extracted line: " . $singleline)      ;
+                        error_log("[compactHistoricContext] Compacted buffer so far: " . $compactedBuffer);
                     }
 
 
                 }
-                $lastDialogFullCopy[] = ["role"=>"assistant","content"=>trim($compactedBuffer)];
+
+                $lastDialogFullCopy[] = ["role"=>"assistant","content"=>trim(removeTalkingToOccurrences($compactedBuffer))];
 
             }
             $bufferHerika=[];
@@ -3033,24 +3079,25 @@ function compactHistoricContext($lastDialogFull,$actor,$compactContextInfo=false
             if ($m>0) {
                 //$regexpNpcName = strtr($GLOBALS["HERIKA_NAME"],["-"=>'\-', "["=>"\[", "]"=>"\]"]);
                 // Same robust extraction for subsequent lines in the buffer
-                preg_match('/^\s*[^:]+:\s*(.*?)\s*(?:\([^)]*\))?\s*$/s', $singleline, $matches);
+                //preg_match('/^\s*[^:]+:\s*(.*?)\s*(?:\([^)]*\))?\s*$/s', $singleline, $matches);
+                preg_match('/^\s*[^:]+:\s*(.*?)\s*$/s', $singleline, $matches);
                 $extracted=$matches[1] ?? $singleline;
                 $compactedBuffer .= trim(removeTalkingToOccurrences($extracted));
-                $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]};","",$compactedBuffer);
+                $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]}:","",$compactedBuffer);
 
             } else {
                 $compactedBuffer .= trim(removeTalkingToOccurrences($singleline));
-                $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]};","",$compactedBuffer);
+                $compactedBuffer=str_replace("{$GLOBALS["HERIKA_NAME"]}:","",$compactedBuffer);
             }
 
 
 
         }
-        $lastDialogFullCopy[] = ["role"=>"assistant","content"=>trim($compactedBuffer)];
+        $lastDialogFullCopy[] = ["role"=>"assistant","content"=>trim(removeTalkingToOccurrences($compactedBuffer))];
         $bufferHerika=[];
     }
 
-    // file_put_contents(__DIR__."/../log/context_for_{$actor}_stage_1_5_.txt",print_r($lastDialogFullCopy,true));
+    file_put_contents(__DIR__."/../log/context_for_{$actor}_stage_1_5_.txt",print_r($lastDialogFullCopy,true));
 
     
     // Compact other info
@@ -3080,8 +3127,11 @@ function compactHistoricContext($lastDialogFull,$actor,$compactContextInfo=false
                 // Clean talking to and npc name , only leave it on first line
                 $matches = [];
                 // And for compacting other dialog lines: capture content after the speaker name
-                preg_match('/^\s*[^:]+:\s*(.*?)\s*(?:\([^)]*\))?\s*$/s', $line["content"], $matches);
+                // preg_match('/^\s*[^:]+:\s*(.*?)\s*(?:\([^)]*\))?\s*$/s', $line["content"], $matches);
+                // Conserve the parenthesys part. We will use later.
+                preg_match('/^\s*[^:]+:\s*(.*?)\s*$/s', $line["content"], $matches);
                 $buffer[]=$matches[1] ?? $line["content"];
+                
             } else {
 
                 if (!$compactContextInfo) {
@@ -3240,6 +3290,7 @@ function DataLastDataExpandedFor($actor, $lastNelements = -10,$sqlfilter="")
     error_log("[replaceRoles] Elapsed time: " . (microtime(true) - $localStartTime) . " seconds");
 
     // Cases of self rechat
+
     if ((sizeof($ctx3)>3)&&(($GLOBALS["gameRequest"][3] ?? "")=="rechat")) {
         $lastElement = $ctx3[sizeof($ctx3)-1];
         // Last element is assistant
@@ -4313,25 +4364,43 @@ function DataRechatHistory()
 
 }
 
-
+/*
+Extracts all targets from talking, whispering, shouting, speaking privately, and speaking loudly.
+Removes duplicate target names case-insensitively.
+Preserves first-seen order.
+Removes all dialogue target tags from cleanedString.
+Returns targets as a comma-separated string.
+Support multiple separate annotations, removes duplicate names, and preserves their original order
+*/
 
 function extractDialogueTarget($string) {
-    // Check if the string contains a directed-dialogue tag.
-    if ($string && preg_match('/\((?:(?:talking|whispering|shouting)|speaking privately)\s+to\s+/i', $string)) {
-        // Extract the target's name using regular expression
-        preg_match('/\((?:(?:talking|whispering|shouting)|speaking privately)\s+to\s+([^\)]+)\)/i', $string, $matches);
-        
-        // Check if a match is found and extract the target's name
-        if (isset($matches[1])) {
-            $target = $matches[1];
+    $pattern = '/\((?:talking|whispering|shouting|speaking privately|speaking loudly)\s+to\s+([^\)]+)\)/i';
+    if ($string && preg_match_all($pattern, $string, $matches) > 0) {
+        $targets = [];
+        $seenTargets = [];
 
-            // Remove the directed-dialogue tag from the original string
-            $cleanedString = preg_replace('/\((?:(?:talking|whispering|shouting)|speaking privately)\s+to\s+[^\)]+\)/i', '', $string);
-            if (strpos($cleanedString,"{$GLOBALS["HERIKA_NAME"]}:")===0) {
-                $cleanedString=str_replace("{$GLOBALS["HERIKA_NAME"]}:","",$cleanedString);
+        foreach ($matches[1] as $targetList) {
+            $targetList = preg_replace('/\s+\band\s+/i', ',', trim($targetList));
+            foreach (explode(',', $targetList) as $target) {
+                $target = trim($target);
+                $targetKey = strtolower($target);
+                if ($target !== '' && !isset($seenTargets[$targetKey])) {
+                    $targets[] = $target;
+                    $seenTargets[$targetKey] = true;
+                }
             }
-            
-            return ['target' => $target, 'cleanedString' => trim($cleanedString)];
+        }
+
+        if (!empty($targets)) {
+            $cleanedString = preg_replace($pattern, '', $string);
+            if (strpos($cleanedString, "{$GLOBALS["HERIKA_NAME"]}:") === 0) {
+                $cleanedString = str_replace("{$GLOBALS["HERIKA_NAME"]}:", '', $cleanedString);
+            }
+
+            return [
+                'target' => implode(',', $targets),
+                'cleanedString' => trim($cleanedString),
+            ];
         }
     }
 
@@ -5731,6 +5800,57 @@ function snapshot_response_prompt_debug_data($connectorData = null) {
     }
 }
 
+function chimFindSupersedingUserInput($db, $requestTimestamp, $currentRequestType = '')
+{
+    $requestTimestamp = trim((string)$requestTimestamp);
+    if (!is_object($db) || !preg_match('/^\d+$/', $requestTimestamp)) {
+        return null;
+    }
+
+    $requestTimestamp = ltrim($requestTimestamp, '0');
+    if ($requestTimestamp === '') {
+        $requestTimestamp = '0';
+    }
+
+    $currentRequestType = trim((string)$currentRequestType);
+    $isDirectPlayerInput = in_array(
+        $currentRequestType,
+        ['inputtext', 'inputtext_s', 'ginputtext', 'ginputtext_s', 'narrator_inputtext'],
+        true
+    );
+    $instructionFilter = $isDirectPlayerInput
+        ? "AND COALESCE(data, '')<>'instruction' "
+        : '';
+
+    try {
+        $rows = $db->fetchAll(
+            "SELECT rowid, ts FROM ("
+            . "SELECT rowid, type, ts, data FROM eventlog ORDER BY rowid DESC LIMIT 100"
+            . ") AS recent_events "
+            . "WHERE type='user_input' AND ts>{$requestTimestamp} "
+            . $instructionFilter
+            . "ORDER BY rowid DESC LIMIT 1"
+        );
+    } catch (Throwable $e) {
+        Logger::warn('[USER_INPUT_INTERRUPT] Unable to check for newer player input: ' . $e->getMessage());
+        return null;
+    }
+
+    if (!is_array($rows) || !isset($rows[0]) || !is_array($rows[0])) {
+        return null;
+    }
+
+    $rowId = trim((string)($rows[0]['rowid'] ?? ''));
+    if ($rowId === '' || !ctype_digit($rowId) || (int)$rowId <= 0) {
+        return null;
+    }
+
+    return [
+        'rowid' => $rowId,
+        'ts' => trim((string)($rows[0]['ts'] ?? '')),
+    ];
+}
+
 function call_llm() {
     global $contextData, $gameRequest, $receivedData, $startTime, $db;
     global $ERROR_TRIGGERED, $talkedSoFar, $alreadysent, $FUNCTIONS_ARE_ENABLED;
@@ -5741,6 +5861,7 @@ function call_llm() {
 }
 
 function call_llm_internal() {
+    chimInteractionRequire();
     global $contextData, $gameRequest, $receivedData, $startTime, $db;
     global $ERROR_TRIGGERED, $talkedSoFar, $alreadysent, $FUNCTIONS_ARE_ENABLED;
     global $overrideParameters, $request;
@@ -5758,6 +5879,45 @@ function call_llm_internal() {
         terminate();
     }
 
+    $connectionOpened = false;
+    $abortForSupersedingUserInput = static function ($phase = 'speech_boundary') use (
+        $db,
+        $gameRequest,
+        $connectionHandler,
+        &$connectionOpened
+    ) {
+        if (!chimInteractionAllowed()) {
+            if ($connectionOpened) $connectionHandler->close();
+            exit;
+        }
+        $supersedingInput = chimFindSupersedingUserInput(
+            $db,
+            $gameRequest[1] ?? '',
+            $gameRequest[0] ?? ''
+        );
+        if ($supersedingInput === null) {
+            return;
+        }
+
+        Logger::info(
+            "[USER_INPUT_INTERRUPT] Closing active {$gameRequest[0]} generation"
+            . " (phase={$phase}"
+            . ", request_ts=" . ($gameRequest[1] ?? '')
+            . ", user_input_rowid={$supersedingInput['rowid']}"
+            . ", user_input_ts={$supersedingInput['ts']})"
+        );
+        if ($connectionOpened) {
+            $connectionHandler->close();
+        }
+        if (function_exists('terminate')) {
+            terminate();
+        }
+        die('X-CUSTOM-CLOSE');
+    };
+
+    // Check once before opening the connector. Later checks run only at speech boundaries.
+    $abortForSupersedingUserInput('before_llm');
+
     /*
     Player TTS
 
@@ -5769,6 +5929,7 @@ function call_llm_internal() {
     }
 
     $connectionHandler->open($contextData,$overrideParameters);
+    $connectionOpened = $connectionHandler->primary_handler !== false;
     snapshot_response_prompt_debug_data();
     error_log("[FALLBACK DEBUG] Checking primary_handler status: " . ($connectionHandler->primary_handler === false ? "FALSE" : "OK"));
     
@@ -5850,7 +6011,7 @@ function call_llm_internal() {
             Translation::translate($GLOBALS["ERROR_OPENAI"]);
             Translation::$sentences = [Translation::$response];
         }        
-        returnLines([$GLOBALS["ERROR_OPENAI"]]);
+        returnLines([$GLOBALS["ERROR_OPENAI"]], true, $abortForSupersedingUserInput);
         
         $ERROR_TRIGGERED=true;
         @ob_end_flush();
@@ -5972,7 +6133,7 @@ function call_llm_internal() {
             $GLOBALS["DEBUG_DATA"]["perf"][]=(microtime(true) - $startTime)." secs in openai stream";
 
             if ($gameRequest[0] != "diary") {
-                returnLines($sentences);
+                returnLines($sentences, true, $abortForSupersedingUserInput);
                 $INCREMENTAL_SENTENCESIZE=MINIMUM_SENTENCE_SIZE;
             } else { //why is the diary talking? is this correct?
                 $talkedSoFar[md5(implode(" ", $sentences))]=implode(" ", $sentences);
@@ -5982,21 +6143,7 @@ function call_llm_internal() {
             $totalProcessedData.=$extractedData;
             $extractedData="";
             $buffer=$remainingData;
-            //$user_input_after=$GLOBALS["db"]->fetchAll("select count(*) as N from eventlog where type='user_input' and ts>$gameRequest[1]"); //9.0ms
-            
-
         }
-        // This is intended to stop the generation as soon as user input is detected, so we will attend new request instead of keeping generating this
-        $user_input_after=$GLOBALS["db"]->fetchAll("select rowid as N from eventlog where type='user_input' and ts>$gameRequest[1] LIMIT 1"); // 2.1ms, faster than count(*)
-        if (isset($user_input_after[0]))
-            if (isset($user_input_after[0]["N"]))
-                if ($user_input_after[0]["N"]>0) {
-                    Logger::info("Generation stopped because user_input. ".__FILE__." ".__LINE__." ".__FUNCTION__);
-                    error_log("Generation stopped because user_input. ".__FILE__." ".__LINE__." ".__FUNCTION__);
-                    $connectionHandler->close();
-                    die('X-CUSTOM-CLOSE');
-                    // Abort , user input detected
-                }
 
     } // --- end while
     
@@ -6018,7 +6165,7 @@ function call_llm_internal() {
         $GLOBALS["DEBUG_DATA"]["response"][]=["raw"=>$buffer,"processed"=>implode("|", $sentences)];
         $GLOBALS["DEBUG_DATA"]["perf"][]=(microtime(true) - $startTime)." secs in openai stream";
         if ($gameRequest[0] != "diary") {
-            returnLines($sentences);
+            returnLines($sentences, true, $abortForSupersedingUserInput);
         } else {
             $talkedSoFar[md5(implode(" ", $sentences))]=implode(" ", $sentences);
         }

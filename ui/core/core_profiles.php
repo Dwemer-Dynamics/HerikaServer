@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . '/tmpl/dynamic_profile_schedule.php';
 
 $enginePath = __DIR__.DIRECTORY_SEPARATOR."../../";
 
@@ -628,10 +629,11 @@ $__rpgHelp = (string)($__confSchema['RPG_COMMENTS']['description'] ?? '');
 $__rpgOptions = array_values(array_filter($__rpgOptionsRaw, function($v){ return strtolower((string)$v) !== 'keepmechecked'; }));
 // Load Dynamic Profile Fields options for per-profile control
 $__dynOptions = is_array($__confSchema['DYNAMIC_PROFILE_FIELDS']['values'] ?? null) ? $__confSchema['DYNAMIC_PROFILE_FIELDS']['values'] : [];
-$__dynHelp = (string)($__confSchema['DYNAMIC_PROFILE_FIELDS']['description'] ?? '');
+$__dynHelp = 'Choose which fields can change. Selecting one to three fields keeps updates focused.';
 
 // Only profile metadata fields rendered by the visual editor may be copied in bulk.
 $profileSyncableMetadataKeys = chimPrismaProfileSyncableMetadataKeys();
+$profileSyncableMetadataKeys = array_values(array_unique(array_merge($profileSyncableMetadataKeys, array_keys(dps_policy([])), ['CONTEXT_HISTORY_DYNAMIC_PROFILE'])));
 
 // Handle Create
 if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["create"])) {
@@ -647,6 +649,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["create"])) {
             if (is_array($tmp)) $base = $tmp;
         }
         foreach ((array)$_POST['meta_vis'] as $k=>$v) unset($base[$k]);
+        $_POST['meta_vis'] = array_replace((array)$_POST['meta_vis'], dps_policy(array_replace($base,(array)$_POST['meta_vis'])));
         foreach ((array)$_POST['meta_vis'] as $k=>$v) {
             if (is_array($v)) {
                 $v = array_values(array_filter($v, function($x){ return $x !== '' && $x !== null && strtolower((string)$x) !== 'keepmechecked'; }));
@@ -687,6 +690,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["update"])) {
             if (is_array($tmp)) $base = $tmp;
         }
         foreach ((array)$_POST['meta_vis'] as $k=>$v) unset($base[$k]);
+        $_POST['meta_vis'] = array_replace((array)$_POST['meta_vis'], dps_policy(array_replace($base,(array)$_POST['meta_vis'])));
         foreach ((array)$_POST['meta_vis'] as $k=>$v) {
             if (is_array($v)) {
                 $v = array_values(array_filter($v, function($x){ return $x !== '' && $x !== null && strtolower((string)$x) !== 'keepmechecked'; }));
@@ -2823,6 +2827,7 @@ const saveAllBtn = document.getElementById('btn_save_all');
                 </div>
             </div>
             <div class="provider-body" style="display:block;">
+                  <?php dps_render_controls($metaObj2 ?? []); ?>
                 <div class="setting-row">
                     <div>
                         <div class="setting-key"><span class="setting-icon">&#x1F6E0;&#xFE0F;</span><span>Editable Fields</span></div>
@@ -2939,7 +2944,12 @@ const saveAllBtn = document.getElementById('btn_save_all');
         </div>
         </div>
         
-        <?php include(__DIR__."/tmpl/metadata_json_editor.php");?>
+        <?php
+        $scheduleSyncKeys = $profileSyncableMetadataKeys;
+        $profileSyncableMetadataKeys = array_values(array_diff($profileSyncableMetadataKeys, array_keys(dps_policy([]))));
+        include(__DIR__."/tmpl/metadata_json_editor.php");
+        $profileSyncableMetadataKeys = $scheduleSyncKeys;
+        ?>
         <div style="margin-top:8px; display:flex; justify-content:flex-end; gap:8px;">
             <button type="button" id="btn_back_to_top" class="btn-primary" title="Scroll to top">Back to top</button>
         </div>
@@ -2982,7 +2992,7 @@ const saveAllBtn = document.getElementById('btn_save_all');
                 'mode' => 'profile',
                 'fieldName' => 'metadata',
                 'settingsCatalog' => $profileOverrideCatalog,
-                'reservedKeys' => ['DYNAMIC_PROFILE_ENABLED', 'MIDDLE_TERM_MEMORY_ENABLED', 'SHORT_TERM_MEMORY_ENABLED', 'SHORT_TERM_MEMORY_MAX', 'AUTO_DIARY_ENABLED', 'AUTO_DIARY_WAIT_ENABLED', 'MATERIALIZE_DIARY_ENABLED', 'LATEST_DIARY_CONTEXT_ENABLED', 'LLM_RANDOMIZER_ENABLED', 'RPG_COMMENTS', 'RPG_COMMENTS_CHANCE', 'DYNAMIC_PROFILE_FIELDS'],
+                'reservedKeys' => ['DYNAMIC_PROFILE_ENABLED', 'MIDDLE_TERM_MEMORY_ENABLED', 'SHORT_TERM_MEMORY_ENABLED', 'SHORT_TERM_MEMORY_MAX', 'AUTO_DIARY_ENABLED', 'AUTO_DIARY_WAIT_ENABLED', 'MATERIALIZE_DIARY_ENABLED', 'LATEST_DIARY_CONTEXT_ENABLED', 'LLM_RANDOMIZER_ENABLED', 'RPG_COMMENTS', 'RPG_COMMENTS_CHANCE', 'DYNAMIC_PROFILE_FIELDS', 'DYNAMIC_PROFILE_INTERVAL_DAYS', 'DYNAMIC_PROFILE_MIN_EVENTS', 'DYNAMIC_PROFILE_COOLDOWN_MINUTES'],
                 'currentData' => $currentProfileOverrides,
                 'systemFields' => [],
             ];

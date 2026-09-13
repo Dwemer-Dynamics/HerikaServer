@@ -171,11 +171,14 @@ function handleTravelToAction($location, $currentNpcData, $npcName, $last_ts, $l
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
-                'data' => ($location == $resolvedLocation) ? "$npcName failed to travel to $location. Reason: {$GLOBALS["LAST_REASON"]}" : "$npcName starts travelling to $location (resolved as $resolvedLocation $resolvedLocationInterior). Reason: {$GLOBALS["LAST_REASON"]}",
+                'data' => ($location == $resolvedLocation) ? "$npcName failed to travel to $location. Reason: {$GLOBALS["LAST_REASON"]} LocSim:{$locId['sim']}" : "$npcName starts travelling to $location (resolved as $resolvedLocation $resolvedLocationInterior LocSim:{$locId['sim']}). Reason: {$GLOBALS["LAST_REASON"]}",
                 'category' => 'error',
             ]
         );
-        triggerNpcUpdate($npcName);
+        $npc=new NpcMaster();
+        $npcData = $npc->getByName($npcName);
+        $extendedData = $npc->getExtendedData($npcData);
+        triggerNpcUpdate($npcName,+$extendedData['background_life_last_updated_ec']);
         return false;
     }
 
@@ -346,7 +349,7 @@ function handleStayAtPlaceAction($location, $currentNpcData, $npcName, $last_ts,
     if (strtolower($intent) === 'socialize') {
         // If last intent was not socialize, we will trigger an update to the NPC to make it more dynamic and social.
         if (strtolower($previousIntent['category']) !== 'socialize') {
-            if (rand(0, 1)) {
+            if (rand(0, 4)==0) {
                 triggerNpcUpdate($npcName);
             }
         }
@@ -1260,6 +1263,139 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         );
     }
 
+    return true;
+}
+
+/**
+ * Handle SpreadRumors action for NPC background life.
+ *
+ * @param string $rumorDescription A brief description of the rumor to spread
+ * @param array $currentNpcData The acting NPC's data
+ * @param string $npcName The acting NPC's display name
+ * @param int $last_ts Last wall-clock timestamp
+ * @param int $last_gamets Last in-game timestamp
+ * @param int $momentum Session timestamp
+ * @param object $db The database connection object
+ * @param object|null $connectionHandler LLM connection handler
+ * @param string $dynamicBiography Acting NPC's dynamic biography
+ * @param string $contextHistory Recent context for the acting NPC
+ * @param string|null $lastEventLocation Fallback location from recent events
+ * @return bool True if the rumor was generated and stored, false otherwise
+ */
+function handleSpreadRumorsAction($rumorDescription, $currentNpcData, $npcName, $last_ts, $last_gamets, $momentum, $db, $connectionHandler = null, $dynamicBiography = '', $contextHistory = '', $lastEventLocation = null)
+{
+    $rumorDescription = trim((string) $rumorDescription);
+    if ($rumorDescription === '' || $connectionHandler === null) {
+        error_log("[handleSpreadRumorsAction] Missing rumor description or LLM connection for $npcName");
+        return false;
+    }
+
+    $metadata = $currentNpcData['metadata'] ?? [];
+    if (is_string($metadata)) {
+        $metadata = json_decode($metadata, true);
+    }
+    $lastCoords = is_array($metadata) ? ($metadata['last_coords'] ?? []) : [];
+    $location = null;
+
+    if (!empty($lastCoords['location_formid'])) {
+        $locationFormid = $db->escape($lastCoords['location_formid']);
+        $locationRow = $db->fetchOne(
+            "SELECT name, hold, is_interior FROM locations WHERE formid='$locationFormid' LIMIT 1"
+        );
+        $location = $locationRow['hold'] ?? $locationRow['name'] ?? null;
+    }
+
+    if (!$location && !empty($lastCoords[3])) {
+        $location = $lastCoords[3];
+    }
+    if (!$location && $lastEventLocation) {
+        $location = preg_replace('/\s*\(Interior\)\s*$/i', '', trim((string) $lastEventLocation));
+    }
+    if (!$location) {
+        error_log("[handleSpreadRumorsAction] Could not determine current location for $npcName");
+        return false;
+    }
+
+    $contextBlock = !empty($dynamicBiography)
+        ? "<character_sheet>\n{$npcName}:\n{$dynamicBiography}\n</character_sheet>\n\n"
+        : '';
+    $historyBlock = !empty($contextHistory)
+        ? "<context_history>\n{$contextHistory}\n</context_history>\n\n"
+        : '';
+    $dialoguePrompt = [
+        [
+            'role' => 'system',
+            'content' => 'You are a creative writer for the Skyrim (The Elder Scrolls) universe. '
+                . 'Write one brief, believable rumor that an NPC could spread aloud. '
+                . 'Keep it in-world and concise, with no stage directions, labels, or commentary.',
+        ],
+        [
+            'role' => 'user',
+            'content' => $contextBlock . $historyBlock
+                . "{$npcName} is currently in {$location}.\n"
+                . "Turn this brief into a natural rumor: {$rumorDescription}\n"
+                . 'Return only the rumor text, in one or two sentences.',
+        ],
+    ];
+
+    $rumorContent = trim((string) $connectionHandler->fast_request(
+        $dialoguePrompt,
+        ['MAX_TOKENS' => 256],
+        'backgroundlife'
+    ));
+    updateLastLLMCall($GLOBALS['HERIKA_NAME']);
+
+    if ($rumorContent === '') {
+        error_log("[handleSpreadRumorsAction] Failed to generate rumor for $npcName");
+        return false;
+    }
+
+    $db->insert(
+        'rumors',
+        [
+            'ts' => $last_ts,
+            'gamets' => $last_gamets + 1,
+            'type' => 'rumor',
+            'content' => $rumorContent,
+            'hold' => $location,
+        ]
+    );
+
+    $db->insert('eventlog', [
+        'ts' => $last_ts,
+        'gamets' => $last_gamets + 1,
+        'type' => 'innerchat',
+        'data' => "The Narrator: $npcName spreads a rumor in $location: $rumorContent",
+        'sess' => $momentum,
+        'localts' => time(),
+        'people' => $npcName,
+        'location' => $location,
+        'party' => '',
+    ]);
+
+    $db->insert('actions_issued', [
+        'action' => 'SpreadRumors',
+        'fullcall' => "SpreadRumors:$rumorDescription",
+        'actorname' => $npcName,
+        'ts' => $last_ts,
+        'gamets' => $last_gamets,
+        'localts' => time(),
+        'original' => 'backgroundaction',
+    ]);
+
+    $db->insert(
+        'bgl_history',
+        [
+            'npc' => $npcName,
+            'ts' => $last_ts,
+            'gamets' => $last_gamets + 1,
+            'localts' => time(),
+            'data' => "$npcName spreads a rumor in $location: $rumorContent. Reason: {$GLOBALS['LAST_REASON']}",
+            'category' => 'rumor',
+        ]
+    );
+
+    triggerNpcUpdate($npcName);
     return true;
 }
 

@@ -238,6 +238,9 @@ if (!function_exists('chimGetManagedGeneralSettingIds')) {
             'EMOTEMOODS',
             'OGHMA_INFINIUM',
             'OGHMA_AMOUNT',
+            'OGHMA_RESULT_LIMIT',
+            'OGHMA_EXTRACTOR_FALLBACK',
+            'OGHMA_EXTRACTOR_TIMEOUT_MS',
             'RACIAL_OGHMA',
             'LOCATION_OGHMA',
             'DETECT_MAGIC_EVENT',
@@ -355,7 +358,7 @@ if (!function_exists('chimPrettySettingLabel')) {
             'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
             'CORE_CONNECTOR_PROFILES' => 'Profile Tasks',
             'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
-            'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Custom Oghma LLM',
+            'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Extractor Fallback',
             'PLAYER_RESPEECH' => 'Player Respeech Available',
             'CORE_CONNECTOR_SUMMARY_ENABLED' => 'Summaries Available',
             'CORE_CONNECTOR_MEDIUMTERM_ENABLED' => 'Background & Memory Tasks Available',
@@ -366,8 +369,11 @@ if (!function_exists('chimPrettySettingLabel')) {
             'RELATIONSHIP_UPDATE_CHANCE' => 'Relationship Update Chance',
             'NEVER_CLEAR_RELATIONSHIP_DATA' => 'Never Clear Relationship Data',
             'EMOTEMOODS' => 'Emote Moods',
-            'OGHMA_INFINIUM' => 'Oghma Infinium',
-            'OGHMA_AMOUNT' => 'Oghma Articles Amount',
+            'OGHMA_INFINIUM' => 'Enable Oghma',
+            'OGHMA_AMOUNT' => 'Oghma Topic Count',
+            'OGHMA_RESULT_LIMIT' => 'Oghma Result Limit',
+            'OGHMA_EXTRACTOR_FALLBACK' => 'Oghma Extractor Fallback',
+            'OGHMA_EXTRACTOR_TIMEOUT_MS' => 'Oghma Extractor Timeout',
             'RACIAL_OGHMA' => 'Force Racial Oghma',
             'LOCATION_OGHMA' => 'Force Location Oghma',
             'ENFORCE_STRICT_RECHAT_RESPONSE' => 'Strict Rechat Targeting',
@@ -397,7 +403,11 @@ if (!function_exists('chimPrettySettingLabel')) {
 if (!function_exists('chimGetOverrideableGeneralSettingCategory')) {
     function chimGetOverrideableGeneralSettingCategory(string $flatId): string
     {
-        if (in_array($flatId, ['OGHMA_INFINIUM', 'OGHMA_AMOUNT', 'RACIAL_OGHMA', 'LOCATION_OGHMA', 'OGHMA_CUSTOM', 'CORE_CONNECTOR_OGHMA_CUSTOM'], true)) {
+        if (in_array($flatId, [
+            'OGHMA_INFINIUM', 'OGHMA_AMOUNT', 'OGHMA_RESULT_LIMIT',
+            'OGHMA_EXTRACTOR_FALLBACK', 'OGHMA_EXTRACTOR_TIMEOUT_MS',
+            'RACIAL_OGHMA', 'LOCATION_OGHMA', 'OGHMA_CUSTOM', 'CORE_CONNECTOR_OGHMA_CUSTOM',
+        ], true)) {
             return 'Oghma';
         }
 
@@ -530,6 +540,9 @@ if (!function_exists('chimGetOverrideableGeneralSettingsCatalog')) {
 
         $catalog = [];
         foreach ($candidateIds as $id) {
+            if ($id === 'OGHMA_CUSTOM') {
+                continue;
+            }
             $definition = chimGetSchemaDefinition($id);
             if (array_key_exists('profile_overrideable', $definition) && $definition['profile_overrideable'] === false) {
                 continue;
@@ -1371,40 +1384,54 @@ if (!function_exists('chimLoadNarratorSettingsIntoGlobals')) {
     }
 }
 
-if (!function_exists('chimMaybeSyncPlayerName')) {
-    // Self-heal core_player.player_name when game's player differs from configured name.
-    // Trusted only when candidate is non-empty, not narrator/Player, and not in core_npc_master.
-    function chimMaybeSyncPlayerName($candidateName): bool
+if (!function_exists('chimNormalizeDetectedPlayerName')) {
+    // Reject missing/loading identities without restricting names to the Latin alphabet.
+    function chimNormalizeDetectedPlayerName($candidateName): ?string
     {
-        if (!is_string($candidateName)) return false;
+        if (!is_string($candidateName)) return null;
         $candidate = trim($candidateName);
-        if ($candidate === '') return false;
-        if (strcasecmp($candidate, 'The Narrator') === 0) return false;
-        if (strcasecmp($candidate, 'Player') === 0) return false;
+        if ($candidate === '' || !preg_match('//u', $candidate)
+            || preg_match('/[\x00-\x1F\x7F]/', $candidate) || mb_strlen($candidate, 'UTF-8') > 80) {
+            return null;
+        }
+        foreach (['The Narrator', 'Player', 'Prisoner', 'Unknown', 'Unknown Player', 'null', 'none'] as $placeholder) {
+            if (strcasecmp($candidate, $placeholder) === 0) return null;
+        }
+        return $candidate;
+    }
+}
 
-        $current = trim((string)($GLOBALS["PLAYER_NAME"] ?? ''));
-        if ($current !== '' && strcasecmp($current, $candidate) === 0) return false;
+if (!function_exists('chimExtractPlayerNameFromGamePayload')) {
+    // Load events use level:...,name:"...",race:"..."; also accept structured player metadata.
+    function chimExtractPlayerNameFromGamePayload($payload): ?string
+    {
+        if (is_string($payload)) {
+            $decoded = json_decode($payload, true);
+            if (is_array($decoded)) {
+                $payload = $decoded;
+            } elseif (preg_match('/(?:^|,)\s*name:"([^"]+)"(?:,|$)/u', $payload, $match)) {
+                return chimNormalizeDetectedPlayerName($match[1]);
+            } else {
+                return null;
+            }
+        }
+        if (!is_array($payload)) return null;
+        foreach (['player_name', 'playerName', 'name'] as $key) {
+            $candidate = chimNormalizeDetectedPlayerName($payload[$key] ?? null);
+            if ($candidate !== null) return $candidate;
+        }
+        return null;
+    }
+}
 
-        static $cache = [];
-        $key = strtolower($candidate);
-        if (array_key_exists($key, $cache)) return $cache[$key];
+if (!function_exists('chimMaybeSyncPlayerName')) {
+    // Explicit player events may share an NPC name; inferred dialogue prefixes must not.
+    function chimMaybeSyncPlayerName($candidateName, bool $explicitPlayer = false): bool
+    {
+        $candidate = chimNormalizeDetectedPlayerName($candidateName);
+        if ($candidate === null) return false;
 
         if (!isset($GLOBALS["db"]) || !is_object($GLOBALS["db"])) {
-            $cache[$key] = false;
-            return false;
-        }
-
-        try {
-            $escaped = $GLOBALS["db"]->escape($candidate);
-            $row = $GLOBALS["db"]->fetchOne(
-                "SELECT 1 FROM core_npc_master WHERE LOWER(npc_name) = LOWER('{$escaped}') LIMIT 1"
-            );
-            if ($row) {
-                $cache[$key] = false;
-                return false;
-            }
-        } catch (\Throwable $e) {
-            $cache[$key] = false;
             return false;
         }
 
@@ -1414,14 +1441,24 @@ if (!function_exists('chimMaybeSyncPlayerName')) {
 
         try {
             $player = new Player();
-            $player->set('player_name', $candidate);
+            $current = $player->get('player_name');
+            if ($current === $candidate) {
+                $GLOBALS["PLAYER_NAME"] = $candidate;
+                return false;
+            }
+            if (!$explicitPlayer) {
+                $escaped = $GLOBALS["db"]->escape($candidate);
+                $row = $GLOBALS["db"]->fetchOne(
+                    "SELECT 1 FROM core_npc_master WHERE LOWER(npc_name) = LOWER('{$escaped}') LIMIT 1"
+                );
+                if ($row) return false;
+            }
+            if (!$player->set('player_name', $candidate)) return false;
             $GLOBALS["PLAYER_NAME"] = $candidate;
             Logger::info("[CHIM] Auto-synced player_name: '{$current}' -> '{$candidate}'");
-            $cache[$key] = true;
             return true;
         } catch (\Throwable $e) {
             Logger::warn("[CHIM] chimMaybeSyncPlayerName failed: " . $e->getMessage());
-            $cache[$key] = false;
             return false;
         }
     }

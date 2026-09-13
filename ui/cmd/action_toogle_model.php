@@ -37,7 +37,7 @@ if (isset($_SERVER['HTTP_REFERER'])) {
     exit; // Make sure to call exit after header redirection
 } else {
     // Fallback if no referring page is set
-    header("Location: index.php");
+    header("Location: ../home.php");
     exit; // Make sure to call exit after header redirection
 }
 

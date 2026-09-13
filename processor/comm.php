@@ -1,7 +1,9 @@
 <?php
+require_once $GLOBALS['ENGINE_PATH'] . '/lib/chim_interaction.php';
+if (chimInteractionIsTrigger($gameRequest[0] ?? '')) chimInteractionRequire();
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/dynamic_update_util.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/utils_game_timestamp.php");
-require_once($GLOBALS["ENGINE_PATH"] . "/lib/playthrough_snapshot.php");
+require_once($GLOBALS["ENGINE_PATH"] . "/lib/playthrough_autosave.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/core/game_plugins.php");
 
 $MUST_END = false;
@@ -93,6 +95,7 @@ if (!function_exists("emitPlayerMenuScriptQueueLine")) {
             return;
         }
 
+        chimInteractionRequire();
         echo "Player|ScriptQueue|{$subtitle}//__player_menu_tts///1.0\r\n";
         if (ob_get_level()) {
             @ob_flush();
@@ -112,17 +115,18 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
     $now = time();
 
     error_log("[INIT] Should delete everthing after {$gameRequest[2]}");
-    // Dragon Break autosnapshot: detect large rollback and snapshot before pruning
+    // Dragon Break automatic playthrough save: detect a large rollback and save before pruning.
     try {
         $prevGamets = DataLastKnownGameTS();
         $incomingGamets = intval($gameRequest[2]);
-        $snapshotId = dragon_break_snapshot_if_needed($prevGamets, $incomingGamets);
-        if ($snapshotId > 0) {
-            Logger::info("DragonBreak: Created snapshot id {$snapshotId} prior to rollback prune");
+        $playthroughId = dragon_break_playthrough_if_needed($prevGamets, $incomingGamets);
+        if ($playthroughId > 0) {
+            Logger::info("DragonBreak: Created playthrough id {$playthroughId} prior to rollback prune");
         }
     } catch (Exception $e) {
-        Logger::warn("DragonBreak: Snapshot attempt failed: " . $e->getMessage());
+        Logger::warn("DragonBreak: Playthrough attempt failed: " . $e->getMessage());
     }
+    if (!empty($GLOBALS['pgr_skip_rollback'])) { $MUST_END = true; return; }
     $db->delete("eventlog", "gamets>={$gameRequest[2]}  ");
     $db->delete("eventlog", "localts>$now ");
     //$db->delete("eventlog", "type='playerinfo'");
@@ -233,6 +237,8 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
 
     require_once $GLOBALS["ENGINE_PATH"] . "/service/processors/snqe/lib/snqe.class.php";
     SNQEQuestManager::load_quests($gameRequest[2]);
+
+    pgr_complete();
 
     // Narrator Welcome Message on Load
     try {
@@ -1225,18 +1231,19 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 } elseif ($gameRequest[0] == "playerdied") {
 
 
-    // Dragon Break autosnapshot: detect large rollback and snapshot before pruning
+    // Dragon Break automatic playthrough save: detect a large rollback and save before pruning.
     try {
         $prevGamets = DataLastKnownGameTS();
         $incomingGamets = intval($gameRequest[2]);
-        $snapshotId = dragon_break_snapshot_if_needed($prevGamets, $incomingGamets);
-        if ($snapshotId > 0) {
-            Logger::info("DragonBreak: Created snapshot id {$snapshotId} prior to death rollback prune");
+        $playthroughId = dragon_break_playthrough_if_needed($prevGamets, $incomingGamets);
+        if ($playthroughId > 0) {
+            Logger::info("DragonBreak: Created playthrough id {$playthroughId} prior to death rollback prune");
         }
     } catch (Exception $e) {
-        Logger::warn("DragonBreak: Snapshot attempt (playerdied) failed: " . $e->getMessage());
+        Logger::warn("DragonBreak: Playthrough attempt (playerdied) failed: " . $e->getMessage());
     }
 
+    if (!empty($GLOBALS['pgr_skip_rollback'])) { $MUST_END = true; return; }
     $lastSaveHistory = $db->fetchAll("select gamets from eventlog where type='infosave' order by ts desc limit 1 offset 0");
     if (isset($lastSaveHistory[0]["ts"])) {
         $lastSave = $lastSaveHistory[0]["ts"];
@@ -1277,6 +1284,8 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
 
     $MUST_END = true;
+
+    pgr_complete();
 
 } elseif ($gameRequest[0] == "setconf") {
 
@@ -2088,7 +2097,10 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
 } elseif (strpos($gameRequest[0], "updateprofiles_batch_async") === 0) {
 
-    // Async batch processing for timer-based dynamic profile updates
+    // Automatic scheduling belongs to the server; only explicit manual batches queue work.
+    if ($gameRequest[0] !== 'updateprofiles_batch_async_manual') terminate();
+
+    // Explicit manual profile updates
     // Format: updateprofiles_batch_async|timestamp|gamestamp|NPC1,NPC2,NPC3,NPC4
 
     if (!isset($gameRequest[3]) || empty($gameRequest[3])) {

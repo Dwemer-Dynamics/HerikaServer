@@ -3,8 +3,39 @@
 --
 -- Data for Name: master_packages; Type: TABLE DATA; Schema: public; Owner: dwemer
 --
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.master_packages'::regclass AND contype = 'p'
+    ) THEN
+        
+DO $$
+DECLARE
+    constraint_record record;
+BEGIN
+    FOR constraint_record IN
+        SELECT conname
+        FROM pg_constraint
+        WHERE conrelid = 'public.master_packages'::regclass
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE public.master_packages DROP CONSTRAINT IF EXISTS %I',
+            constraint_record.conname
+        );
+    END LOOP;
+END
+$$;
+
 ALTER TABLE ONLY public.master_packages
-    ADD CONSTRAINT master_packages_pk PRIMARY KEY (formid);
+            ADD CONSTRAINT master_packages_pk PRIMARY KEY (formid);
+    END IF;
+END $$;
+
+-- Move the old entry before seeding; preserve both rows if the target already exists.
+UPDATE public.master_packages SET formid = '0x0004ADF0'
+WHERE formid = '0x0004ADE7'
+  AND NOT EXISTS (SELECT 1 FROM public.master_packages WHERE formid = '0x0004ADF0');
 
 INSERT INTO public.master_packages (
     mod,
@@ -16,13 +47,10 @@ INSERT INTO public.master_packages (
 )
 VALUES (
     'AIAgent.esp',
-    '0x0004ADE7',
+    '0x0004ADF0',
     'SandBoxSleep',
     '{actor} is sleeping at {location}',
     '',
     ''
 )
 ON CONFLICT (formid) DO NOTHING;
-
-
-UPDATE public.master_packages SET formid = '0x0004ADF0' WHERE formid = '0x0004ADE7';
