@@ -65,7 +65,25 @@ function pgr_capture($conn, array &$state): int {
     ptr_ensure_schema($conn);
     pth_query($conn,'BEGIN ISOLATION LEVEL REPEATABLE READ');
     try {
-        $save = pth_capture($conn, 'Automatic Playthrough Save ' . gmdate('Y-m-d H:i:s') . ' ' . substr($state['id'],0,8), null, 'dragon_break');
+        $player = '';
+        if (ptr_exists($conn, 'public.core_player')) {
+            $rows = pg_fetch_all(pth_query($conn, "SELECT id,value FROM public.core_player WHERE id IN ('player_name','stats')")) ?: [];
+            $identity = array_column($rows, 'value', 'id');
+            $player = mb_substr(trim($identity['player_name'] ?? ''), 0, 120);
+            $stats = json_decode($identity['stats'] ?? '', true);
+            $level = filter_var($stats['level'] ?? null, FILTER_VALIDATE_INT, ['options'=>['min_range'=>1,'max_range'=>999999999]]);
+            if ($player !== '' && $level !== false) $player .= ' (Level ' . $level . ')';
+        }
+        $gamets = pgr_clock($conn);
+        $gameDate = $gamets > 0 ? convert_gamets2skyrim_long_date_no_time($gamets) : '';
+        $baseName = implode(' - ', array_filter([$player, $gameDate]));
+        if ($baseName === '') $baseName = 'Playthrough Save';
+        $name = $baseName;
+        $suffix = 2;
+        while (pg_num_rows(pth_query($conn, "SELECT id FROM {$meta}.playthrough_profiles WHERE lower(name)=lower($1)", [$name]))) {
+            $name = $baseName . ' (' . $suffix++ . ')';
+        }
+        $save = pth_capture($conn, $name, null, 'dragon_break');
         $id = (int)$save['id'];
         if ($id < 1) throw new RuntimeException('The recovery save has no manager entry.');
         pth_query($conn, "UPDATE {$meta}.playthrough_profiles SET retention_pinned=true WHERE id=$1", [$id]);
@@ -183,6 +201,7 @@ function pgr_complete(bool $success = true): bool {
 // Inspect only routing/timestamps before bootstrap can write player data or start background work.
 function pgr_http_preflight(string $endpoint): void {
     if (PHP_SAPI === 'cli') return;
+    require_once __DIR__ . '/playthrough_switching.php';
     $meta = ptp_product()['meta'];
     $state = pgr_state();
     $event = ''; $incoming = 0;
@@ -211,6 +230,7 @@ function pgr_http_preflight(string $endpoint): void {
         ptr_runtime_enter();
         $conn = ptp_connect();
         if ($conn) {
+            pas_guard($conn, true);
             try { $previous = pgr_clock($conn); }
             catch (Throwable $error) { $previous = 0; $GLOBALS['pgr_skip_rollback'] = true; pgr_notice(['id'=>str_repeat('0',32)],'failed'); }
             finally { pg_close($conn); }
@@ -226,6 +246,7 @@ function pgr_http_preflight(string $endpoint): void {
         ptr_runtime_enter();
         $profileClockConn = ptp_connect();
         if ($profileClockConn) {
+            pas_guard($profileClockConn, true);
             try { dps_clock($profileClockConn, $incoming, $eligible); }
             catch (Throwable $error) { error_log('Dynamic Profiles clock: '.$error->getMessage()); }
             finally { pg_close($profileClockConn); }

@@ -1,4 +1,7 @@
 <?php
+// Distinguish temporary switch contention from failures that need user intervention.
+class PlaythroughSwitchBusyException extends RuntimeException {}
+
 // A per-installation barrier keeps old requests from writing into a restored playthrough.
 function ptr_runtime_file(string $name)
 {
@@ -90,7 +93,7 @@ function ptr_runtime_begin_switch(float $timeoutSeconds = 30.0, $connection = nu
     $lock = ptr_runtime_file('switch.lock');
     if (!flock($lock, LOCK_EX | LOCK_NB)) {
         fclose($lock);
-        throw new RuntimeException('Another Playthrough Save is loading. Try again shortly.');
+        throw new PlaythroughSwitchBusyException('Another Playthrough Save is loading. Try again shortly.');
     }
     @set_time_limit(0);
     ignore_user_abort(true);
