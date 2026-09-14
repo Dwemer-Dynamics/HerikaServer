@@ -1307,7 +1307,7 @@ if ($argv[1] == '38') {
 // GSPOSES
 if ($argv[1] == '39') {
 
-    if ($argv[2] == '0') {
+    if ($argv[3] == '0') {
 
         $GLOBALS["db"]->insert(
             'responselog',
@@ -1315,7 +1315,7 @@ if ($argv[1] == '39') {
                 'localts' => time(),
                 'sent' => 0,
                 'text' => "CommandAnimation@IdleForceDefaultState",
-                'actor' => "{$argv[3]}",
+                'actor' => "{$argv[2]}",
                 'action' => 'command'
             )
         );
@@ -1325,14 +1325,14 @@ if ($argv[1] == '39') {
             array(
                 'localts' => time(),
                 'sent' => 0,
-                'text' => "CommandAnimation@{$argv[2]}",
-                'actor' => "{$argv[3]}",
+                'text' => "CommandAnimation@{$argv[3]}",
+                'actor' => "{$argv[2]}",
                 'action' => 'command'
             )
         );
 
         $npcMaster = new NpcMaster();
-        $npc = $npcMaster->getByName($argv[3]);
+        $npc = $npcMaster->getByName($argv[2]);
 
         $skyrimCmd = new SkyrimCommandBuilder();
 
