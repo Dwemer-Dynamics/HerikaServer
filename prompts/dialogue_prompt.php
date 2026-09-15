@@ -195,11 +195,12 @@ if (!function_exists('chimLoadManagedRechatCuePrompts')) {
             "{PREVIOUS_SPEAKER}" => $previousSpeaker,
         ];
 
-        $strictFallback = "Dialogue turn for {HERIKA_NAME}. The previous speaker was {PREVIOUS_SPEAKER}. You must respond directly to {PREVIOUS_SPEAKER}.";
+        $noEchoInstruction = " Do not repeat, restate, or quote any line already in the dialogue history. Contribute only {HERIKA_NAME}'s new response.";
+        $strictFallback = "Dialogue turn for {HERIKA_NAME}. The previous speaker was {PREVIOUS_SPEAKER}. You must respond directly to {PREVIOUS_SPEAKER}." . $noEchoInstruction;
         $relaxedFallbacks = [
-            "Dialogue turn for {HERIKA_NAME}. Respond naturally to whoever just spoke. Address the previous speaker directly. {TEMPLATE_DIALOG}",
-            "Dialogue turn for {HERIKA_NAME}. Continue the conversation naturally. Address whoever you're actually responding to. {TEMPLATE_DIALOG}",
-            "Dialogue turn for {HERIKA_NAME}. Focus on one actor - respond to whoever just spoke. {TEMPLATE_DIALOG}",
+            "Dialogue turn for {HERIKA_NAME}. Respond naturally to whoever just spoke. Address the previous speaker directly. {TEMPLATE_DIALOG}" . $noEchoInstruction,
+            "Dialogue turn for {HERIKA_NAME}. Continue the conversation naturally. Address whoever you're actually responding to. {TEMPLATE_DIALOG}" . $noEchoInstruction,
+            "Dialogue turn for {HERIKA_NAME}. Focus on one actor - respond to whoever just spoke. {TEMPLATE_DIALOG}" . $noEchoInstruction,
         ];
 
         if (chimIsStrictResponsePromptContext()) {

@@ -6076,6 +6076,39 @@ if ($checkVersion("prompts")<20260615001) {
     Logger::info("Applied patch prompts 20260615001 - Added player_diary_prompt");
 }
 
+if ($checkVersion("prompts")<20260915001) {
+    Logger::debug("Applying prompts table 20260915001 - Preventing repeated rechat dialogue");
+
+    $noEchoInstruction = " Do not repeat, restate, or quote any line already in the dialogue history. Contribute only {HERIKA_NAME}'s new response.";
+    $rechatResponsePrompts = [
+        'rechat_response_prompt_relaxed_1' => "Dialogue turn for {HERIKA_NAME}. Respond naturally to whoever just spoke. Address the previous speaker directly. {TEMPLATE_DIALOG}" . $noEchoInstruction,
+        'rechat_response_prompt_relaxed_2' => "Dialogue turn for {HERIKA_NAME}. Continue the conversation naturally. Address whoever you're actually responding to. {TEMPLATE_DIALOG}" . $noEchoInstruction,
+        'rechat_response_prompt_relaxed_3' => "Dialogue turn for {HERIKA_NAME}. Focus on one actor - respond to whoever just spoke. {TEMPLATE_DIALOG}" . $noEchoInstruction,
+        'rechat_response_prompt_strict_1' => "Dialogue turn for {HERIKA_NAME}. The previous speaker was {PREVIOUS_SPEAKER}. You must respond directly to {PREVIOUS_SPEAKER}." . $noEchoInstruction,
+        'rechat_response_prompt_strict_2' => "Dialogue turn for {HERIKA_NAME}. The previous speaker was {PREVIOUS_SPEAKER}. You must respond directly to {PREVIOUS_SPEAKER}." . $noEchoInstruction,
+        'rechat_response_prompt_strict_3' => "Dialogue turn for {HERIKA_NAME}. The previous speaker was {PREVIOUS_SPEAKER}. You must respond directly to {PREVIOUS_SPEAKER}." . $noEchoInstruction,
+    ];
+
+    foreach ($rechatResponsePrompts as $promptKey => $promptText) {
+        $escapedPromptKey = $db->escape($promptKey);
+        $escapedPromptText = $db->escape($promptText);
+        $db->execQuery("
+            INSERT INTO public.prompts (prompt_key, default_prompt, description)
+            VALUES (
+                '$escapedPromptKey',
+                '$escapedPromptText',
+                'Default rechat response cue. Preserves custom_prompt overrides.'
+            )
+            ON CONFLICT (prompt_key) DO UPDATE SET
+                default_prompt = EXCLUDED.default_prompt,
+                updated_at = CURRENT_TIMESTAMP
+        ");
+    }
+
+    $updateVersion("prompts", 20260915001);
+    Logger::info("Applied patch prompts 20260915001 - Prevented repeated rechat dialogue");
+}
+
 //----------------------------------------------------
 
 if ($checkVersion("utterance_delivery") < 20260502001) {
