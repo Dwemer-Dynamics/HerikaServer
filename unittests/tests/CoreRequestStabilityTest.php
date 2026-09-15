@@ -133,6 +133,26 @@ final class CoreRequestStabilityTest extends TestCase
         }
     }
 
+    public function testDirectorEndsAtPlayerListenerAndDiscardsLaterActions(): void
+    {
+        require_once __DIR__ . '/../../lib/director_scene_contract.php';
+        $actors = ['Sarah' => [], 'Leona' => []];
+        $catalog = ['MoveTo' => ['speakers' => ['Sarah'], 'parameters' => [
+            'properties' => ['target' => ['type' => 'string']], 'required' => ['target']]]];
+        $opening = ['speaker' => 'Sarah', 'listener' => 'Leona', 'text' => 'Come over here.'];
+        $handoff = ['speaker' => 'Sarah', 'listener' => 'Tom', 'text' => 'What do you think?'];
+        $action = ['speaker' => 'Sarah', 'after_line' => 2, 'command_name' => 'MoveTo',
+            'parameters' => ['target' => 'Tom']];
+        $scene = dwemerValidateDirectorScene(['lines' => [$opening, $handoff,
+            ['speaker' => 'Tom', 'listener' => 'Sarah', 'text' => 'Invented player response.'], $opening],
+            'actions' => [$action, array_replace($action, ['after_line' => 4])]], $actors, $catalog, 'Tom');
+        $this->assertSame([$opening, $handoff], $scene['lines']);
+        $this->assertSame([$action], $scene['actions']);
+        $npcOnly = dwemerValidateDirectorScene(['lines' => [$opening,
+            ['speaker' => 'Leona', 'listener' => 'Sarah', 'text' => 'All right.']]], $actors, $catalog, 'Tom');
+        $this->assertCount(2, $npcOnly['lines']);
+    }
+
     public function testDirectorRejectsPlayerSpeechEvenIfPlayerIsInActorMap(): void
     {
         require_once __DIR__ . '/../../lib/director_scene_contract.php';
