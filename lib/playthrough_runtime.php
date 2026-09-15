@@ -6,11 +6,14 @@ function ptr_runtime_file(string $name)
     if (!is_dir($directory) && !@mkdir($directory, 02775, true) && !is_dir($directory)) {
         throw new RuntimeException('Cannot pause background work. Check the server log folder permissions.');
     }
-    @chmod($directory, 02775);
+    // Apache and CLI workers share these files but cannot chmod each other's files.
+    if ((!function_exists('posix_geteuid') || fileowner($directory) === posix_geteuid())
+        && (fileperms($directory) & 07777) !== 02775) @chmod($directory, 02775);
     $path = $directory . '/' . $name;
     $handle = @fopen($path, 'c+e'); // Do not carry locks into exec'd background processes.
     if (!$handle) throw new RuntimeException('Cannot open the Playthrough Saves runtime lock.');
-    @chmod($path, 0664);
+    if ((!function_exists('posix_geteuid') || fileowner($path) === posix_geteuid())
+        && (fileperms($path) & 07777) !== 0664) @chmod($path, 0664);
     return $handle;
 }
 
@@ -50,7 +53,11 @@ function ptr_runtime_enter(): void
         exit(75);
     }
     $GLOBALS['ptr_runtime_lease'] = $lease;
-    $GLOBALS['ptr_runtime_generation'] = trim((string)@file_get_contents(dirname(__DIR__) . '/log/playthrough_runtime/generation'));
+    $generationPath = dirname(__DIR__) . '/log/playthrough_runtime/generation';
+    clearstatcache(true, $generationPath);
+    // The generation is created by the first switch, not by ordinary requests.
+    $GLOBALS['ptr_runtime_generation'] = is_file($generationPath)
+        ? trim((string)file_get_contents($generationPath)) : '';
     // PHP closes the descriptor on exit. An explicit LOCK_UN would also unlock forked children.
 }
 
