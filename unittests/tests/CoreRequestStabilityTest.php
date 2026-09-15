@@ -70,6 +70,98 @@ final class CoreRequestStabilityTest extends TestCase
 {
     private bool $warningHandlerInstalled = false;
 
+    public function testDirectorUsesSceneTemplatesAndRestoresConnectorState(): void
+    {
+        require_once __DIR__ . '/../../lib/director_scene.php';
+        $actors = ['Sarah' => [], 'Leona' => []];
+        $catalog = ['MoveTo' => ['speakers' => ['Sarah'], 'parameters' => ['properties' => [
+            'target' => ['type' => 'string'], 'speed' => ['type' => 'integer', 'minimum' => 1],
+        ], 'required' => ['target']]]];
+        $connection = new class {
+            public array $captured = [];
+            public string $response = '';
+            public function open($prompt, $options): void {
+                $this->captured = ['options' => $options, 'template' => $GLOBALS['responseTemplate'],
+                    'schema' => $GLOBALS['structuredOutputTemplate'], 'connector' => $GLOBALS['CONNECTOR'],
+                    'functions' => $GLOBALS['FUNCTIONS_ARE_ENABLED'], 'patch' => $GLOBALS['PATCH']];
+            }
+            public function process(): void {}
+            public function isDone(): bool { return true; }
+            public function close($name): string { return $this->response; }
+        };
+        $keys = ['CURRENT_CONNECTOR', 'CONNECTOR', 'PATCH', 'FUNCTIONS_ARE_ENABLED', 'responseTemplate', 'structuredOutputTemplate'];
+        $original = array_intersect_key($GLOBALS, array_flip($keys));
+        try {
+            $GLOBALS['CURRENT_CONNECTOR'] = 'openrouterjson';
+            $GLOBALS['PATCH'] = ['PREAPPEND' => '{"character":"Sarah",'];
+            $GLOBALS['FUNCTIONS_ARE_ENABLED'] = true;
+            $GLOBALS['responseTemplate'] = ['message' => 'Normal dialogue'];
+            $GLOBALS['structuredOutputTemplate'] = ['normal' => true];
+            foreach ([false, true] as $schemaEnabled) {
+                $GLOBALS['CONNECTOR'] = ['openrouterjson' => ['json_schema' => $schemaEnabled, 'PREFILL_JSON' => true]];
+                $before = array_intersect_key($GLOBALS, array_flip($keys));
+                foreach ([false, true] as $malformed) {
+                    $connection->response = $malformed ? '{"lines":[]} trailing junk' : json_encode([
+                        'lines' => [['speaker' => 'Sarah', 'listener' => 'Tom', 'text' => 'Hello.']],
+                        'actions' => [['speaker' => 'Sarah', 'after_line' => 1, 'command_name' => 'MoveTo',
+                            'parameters' => ['target' => 'Leona', 'speed' => null]]],
+                    ]);
+                    try {
+                        $scene = chimRequestDirectorScene($connection, [], $actors, $catalog, 'Tom');
+                        $this->assertFalse($malformed);
+                        $this->assertSame(['target' => 'Leona'], $scene['actions'][0]['parameters']);
+                    } catch (RuntimeException $error) {
+                        $this->assertTrue($malformed);
+                        $this->assertStringContainsString('Director did not return JSON: Syntax error', $error->getMessage());
+                    }
+                    $this->assertSame($before, array_intersect_key($GLOBALS, array_flip($keys)));
+                    $this->assertSame($schemaEnabled ? 'json_schema' : 'json_object', $connection->captured['options']['response_format']['type']);
+                    $this->assertArrayNotHasKey('message', $connection->captured['template']);
+                    $this->assertArrayNotHasKey('PREAPPEND', $connection->captured['patch']);
+                    $this->assertFalse($connection->captured['functions']);
+                    $this->assertFalse($connection->captured['connector']['openrouterjson']['PREFILL_JSON']);
+                    $schema = $connection->captured['schema']['json_schema']['schema'];
+                    $this->assertSame(['Sarah', 'Leona'], $schema['properties']['lines']['items']['properties']['speaker']['enum']);
+                    $this->assertContains('Tom', $schema['properties']['lines']['items']['properties']['listener']['enum']);
+                }
+            }
+        } finally {
+            foreach ($keys as $key) {
+                if (array_key_exists($key, $original)) $GLOBALS[$key] = $original[$key];
+                else unset($GLOBALS[$key]);
+            }
+        }
+    }
+
+    public function testDirectorEndsAtPlayerListenerAndDiscardsLaterActions(): void
+    {
+        require_once __DIR__ . '/../../lib/director_scene_contract.php';
+        $actors = ['Sarah' => [], 'Leona' => []];
+        $catalog = ['MoveTo' => ['speakers' => ['Sarah'], 'parameters' => [
+            'properties' => ['target' => ['type' => 'string']], 'required' => ['target']]]];
+        $opening = ['speaker' => 'Sarah', 'listener' => 'Leona', 'text' => 'Come over here.'];
+        $handoff = ['speaker' => 'Sarah', 'listener' => 'Tom', 'text' => 'What do you think?'];
+        $action = ['speaker' => 'Sarah', 'after_line' => 2, 'command_name' => 'MoveTo',
+            'parameters' => ['target' => 'Tom']];
+        $scene = dwemerValidateDirectorScene(['lines' => [$opening, $handoff,
+            ['speaker' => 'Tom', 'listener' => 'Sarah', 'text' => 'Invented player response.'], $opening],
+            'actions' => [$action, array_replace($action, ['after_line' => 4])]], $actors, $catalog, 'Tom');
+        $this->assertSame([$opening, $handoff], $scene['lines']);
+        $this->assertSame([$action], $scene['actions']);
+        $npcOnly = dwemerValidateDirectorScene(['lines' => [$opening,
+            ['speaker' => 'Leona', 'listener' => 'Sarah', 'text' => 'All right.']]], $actors, $catalog, 'Tom');
+        $this->assertCount(2, $npcOnly['lines']);
+    }
+
+    public function testDirectorRejectsPlayerSpeechEvenIfPlayerIsInActorMap(): void
+    {
+        require_once __DIR__ . '/../../lib/director_scene_contract.php';
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Director line 1: player or narrator cannot speak');
+        dwemerValidateDirectorScene(['lines' => [['speaker' => 'Tom', 'listener' => 'Sarah', 'text' => 'Hello.']]],
+            ['Sarah' => [], 'Tom' => []], [], 'Tom');
+    }
+
     protected function tearDown(): void
     {
         if ($this->warningHandlerInstalled) {
