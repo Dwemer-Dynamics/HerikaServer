@@ -1,5 +1,47 @@
 <?php
 
+// Constrain the scene to the current cast and each action's existing parameter contract.
+function dwemerDirectorResponseFormat(array $actors, array $catalog, string $player): array
+{
+    $speakers = array_values(array_diff(array_keys($actors), [$player, 'The Narrator']));
+    $actionSchemas = [];
+    foreach ($catalog as $code => $definition) {
+        $parameters = $definition['parameters'] ?? [];
+        $properties = $parameters['properties'] ?? [];
+        foreach ($properties as $key => &$property) {
+            // Strict schemas require every property; null represents an omitted optional argument.
+            if (!in_array($key, $parameters['required'] ?? [], true)) {
+                $property = ['anyOf' => [$property, ['type' => 'null']]];
+            }
+        }
+        unset($property);
+        $actionSchemas[] = ['type' => 'object', 'additionalProperties' => false,
+            'properties' => [
+                'speaker' => ['type' => 'string', 'enum' => array_values($definition['speakers'])],
+                'after_line' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 5],
+                'command_name' => ['type' => 'string', 'enum' => [$code]],
+                'parameters' => ['type' => 'object', 'additionalProperties' => false,
+                    'properties' => (object)$properties, 'required' => array_keys($properties)],
+            ], 'required' => ['speaker', 'after_line', 'command_name', 'parameters']];
+    }
+    return ['type' => 'json_schema', 'json_schema' => [
+        'name' => 'director_scene', 'strict' => true,
+        'schema' => ['type' => 'object', 'additionalProperties' => false,
+            'properties' => [
+                'lines' => ['type' => 'array', 'minItems' => 1, 'maxItems' => 5,
+                    'items' => ['type' => 'object', 'additionalProperties' => false,
+                        'properties' => [
+                            'speaker' => ['type' => 'string', 'enum' => $speakers],
+                            'listener' => ['type' => 'string', 'enum' => array_values(array_unique([...$speakers, $player]))],
+                            'text' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 600],
+                        ], 'required' => ['speaker', 'listener', 'text']]],
+                'actions' => ['type' => 'array', 'maxItems' => $actionSchemas ? 3 : 0,
+                    'items' => $actionSchemas ? ['anyOf' => $actionSchemas]
+                        : ['type' => 'object', 'properties' => new stdClass(), 'additionalProperties' => false]],
+            ], 'required' => ['lines', 'actions']],
+    ]];
+}
+
 // Keep the model-facing contract identical across the independent game servers.
 function dwemerDirectorPrompt(string $game, array $catalog): string
 {
@@ -47,19 +89,27 @@ function dwemerValidateDirectorScene(array $scene, array $actors, array $catalog
     }
     $result = ['id' => bin2hex(random_bytes(16)), 'lines' => [], 'actions' => []];
     $cast = [];
-    foreach ($lines as $line) {
-        if (!is_array($line)) throw new RuntimeException('Invalid Director line');
+    foreach ($lines as $index => $line) {
+        $lineNumber = $index + 1;
+        if (!is_array($line)) throw new RuntimeException("Director line {$lineNumber}: expected an object");
         foreach (['speaker', 'listener', 'text'] as $field) {
             if (!is_string($line[$field] ?? null) || trim($line[$field]) === '') {
-                throw new RuntimeException('Missing Director line field');
+                throw new RuntimeException("Director line {$lineNumber}: missing or empty {$field}");
             }
         }
         $speaker = trim($line['speaker']);
         $listener = trim($line['listener']);
         $text = trim($line['text']);
-        if (!isset($actors[$speaker]) || ($listener !== $player && !isset($actors[$listener]))
-            || $speaker === $listener || mb_strlen($text) > 600 || preg_match('/[\x00-\x1f]/', $text)) {
-            throw new RuntimeException('Invalid Director speaker, listener or text');
+        if ($speaker === $player || $speaker === 'The Narrator') {
+            throw new RuntimeException("Director line {$lineNumber}: player or narrator cannot speak");
+        }
+        if (!isset($actors[$speaker])) throw new RuntimeException("Director line {$lineNumber}: speaker is not an eligible NPC");
+        if ($listener !== $player && !isset($actors[$listener])) {
+            throw new RuntimeException("Director line {$lineNumber}: listener is not present");
+        }
+        if ($speaker === $listener) throw new RuntimeException("Director line {$lineNumber}: speaker and listener are the same");
+        if (mb_strlen($text) > 600 || preg_match('/[\x00-\x1f]/', $text)) {
+            throw new RuntimeException("Director line {$lineNumber}: text exceeds 600 characters or contains control characters");
         }
         $cast[$speaker] = true;
         $result['lines'][] = compact('speaker', 'listener', 'text');
@@ -92,6 +142,10 @@ function dwemerValidateDirectorScene(array $scene, array $actors, array $catalog
             $property = $schema['properties'][$key] ?? null;
             if (!is_array($property) || in_array($key, ['authority', 'dispatch', 'action_source'], true)) {
                 throw new RuntimeException('Unknown Director parameter');
+            }
+            if ($value === null && !in_array($key, $schema['required'] ?? [], true)) {
+                unset($parameters[$key]);
+                continue;
             }
             $type = $property['type'] ?? 'string';
             $valid = match ($type) {
