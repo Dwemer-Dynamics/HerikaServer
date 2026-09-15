@@ -19,6 +19,7 @@ require_once(__DIR__."/vr_items.php");
 require_once(__DIR__."/visual_context.php");
 require_once(__DIR__."/memory_ranking.php");
 
+define('_LOCATION_RESOLVE_SIM_THRESHOLD', 0.74); // Minimum similarity score for location resolution
 
 function ChangeHerikaName($new_name="") {
     if ($new_name > "") {
@@ -2693,8 +2694,25 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
         
         $localCounter++;    
     }
-    
-    $orderedData = array_reverse($rawDataFiltered);
+
+    // Remove repeated BGLCHAT sell items rows, as it increases context a lot.
+    $blgchatSellItemsRemove = false;
+    $rawDataReFiltered = [];
+    foreach ($rawDataFiltered as $key => $row) {
+        $rowData = $row["data"];
+        if ($row["subtype"] == "BGLCHAT") {
+            if (strpos($rowData, "can sell these items:  [{") !== false) {
+                if ($blgchatSellItemsRemove)
+                    continue;
+
+                $blgchatSellItemsRemove = true;
+            }
+        }
+
+        $rawDataReFiltered[] = $row;
+    }
+
+    $orderedData = array_reverse($rawDataReFiltered);
 
     //$orderedData = array_slice($orderedData, $lastNelements);
 
@@ -6356,7 +6374,7 @@ function call_llm_internal() {
 
                             $destinationName=$GLOBALS["db"]->escape(trim($destination));
                             //when world='' then 0 else 1 -> gives priority to locations with a world set (Skyrim, Whiterun,...)
-                            $dbDestination=$GLOBALS["db"]->fetchOne("SELECT name, similarity(name, '$destinationName') AS sim,formid FROM locations ORDER BY sim DESC,case when world='' then 0 else 1 end DESC LIMIT 1");
+                            $dbDestination=$GLOBALS["db"]->fetchOne("SELECT name, similarity(name, '$destinationName') AS sim,formid FROM locations ORDER BY sim DESC,case when world='' then 0 else 1 end DESC,created_at DESC LIMIT 1");
                             $dbDestinationRegion=$GLOBALS["db"]->fetchOne("SELECT name, similarity(region, '$destinationName') AS sim,formid FROM locations ORDER BY sim DESC LIMIT 1");
 
                             $contextDestinations=DataPosibleLocationsToGo();
@@ -8580,6 +8598,40 @@ function getInteriorRef($locationRow) {
         }
     }
     return null;
+}
+
+
+/**
+ * Build a PostgreSQL point literal from NPC metadata last_coords.
+ *
+ * @param array $currentNpcData
+ * @return string|null Point literal in the form '(x,y)' or null when unavailable
+ */
+function getNpcLastCoordsPoint($currentNpcData)
+{
+    $metadata = $currentNpcData['metadata'] ?? null;
+    if (is_string($metadata)) {
+        $metadata = json_decode($metadata, true);
+    }
+
+    $lastCoords = null;
+    if (is_array($metadata) && isset($metadata['last_coords']) && is_array($metadata['last_coords'])) {
+        $lastCoords = $metadata['last_coords'];
+    } elseif (isset($currentNpcData['last_coords']) && is_array($currentNpcData['last_coords'])) {
+        $lastCoords = $currentNpcData['last_coords'];
+    }
+
+    if (!$lastCoords) {
+        return null;
+    }
+
+    $x = $lastCoords[0] ?? null;
+    $y = $lastCoords[1] ?? null;
+    if (!is_numeric($x) || !is_numeric($y)) {
+        return null;
+    }
+
+    return '(' . floatval($x) . ',' . floatval($y) . ')';
 }
 
 /**

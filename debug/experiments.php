@@ -1503,3 +1503,26 @@ if ($argv[1] == '49') {
     $skyrimCmd->send(cmd: $json);
 
 }
+
+if ($argv[1] == '50') {
+
+    $npcMaster = new NpcMaster();
+    $npcname = "Gularzob";
+    $npc = $npcMaster->getByName($npcname);
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x00019E19", 0, 0, 155);
+    $skyrimCmd->send(cmd: $json);
+
+    $GLOBALS["db"]->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => "rolemaster",
+            'text' => "",
+            'action' => "rolecommand|BackgroundCmd@0x{$npc["refid"]}@ReturnHome",
+            'tag' => __FILE__ . ":" . __LINE__,
+        ]
+    );
+}
