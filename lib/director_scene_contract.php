@@ -32,7 +32,8 @@ function dwemerDirectorResponseFormat(array $actors, array $catalog, string $pla
                     'items' => ['type' => 'object', 'additionalProperties' => false,
                         'properties' => [
                             'speaker' => ['type' => 'string', 'enum' => $speakers],
-                            'listener' => ['type' => 'string', 'enum' => array_values(array_unique([...$speakers, $player]))],
+                            'listener' => ['type' => 'string', 'enum' => array_values(array_unique([...$speakers, $player])),
+                                'description' => 'If the listener is the player, this must be the final line.'],
                             'text' => ['type' => 'string', 'minLength' => 1, 'maxLength' => 600],
                         ], 'required' => ['speaker', 'listener', 'text']]],
                 'actions' => ['type' => 'array', 'maxItems' => $actionSchemas ? 3 : 0,
@@ -63,6 +64,8 @@ function dwemerDirectorPrompt(string $game, array $catalog): string
         . 'include the addressed eligible NPC answering and further relevant back-and-forth toward a natural stopping point. '
         . 'Do not stop at an unanswered opening question or greeting when an eligible NPC can reply. '
         . 'These replies are part of this script, not later generated follow-ups. A single line is valid for a one-way remark or action request. '
+        . 'When a line addresses the player as listener, end the scene after that line and its attached actions. '
+        . 'Leave the reply to the human player: never generate a player turn or any later NPC lines or actions. '
         . 'after_line is the 1-based line number after which the action starts. NPC actions must follow their own spoken line. '
         . 'Each line finishes, its attached actions are dispatched in listed order, then the next actor speaks. '
         . 'Do not wait for actions to finish: long-running actions continue during later dialogue. '
@@ -113,6 +116,8 @@ function dwemerValidateDirectorScene(array $scene, array $actors, array $catalog
         }
         $cast[$speaker] = true;
         $result['lines'][] = compact('speaker', 'listener', 'text');
+        // Hand control back to the human, even if the model wrote additional turns.
+        if ($listener === $player) break;
     }
     foreach ($actions as $action) {
         if (!is_array($action) || !is_string($action['command_name'] ?? null)
@@ -122,6 +127,8 @@ function dwemerValidateDirectorScene(array $scene, array $actors, array $catalog
         $code = $action['command_name'];
         $speaker = $action['speaker'];
         $after = $action['after_line'];
+        // Actions belonging to discarded turns must never reach the game.
+        if ($after > count($result['lines']) && $after <= count($lines)) continue;
         $definition = $catalog[$code] ?? null;
         if (!$definition || !in_array($speaker, $definition['speakers'], true)
             || $after < 1 || $after > count($lines)
