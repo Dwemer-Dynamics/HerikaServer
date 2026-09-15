@@ -51,6 +51,60 @@ function chimDirectorActionCatalog(array $actors): array
     return $catalog;
 }
 
+// Scope the existing JSON connectors' templates and dialogue-only options to this scene request.
+function chimRequestDirectorScene($connection, array $prompt, array $actors, array $catalog, string $player): array
+{
+    require_once __DIR__ . '/../functions/json_response.php';
+    $keys = ['responseTemplate', 'structuredOutputTemplate', 'CONNECTOR', 'PATCH', 'CHIM_NO_EXAMPLES',
+        'FUNCTIONS_ARE_ENABLED', 'PATCH_PROMPT_ENFORCE_ACTIONS', 'DIRECT_NARRATOR_DIALOGUE',
+        'HERIKA_NAME', 'HERIKA_PERS', 'HERIKA_SPEECHSTYLE', 'TTSFUNCTION'];
+    $saved = [];
+    foreach ($keys as $key) {
+        if (array_key_exists($key, $GLOBALS)) $saved[$key] = $GLOBALS[$key];
+    }
+    try {
+        $GLOBALS['responseTemplate'] = ['lines' => [['speaker' => 'Eligible NPC name',
+            'listener' => 'Present NPC or player name', 'text' => 'Exact spoken words']], 'actions' => []];
+        if ($catalog) {
+            $GLOBALS['responseTemplate']['actions'][] = ['speaker' => 'Eligible action speaker',
+                'after_line' => 1, 'command_name' => 'Catalog code', 'parameters' => new stdClass()];
+        }
+        $GLOBALS['structuredOutputTemplate'] = dwemerDirectorResponseFormat($actors, $catalog, $player);
+        $GLOBALS['FUNCTIONS_ARE_ENABLED'] = false;
+        $GLOBALS['PATCH_PROMPT_ENFORCE_ACTIONS'] = false;
+        $GLOBALS['DIRECT_NARRATOR_DIALOGUE'] = false;
+        $GLOBALS['HERIKA_NAME'] = 'Director';
+        $GLOBALS['HERIKA_PERS'] = '';
+        $GLOBALS['HERIKA_SPEECHSTYLE'] = '';
+        $GLOBALS['TTSFUNCTION'] = '';
+        $GLOBALS['CHIM_NO_EXAMPLES'] = true;
+        unset($GLOBALS['PATCH']['PREAPPEND']);
+        $driver = $GLOBALS['CURRENT_CONNECTOR'];
+        $GLOBALS['CONNECTOR'][$driver]['PREFILL_JSON'] = false;
+        $GLOBALS['CONNECTOR'][$driver]['ENFORCE_JSON'] = true;
+        // Preserve the connector's schema opt-in; JSON-only connectors still receive the scene template.
+        $format = ['type' => 'json_object'];
+        if (!empty($GLOBALS['CONNECTOR'][$driver]['json_schema'])) {
+            $format = $GLOBALS['structuredOutputTemplate'];
+        }
+        $connection->open($prompt, ['response_format' => $format, 'MAX_TOKENS' => 4000]);
+        do { $connection->process(); } while (!$connection->isDone());
+        $raw = $connection->close('director_scene');
+        try {
+            $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException $error) {
+            throw new RuntimeException('Director did not return JSON: ' . $error->getMessage(), 0, $error);
+        }
+        if (!is_array($decoded)) throw new RuntimeException('Director did not return a scene object');
+        return dwemerValidateDirectorScene($decoded, $actors, $catalog, $player);
+    } finally {
+        foreach ($keys as $key) {
+            if (array_key_exists($key, $saved)) $GLOBALS[$key] = $saved[$key];
+            else unset($GLOBALS[$key]);
+        }
+    }
+}
+
 // Generate and publish one complete scene; no NPC model interprets these lines again.
 function chimGenerateDirectorScene($connection, string $instruction, string $worldContext): void
 {
@@ -103,12 +157,7 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
             . "\n# Player name\n" . $player],
         ['role' => 'user', 'content' => $instruction],
     ];
-    $GLOBALS['CONNECTOR'][$GLOBALS['CURRENT_CONNECTOR']]['json_schema'] = false;
-    $connection->open($prompt, ['response_format' => ['type' => 'json_object'], 'MAX_TOKENS' => 4000]);
-    do { $connection->process(); } while (!$connection->isDone());
-    $decoded = json_decode($connection->close('director_scene'), true);
-    if (!is_array($decoded)) throw new RuntimeException('Director did not return JSON');
-    $scene = dwemerValidateDirectorScene($decoded, $actors, $catalog, $player);
+    $scene = chimRequestDirectorScene($connection, $prompt, $actors, $catalog, $player);
     $scene['schema'] = 'chim.director_scene.v1';
     $scene['generation'] = (int)($GLOBALS['argv'][5] ?? 0);
     foreach ($scene['lines'] as $index => &$line) {
