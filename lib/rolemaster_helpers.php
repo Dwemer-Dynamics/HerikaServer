@@ -787,7 +787,7 @@ function npcProfileBase($name, $class, $race, $gender, $location, $taskId, $addi
     $wireParm4 = quest_reference_formid_for_papyrus($parm4);
     $wireParm5 = quest_reference_formid_for_papyrus($parm5);
 
-    $GLOBALS["db"]->insert(
+    $spawnQueued = $GLOBALS["db"]->insertReturningId(
         'responselog',
         [
             'localts' => time(),
@@ -796,7 +796,8 @@ function npcProfileBase($name, $class, $race, $gender, $location, $taskId, $addi
             'text' => "",
             'action' => "rolecommand|spawnCharacter@{$name}@$wireParm1@$wireParm2@$wireParm3@$wireParm4@$patchedTaskid@$wireParm5",
             'tag' => "",
-        ]
+        ],
+        'rowid'
     );
     if ($rumors) {
         $GLOBALS["db"]->insert(
@@ -811,6 +812,7 @@ function npcProfileBase($name, $class, $race, $gender, $location, $taskId, $addi
             ]
         );
     }
+    return (bool)$spawnQueued;
 }
 
 // basetype: note, book , or allowed $GLOBALS["item_types"] 

@@ -228,6 +228,7 @@ function handleDeleteRumor() {
 }
 
 function handleCreateBackgroundNpc() {
+    session_write_close();
     $result = chimBglCreateNpc($_POST);
     $formData = $result['form_data'] ?? chimBglNpcCreationFormData($_POST);
     if (!($result['ok'] ?? false)) {
@@ -3036,6 +3037,40 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
 
         document.addEventListener('DOMContentLoaded', function () {
             const npcModal = document.getElementById('create-background-npc');
+            const npcForm = npcModal.querySelector('form');
+            const npcSubmit = npcForm.querySelector('button[type="submit"]');
+            const npcStatus = document.getElementById('npc-create-status');
+            npcForm.addEventListener('submit', async function (event) {
+                event.preventDefault();
+                if (npcSubmit.disabled) return;
+                const body = new URLSearchParams(new FormData(npcForm));
+                npcSubmit.disabled = true;
+                npcSubmit.textContent = 'Creating NPC...';
+                npcForm.setAttribute('aria-busy', 'true');
+                npcStatus.textContent = 'Keep Skyrim unpaused. This can take up to one minute.';
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 75000);
+                try {
+                    const response = await fetch('api/background_life_npc_create.php', {
+                        method: 'POST', body, signal: controller.signal
+                    });
+                    const result = await response.json();
+                    if (!response.ok || !result.success) {
+                        throw new Error(result.error || 'NPC creation could not finish.');
+                    }
+                    npcStatus.textContent = result.message;
+                    closeCreateNpcModal();
+                } catch (error) {
+                    npcStatus.textContent = error.name === 'AbortError'
+                        ? 'Still waiting. Submit the same name to check again without creating another NPC.'
+                        : error.message;
+                } finally {
+                    clearTimeout(timeout);
+                    npcSubmit.disabled = false;
+                    npcSubmit.textContent = 'Create NPC';
+                    npcForm.setAttribute('aria-busy', 'false');
+                }
+            });
             if (npcModal && npcModal.dataset.autoOpen === '1') {
                 openCreateNpcModal();
             }
@@ -3310,6 +3345,7 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
             </div>
         <?php endif; ?>
 
+        <p id="npc-create-status" role="status" aria-live="polite"></p>
         <form method="post" action="">
             <input type="hidden" name="action" value="create_background_npc">
             <div class="bgl-create-form-grid">
