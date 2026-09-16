@@ -6,10 +6,14 @@ function chimInteractionFile()
     if (!is_dir($dir) && !@mkdir($dir, 02775, true) && !is_dir($dir)) {
         throw new RuntimeException('Cannot open CHIM interaction state.');
     }
-    @chmod($dir, 02775);
+    // Group-writable state may belong to the other server account; only its owner can chmod it.
+    if ((!function_exists('posix_geteuid') || fileowner($dir) === posix_geteuid())
+        && (fileperms($dir) & 07777) !== 02775) @chmod($dir, 02775);
     $handle = @fopen($dir . '/state.json', 'c+e');
     if (!$handle) throw new RuntimeException('Cannot open CHIM interaction state.');
-    @chmod($dir . '/state.json', 0664);
+    $path = $dir . '/state.json';
+    if ((!function_exists('posix_geteuid') || fileowner($path) === posix_geteuid())
+        && (fileperms($path) & 07777) !== 0664) @chmod($path, 0664);
     return $handle;
 }
 
