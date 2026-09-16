@@ -1442,6 +1442,10 @@ if (!function_exists('chimMaybeSyncPlayerName')) {
         try {
             $player = new Player();
             $current = $player->get('player_name');
+            if ($explicitPlayer) {
+                require_once __DIR__ . '/playthrough_switching.php';
+                pas_sync_player_name($candidate);
+            }
             if ($current === $candidate) {
                 $GLOBALS["PLAYER_NAME"] = $candidate;
                 return false;
