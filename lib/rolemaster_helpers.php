@@ -555,7 +555,7 @@ function testSpawnRandomNPC()
 function getLocationReferences($locationFormId)
 {
     $parm4 = $locationFormId;
-    $dbDestination = $GLOBALS["db"]->fetchOne("SELECT refs,name FROM locations where formid=$locationFormId");
+    $dbDestination = $GLOBALS["db"]->fetchOne("SELECT refs,name,formid FROM locations where formid=$locationFormId");
     if ($dbDestination) {
         if ($dbDestination["refs"] != "") {
             // refs are populated when plugin send locations. 
@@ -606,10 +606,10 @@ function getLocationReferences($locationFormId)
                 }
                 $parm4 = $unsignedInt;
             } else {
-                $parm4 = $dbDestination["formid"];
+                $parm4 = (int)$dbDestination["formid"];
             }
         } else
-            $parm4 = $dbDestination["formid"];
+            $parm4 = (int)$dbDestination["formid"];
     }
 
     return $parm4;
@@ -755,7 +755,8 @@ function npcProfileBase($name, $class, $race, $gender, $location, $taskId, $addi
         $locationCn = $GLOBALS["db"]->escape($location);
         $dbDestination = $GLOBALS["db"]->fetchOne("SELECT refs,name, similarity(name, '$locationCn') AS sim,formid FROM locations ORDER BY sim DESC LIMIT 1");
         if ($dbDestination) {
-            $parm4 = quest_reference_normalize_formid($dbDestination["formid"] ?? 0) ?? 0;
+            // locations.formid is BIGINT; PostgreSQL returns its decimal value as a string.
+            $parm4 = (int)($dbDestination["formid"] ?? 0);
             $locationRef = getLocationReferences($parm4);
             if ($locationRef) {
                 $parm4 = $locationRef;
