@@ -138,9 +138,12 @@ function dps_account($conn, array $candidates, array $clock): int {
 }
 
 function dps_due(array $state, array $policy, int $gamets, int $now, bool $manual = false): bool {
-    return $state && $now-(int)$state['attempt'] >= $policy['DYNAMIC_PROFILE_COOLDOWN_MINUTES']*60
-        && ($manual || ($gamets-(int)$state['last_game'] >= $policy['DYNAMIC_PROFILE_INTERVAL_DAYS']*dps_product()['day']
-            && (int)$state['total']-(int)$state['consumed'] >= $policy['DYNAMIC_PROFILE_MIN_EVENTS']));
+    if (!$state) return false;
+    // Explicit requests bypass scheduling thresholds, including the real-time cooldown.
+    if ($manual) return true;
+    return $now-(int)$state['attempt'] >= $policy['DYNAMIC_PROFILE_COOLDOWN_MINUTES']*60
+        && $gamets-(int)$state['last_game'] >= $policy['DYNAMIC_PROFILE_INTERVAL_DAYS']*dps_product()['day']
+        && (int)$state['total']-(int)$state['consumed'] >= $policy['DYNAMIC_PROFILE_MIN_EVENTS'];
 }
 
 function dps_context($conn, array $npc, int $gamets): string {
@@ -206,7 +209,11 @@ function dps_run(?string $manualName = null, ?callable $generator = null, $conne
             $npc['manual'] = ($request['epoch'] ?? '') === $clock['epoch'] && time()-(int)($request['requested'] ?? 0)<3600;
         }
         unset($npc);
-        usort($candidates,static fn($a,$b)=>($a['state']['attempt'] ?? 0)<=>($b['state']['attempt'] ?? 0));
+        // Serve explicit requests first; preserve retry fairness within each group.
+        usort($candidates,static function ($a,$b) {
+            if ($a['manual'] !== $b['manual']) return $a['manual'] ? -1 : 1;
+            return ($a['state']['attempt'] ?? 0)<=>($b['state']['attempt'] ?? 0);
+        });
         foreach ($candidates as $npc) {
             if (!$npc['enabled'] || ($manualName !== null && $npc['name'] !== $manualName)) continue;
             $state = $npc['state'];
