@@ -1958,7 +1958,7 @@ function getLocationsNearNpcCoords($npcName)
          and coords <-> '{$pointEsc}'::point < 6000
          and world IN ('{$worldEsc}','')
          ORDER BY case when world = '{$worldEsc}' then coords <-> '{$pointEsc}'::point else (coords <-> '{$pointEsc}'::point) + 100000 end ASC
-         LIMIT 35"
+         LIMIT 35",true
     );
 
     if ($currentLocationName) {

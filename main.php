@@ -1380,6 +1380,7 @@ if (in_array($gameRequest[0],["rechat","narration"]) ) {
 
 
 // Handle narrator_welcome events (must be AFTER comm.php which converts init to narrator_welcome)
+
 if ($gameRequest[0] == "narrator_welcome") {
     // Load narrator profile with full connector configuration
     require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
