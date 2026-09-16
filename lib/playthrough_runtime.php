@@ -2,21 +2,45 @@
 // Distinguish temporary switch contention from failures that need user intervention.
 class PlaythroughSwitchBusyException extends RuntimeException {}
 
+// Repair shared runtime paths in place; replacing a file would split active flock users.
+function ptr_runtime_permissions(string $path, int $mode, ?int $group): void
+{
+    clearstatcache(true, $path);
+    $stat = @stat($path);
+    if ($stat === false) return;
+    $uid = function_exists('posix_geteuid') ? posix_geteuid() : null;
+    // Root startup can repair paths owned by either worker; unprivileged peers cannot.
+    if ($uid !== null && $uid !== 0 && $stat['uid'] !== $uid) return;
+    if ($group !== null && $stat['gid'] !== $group && @chgrp($path, $group)) {
+        // Changing group can clear setgid, so reapply the directory mode afterward.
+        clearstatcache(true, $path);
+        $stat = @stat($path);
+    }
+    if ($stat !== false && ($stat['mode'] & 07777) !== $mode) @chmod($path, $mode);
+    clearstatcache(true, $path);
+}
+
 // A per-installation barrier keeps old requests from writing into a restored playthrough.
 function ptr_runtime_file(string $name)
 {
     $directory = dirname(__DIR__) . '/log/playthrough_runtime';
-    if (!is_dir($directory) && !@mkdir($directory, 02775, true) && !is_dir($directory)) {
+    $creatingDirectory = !is_dir($directory);
+    if ($creatingDirectory && !@mkdir($directory, 02775, true) && !is_dir($directory)) {
         throw new RuntimeException('Cannot pause background work. Check the server log folder permissions.');
     }
-    // Apache and CLI workers share these files but cannot chmod each other's files.
-    if ((!function_exists('posix_geteuid') || fileowner($directory) === posix_geteuid())
-        && (fileperms($directory) & 07777) !== 02775) @chmod($directory, 02775);
+    // Share new state with the log group, but preserve an existing directory's configured group.
+    $group = $creatingDirectory ? @filegroup(dirname($directory)) : false;
+    ptr_runtime_permissions($directory, 02775, $group === false ? null : $group);
+    $group = @filegroup($directory);
     $path = $directory . '/' . $name;
+    // Existing files may be unreadable until their owner/root repairs them.
+    ptr_runtime_permissions($path, 0664, $group === false ? null : $group);
     $handle = @fopen($path, 'c+e'); // Do not carry locks into exec'd background processes.
-    if (!$handle) throw new RuntimeException('Cannot open the Playthrough Saves runtime lock.');
-    if ((!function_exists('posix_geteuid') || fileowner($path) === posix_geteuid())
-        && (fileperms($path) & 07777) !== 0664) @chmod($path, 0664);
+    if (!$handle) {
+        throw new RuntimeException('Cannot open the Playthrough Saves runtime lock. Check log/playthrough_runtime directory traversal and lock file read/write permissions; repair them as the server owner or root.');
+    }
+    // Also share newly created files when the process has a restrictive umask.
+    ptr_runtime_permissions($path, 0664, $group === false ? null : $group);
     return $handle;
 }
 
