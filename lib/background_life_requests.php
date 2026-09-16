@@ -194,13 +194,13 @@ function chimBglRunRequest(string $enginePath, array $npc, string $requestType):
     }
 
     if ($requestType === 'letter') {
-        $script = 'debug/simple_llm_request_with_context_life.php';
+        $script = 'service/processors/backgroundlife/cmd/main_lw.php';
         $arguments = [$npcName, 'forceletter'];
     } elseif (chimBglBoolean($extendedData['background_life_commands'] ?? false)) {
-        $script = 'debug/simple_llm_request_with_context_life_v2.php';
+        $script = 'service/processors/backgroundlife/cmd/main.php';
         $arguments = [$npcName, 'full', 'forceaction'];
     } else {
-        $script = 'debug/simple_llm_request_with_context_life.php';
+        $script = 'service/processors/backgroundlife/cmd/main_lw.php';
         $arguments = [$npcName, 'full', 'forceaction'];
     }
 
@@ -243,7 +243,7 @@ function chimBglRunRequest(string $enginePath, array $npc, string $requestType):
 // Run the coordinate trackers used by the Background Life map controls.
 function chimBglRunTrackingRequest(string $enginePath, string $npcName = ''): array
 {
-    $scriptPath = rtrim($enginePath, '/\\') . DIRECTORY_SEPARATOR . 'debug' . DIRECTORY_SEPARATOR . 'simple_llm_request_with_context_life_command.php';
+    $scriptPath = rtrim($enginePath, '/\\') . DIRECTORY_SEPARATOR . 'service' . DIRECTORY_SEPARATOR . 'processors' . DIRECTORY_SEPARATOR . 'backgroundlife' . DIRECTORY_SEPARATOR . 'cmd' . DIRECTORY_SEPARATOR . 'simple_command.php';
     if (!is_file($scriptPath)) {
         throw new RuntimeException('Background Life coordinate processor is unavailable');
     }
