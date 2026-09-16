@@ -332,7 +332,7 @@ $rumors = [];
 error_log("Last interaction {$lastIt["gamets"]}, {$lastLoc["location"]}");
 $currentHoldEsc = $db->escape($LAST_REPORTED_LOCATION);
 if ($currentHoldEsc) {
-    $query2 = "SELECT gamets,content FROM rumors WHERE hold like '%{$currentHoldEsc}%' and gamets>" . ($gameRequest[2] - ((24 * 7) / 0.0000024));
+    $query2 = "SELECT gamets,content FROM rumors WHERE hold like '%{$currentHoldEsc}%' and gamets>{$lastIt["gamets"]}  and gamets>" . ($gameRequest[2] - ((24 * 7) / 0.0000024));
     error_log($query2);
     $rumors = $db->fetchAll($query2);
     foreach ($rumors as $event) {
@@ -352,7 +352,7 @@ if ($LAST_REPORTED_LOCATION) {
             or hold IN (SELECT distinct(hold) FROM locations where name='$locationEsc')
             or hold IN (SELECT distinct(region) FROM locations where name in (SELECT distinct(hold) FROM locations where name='$locationEsc'))
             )
-         AND gamets > $rumorSinceTs order by gamets desc, ts desc LIMIT 2 OFFSET 0"
+         AND gamets > $rumorSinceTs and gamets>{$lastIt["gamets"]} order by gamets desc, ts desc LIMIT 2 OFFSET 0"
     );
     error_log("[BGL RUN] LAST_REPORTED_LOCATION " . count($rumorRows) . " rumors near <$LAST_REPORTED_LOCATION> since gamets $rumorSinceTs");
     foreach ($rumorRows as $rumor) {
@@ -432,7 +432,7 @@ IMPORTANTE: Mantén este pensamiento interno breve y conciso - máximo 2-3 párr
 
 $userprompt["en"] = "
 The main character in this logbook is {$GLOBALS["HERIKA_NAME"]}.
-Read the context history (context_history) and the recent memories (middle_term_memory), paying attention to notable events and the names of relevant characters.
+Read the context history (context_history) and the recent memories (middle_term_memory), paying attention to notable events and the names of relevant characters and rumors.
 
 Based on all this information, generate an inner thought - soliloquy for {$GLOBALS["HERIKA_NAME"]}.
 Take into account the <speech_style> section for the writing style, and particularly <inner_thought_guidance> if present.
@@ -444,7 +444,7 @@ This soliloquy should reflect what the character might have done over the last $
  * What possible events or encounters might have occurred.
  * Intimate thoughts.
  * Give special attention to <background_life_goals> when present; <goals> contains the character's general motivations.
-
+ * Reaction to rumors
 $lastMinuteNotes
 
 Always respect the character's last known location. If the character is currently in a specific place, generated content should occur in that same area or its surroundings.

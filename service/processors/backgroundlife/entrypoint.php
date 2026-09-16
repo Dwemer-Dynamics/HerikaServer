@@ -27,6 +27,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
     require_once $enginePath . "lib/core/api_badge.class.php";
     require_once $enginePath . "lib/core/core_profiles.class.php";
     require_once $enginePath . "lib/core/llm_connector.class.php";
+    require_once $enginePath . 'lib/scriptproxy_papyrus.php';
 
     error_log("[BGL] Starting Background Life processing");
 
@@ -203,10 +204,10 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                     }
 
                     if ($isStuck) {
-                        error_log("[BGL] NPC {$npc["npc_name"]} appears to be STUCK at location: {$uniqueLocations[0]} <{$recentCoordsText}>, Wants:<{$row['destination']}>");
+                        error_log("[BGL] NPC <{$npc["npc_name"]}> appears to be STUCK at location: {$uniqueLocations[0]} <{$recentCoordsText}>, Wants:<{$row['destination']}>");
                         if (isset($npcIsNearToPlayer) && $npcIsNearToPlayer["n"] > 0) {
-                            error_log("[BGL] NPC {$npc["npc_name"]} is near a player, skipping stuck check");
-
+                            error_log("[BGL] NPC STUCK {$npc["npc_name"]} is near a player, skipping stuck check");
+                        } else {
 
                             $npcMaster = new NpcMaster();
                             $currentNpcData = $npcMaster->getByName($npc["npc_name"]);
@@ -227,7 +228,13 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
 
                                 error_log("[BGL RUN] {$npc["npc_name"]} — Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
 
-                                $db->insert('actions_issued', [
+                                $lastGameTsRow = $GLOBALS["db"]->fetchAll('SELECT max(gamets) AS last_gamets FROM eventlog');
+                                $lastTsRow = $GLOBALS["db"]->fetchAll("SELECT max(ts) AS ts FROM eventlog WHERE gamets='{$lastGameTsRow[0]['last_gamets']}'");
+
+                                $last_gamets = (int) $lastGameTsRow[0]['last_gamets'] + 1;
+                                $last_ts = $lastTsRow[0]['ts'];
+
+                                $GLOBALS["db"]->insert('actions_issued', [
                                     'action' => 'TeleportTo',
                                     'fullcall' => "TeleportTo:{$candidateLocation['name']}:Teleporting to resolve stuck NPC",
                                     'actorname' => $npc["npc_name"],
@@ -238,6 +245,19 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                 ]);
 
 
+                            } else {
+                                error_log("[BGL RUN] STUCK {$candidateLocation["sim"]} >"._LOCATION_RESOLVE_SIM_THRESHOLD." && {$candidateLocation["refs"]}");   
+                                $npcTargetmaster=new NpcMaster();
+                                $npcTarget=$npcTargetmaster->getByName($row['destination']);
+                                if ($npcTarget) {
+                                    $skyrimCmd = new SkyrimCommandBuilder();
+                                    $json = $skyrimCmd->ObjectReference->MoveTo(
+                                        "0x{$currentNpcData['refid']}",
+                                        "0x{$npcTarget['refid']}"
+                                    );
+                                    $skyrimCmd->send(cmd: $json);
+                                    error_log("[BGL RUN] {$npc["npc_name"]} — Teleported to {$row['destination']} (formid: {$npcTarget['formid']})");
+                                }
                             }
 
 

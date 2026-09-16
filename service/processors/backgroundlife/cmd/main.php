@@ -136,6 +136,7 @@ $npcMaster->setOldGlobalsFromCurrentNpcData($currentNpcData);
 $extdata = $npcMaster->getExtendedData($currentNpcData);
 $metadata = $npcMaster->getMetadata($currentNpcData);
 
+$connectionHandler = $connector->getConnector($currentConnectorData);
 
 // Guard, if background_life_last_updated_ec exceeds 2, skip processing to avoid infinite loops or repeated errors
 // background_life_last_updated_ec is incremented each time an error occurs during processing, and reset to 0 on successful completion.

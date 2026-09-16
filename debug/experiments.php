@@ -436,15 +436,15 @@ The character's primary goal is to make a living by mining ores and selling them
 - Can't work all the time, use 8H rule: 8h working,8h resting,8h socializing. If hungry or thirsty, must first address survival needs before working.
 
 2. Selling Iron Ore
-- The character sells Iron Ore to Thorgar, who is located at \"Whistling Mine (Interior)\".
+- The character sells Iron Ore to Jaryra, who is located at \"Elysium Estate (interior)\".
 - Before leaving the mine or changing activities, check the inventory:
-  - If the character has enough Iron Ore to sell, trade with Thorgar (Iron Ore aprox value is 7 gold coins each one).
+  - If the character has enough Iron Ore to sell, travel and look for Jaryra (Iron Ore aprox value is 7 gold coins each one).
   - If there is no ore available, continue mining.
 
 3. Selling Gold Ore
-- Gold Ore is more valuable and should eventually be sold to Jorl Stoneman in Whiterun.
-- Jorl is the preferred buyer because he pays a high price (100 gold per Gold Ore).
-- Traveling to Whiterun is a long journey, so only make the trip when it is worthwhile (for example, when carrying a meaningful amount of Gold Ore).
+- Gold Ore is more valuable and should eventually be sold to Jaryra  at \"Elysium Estate (interior)\".
+- Jaryra is the preferred buyer because she pays a high price (100 gold per Gold Ore).
+- Traveling to \"Elysium Estate (interior)\" is a long journey, so only make the trip when it is worthwhile (for example, when carrying a meaningful amount of Gold Ore).
 
 4. Social Activities
 - On some evenings, the character should travel to Winterhold.
@@ -467,7 +467,7 @@ When working at the mine, the character produces resources over time:
 
 - Gold Ore (Item RefID: 0x0005acde)
   - Production rate: 0.3 units per hour.
-  - Gold Ore is rare and should be preserved for selling to Jorl Stoneman.
+  - Gold Ore is rare and should be preserved for selling to Jaryra
 ",
     ];
 
@@ -1507,14 +1507,14 @@ if ($argv[1] == '49') {
 if ($argv[1] == '50') {
 
     $npcMaster = new NpcMaster();
-    $npcname = "Gularzob";
+    $npcname = "Gralnach";
     $npc = $npcMaster->getByName($npcname);
 
     $skyrimCmd = new SkyrimCommandBuilder();
     $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x00019E19", 0, 0, 155);
     $skyrimCmd->send(cmd: $json);
 
-    $GLOBALS["db"]->insert(
+    /*$GLOBALS["db"]->insert(
         'responselog',
         [
             'localts' => time(),
@@ -1524,5 +1524,24 @@ if ($argv[1] == '50') {
             'action' => "rolecommand|BackgroundCmd@0x{$npc["refid"]}@ReturnHome",
             'tag' => __FILE__ . ":" . __LINE__,
         ]
+    );*/
+}
+
+if ($argv[1] == '51') {
+    $npcMaster = new NpcMaster();
+    $npcname = "Gularzob";
+    $npc = $npcMaster->getByName($npcname);
+
+    $GLOBALS['db']->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => 'rolemaster',
+            'text' => '',
+            'action' => "rolecommand|BackgroundCmd@0x{$npc["refid"]}@MoveToPlayer",
+            'tag' => '',
+        ]
     );
+   
 }
