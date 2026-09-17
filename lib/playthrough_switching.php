@@ -37,6 +37,67 @@ function pas_select(array $rows, string $character, string $name, int $gamets, b
 
 function pas_enabled($conn): bool { return ptr_read($conn, 'PLAYTHROUGH_AUTO_SWITCH', false) === true; }
 
+function pas_placeholder_name(string $name): bool {
+    return in_array(mb_strtolower(trim($name)), ['player','prisoner','unknown','unknown player','null','none','the narrator'], true);
+}
+
+// The caller owns the transaction and runtime lease. Finalize only this bound character's generated title.
+function pas_finalize_player_name($conn, array $session, string $name): array {
+    if (pas_placeholder_name($name) || $name === '' || ($session['status'] ?? '') !== 'ready') return $session;
+    $character = $session['character_id'] ?? '';
+    $profile = (int)($session['profile_id'] ?? 0);
+    $live = pg_fetch_assoc(pth_query($conn, "SELECT value FROM public.core_player WHERE id='playthrough_id'"));
+    if ($character === '' || ($live['value'] ?? '') !== $character) return $session;
+    $meta = ptp_product()['meta'];
+    $row = pg_fetch_assoc(pth_query($conn, "SELECT name FROM {$meta}.playthrough_profiles WHERE id=$1 AND is_active FOR UPDATE", [$profile]));
+    if (!$row) return $session;
+    $pending = ptr_read($conn, 'PLAYTHROUGH_PROVISIONAL_NAMES', []);
+    $marker = $pending[$character] ?? null;
+    if (is_array($marker) && ($marker['profile_id'] ?? 0) === $profile) {
+        // A manual rename wins, even while the character is still being created.
+        if ($row['name'] === $marker['name']) {
+            $title = $name;
+            $suffix = 2;
+            while (pg_num_rows(pth_query($conn, "SELECT id FROM {$meta}.playthrough_profiles WHERE id<>$1 AND lower(name)=lower($2)", [$profile,$title]))) {
+                $title = $name . ' (' . $suffix++ . ')';
+            }
+            pth_query($conn, "UPDATE {$meta}.playthrough_profiles SET name=$1 WHERE id=$2", [$title,$profile]);
+            ptr_write($conn, 'PLAYTHROUGH_HOME_REVISION', bin2hex(random_bytes(16)));
+        }
+        unset($pending[$character]);
+        ptr_write($conn, 'PLAYTHROUGH_PROVISIONAL_NAMES', $pending);
+    }
+    $session['player_name'] = $name;
+    ptr_write($conn, 'PLAYTHROUGH_SESSION', $session);
+    return $session;
+}
+
+// Ordinary identity updates reuse the admitted session without switching saves or rotating its token.
+function pas_sync_player_name(string $name): void {
+    $token = $_SERVER['HTTP_X_CHIM_PLAYTHROUGH'] ?? '';
+    if ($token === '' || $token === 'legacy' || $token === 'blocked') return;
+    // Steady-state stats need one metadata read, with no extra connection or writes.
+    $row = $GLOBALS['db']->fetchOne("SELECT value FROM chim_meta.settings WHERE key='PLAYTHROUGH_SESSION'");
+    $session = json_decode($row['value'] ?? '{}', true);
+    if (($session['status'] ?? '') !== 'ready' || !hash_equals($session['token'] ?? '', $token)
+        || ($session['player_name'] ?? '') === $name) return;
+    $conn = ptp_connect();
+    if (!$conn) throw new RuntimeException('Could not connect to finalize the player name.');
+    try {
+        pth_query($conn, 'BEGIN');
+        pth_query($conn, "SET LOCAL lock_timeout='2s'");
+        $row = pg_fetch_assoc(pth_query($conn, "SELECT value FROM chim_meta.settings WHERE key='PLAYTHROUGH_SESSION' FOR UPDATE"));
+        $session = json_decode($row['value'] ?? '{}', true);
+        if (($session['status'] ?? '') === 'ready' && hash_equals($session['token'] ?? '', $token)) {
+            pas_finalize_player_name($conn, $session, $name);
+        }
+        pth_query($conn, 'COMMIT');
+    } catch (Throwable $error) {
+        @pg_query($conn, 'ROLLBACK');
+        throw $error;
+    } finally { pg_close($conn); }
+}
+
 // Character destinations are global metadata, never part of a restored gameplay snapshot.
 function pas_link($conn, string $character, int $profile): void {
     $links = ptr_read($conn, 'PLAYTHROUGH_CHARACTER_LINKS', []);
@@ -109,9 +170,15 @@ function pas_bind($conn, array $session, int $profile): array {
     $session['status'] = 'ready';
     $session['token'] = bin2hex(random_bytes(16));
     $session['message'] = '';
+    if (isset($session['provisional_name'])) {
+        $pending = ptr_read($conn, 'PLAYTHROUGH_PROVISIONAL_NAMES', []);
+        $pending[$character] = ['profile_id'=>$profile, 'name'=>$session['provisional_name']];
+        ptr_write($conn, 'PLAYTHROUGH_PROVISIONAL_NAMES', $pending);
+        unset($session['provisional_name']);
+    }
     pas_link($conn, $character, $profile);
     ptr_write($conn, 'PLAYTHROUGH_SESSION', $session);
-    return $session;
+    return pas_finalize_player_name($conn, $session, $session['player_name']);
 }
 
 // A browser selection is explicit authority to associate an otherwise ambiguous legacy save.
@@ -150,7 +217,7 @@ function pas_handshake($conn, array $input): array {
     if (isset($input['new_game']) && (!is_bool($input['new_game']) || ($input['new_game'] && $input['character_id'] === ''))) throw new InvalidArgumentException('Invalid new-character identity.');
     $name = trim($input['player_name']);
     if ($name === '' || !preg_match('//u', $name) || mb_strlen($name) > 80 || preg_match('/[\x00-\x1f\x7f]/u', $name)
-        || (empty($input['new_game']) && in_array(mb_strtolower($name), ['player','prisoner','unknown','unknown player','null','none','the narrator'], true))) {
+        || (empty($input['new_game']) && pas_placeholder_name($name))) {
         return ['ok'=>false,'status'=>'pending','message'=>'Waiting for your Skyrim character name. Reload the save after naming your character.'];
     }
     $runtime = ptr_runtime_begin_switch(30.0, $conn);
@@ -187,6 +254,7 @@ function pas_handshake($conn, array $input): array {
             while (pg_num_rows(pth_query($conn, 'SELECT id FROM ' . ptp_product()['meta'] . '.playthrough_profiles WHERE lower(name)=lower($1)', [$newName]))) {
                 $newName = $name . ' (' . $suffix++ . ')';
             }
+            if (pas_placeholder_name($name)) $session['provisional_name'] = $newName;
             pth_change($conn, 'new', ['name'=>$newName, 'expected_token'=>$state['token'], '_session'=>$session], true);
             $session = ptr_read($conn, 'PLAYTHROUGH_SESSION', []);
             $session['message'] = 'Created playthrough for ' . $name . '. Previous playthrough saved.';
