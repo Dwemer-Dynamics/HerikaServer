@@ -1,7 +1,7 @@
 <?php
 
 
-define('_LOCATION_RESOLVE_SIM_THRESHOLD', 0.74); // Minimum similarity score for location resolution
+
 /**
  * Force-trigger an NPC background life update on the next mid-term BGL check.
  *
@@ -87,38 +87,6 @@ function checkLastCallsFor($npcName)
 
 
 
-/**
- * Build a PostgreSQL point literal from NPC metadata last_coords.
- *
- * @param array $currentNpcData
- * @return string|null Point literal in the form '(x,y)' or null when unavailable
- */
-function getNpcLastCoordsPoint($currentNpcData)
-{
-    $metadata = $currentNpcData['metadata'] ?? null;
-    if (is_string($metadata)) {
-        $metadata = json_decode($metadata, true);
-    }
-
-    $lastCoords = null;
-    if (is_array($metadata) && isset($metadata['last_coords']) && is_array($metadata['last_coords'])) {
-        $lastCoords = $metadata['last_coords'];
-    } elseif (isset($currentNpcData['last_coords']) && is_array($currentNpcData['last_coords'])) {
-        $lastCoords = $currentNpcData['last_coords'];
-    }
-
-    if (!$lastCoords) {
-        return null;
-    }
-
-    $x = $lastCoords[0] ?? null;
-    $y = $lastCoords[1] ?? null;
-    if (!is_numeric($x) || !is_numeric($y)) {
-        return null;
-    }
-
-    return '(' . floatval($x) . ',' . floatval($y) . ')';
-}
 
 
 /**
