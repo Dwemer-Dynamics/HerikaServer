@@ -1172,7 +1172,7 @@ function getDynamicProfileHistoryData($npcName) {
 }
 
 
-function updateDynamicProfileField($npcName, $field, $historyData) {
+function updateDynamicProfileField($npcName, $field, $historyData,$middleterm='') {
     if (function_exists('chimIsGlobalLlmConnectorEnabled') && !chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_PROFILES')) {
         Logger::debug("updateDynamicProfileField: Profile Tasks are disabled globally");
         return false;
@@ -1304,6 +1304,7 @@ function updateDynamicProfileField($npcName, $field, $historyData) {
 
         $GLOBALS["HERIKA_NAME"] = $npcName; //note none of these prompts will contain #HERIKA_NAME, as the dialogue flow doesnt do this replacement (which may be a bug)
         $prompt = [
+            ["role" => "user", "content" => "* Historic context:\n" . $middleterm ,"cache_control" => ["type" => "ephemeral"]],
             ["role" => "user", "content" => "* Dialogue history:\n" . $historyData ,"cache_control" => ["type" => "ephemeral"]],
             ["role" => "user", "content" => ReplacePlayerNamePlaceholder($profileContextString)],
             ["role" => "user", "content" => "Character name: " . $promptNpcName . "\nCurrent " . ucfirst($field) . ":\n" . ReplacePlayerNamePlaceholder($isNarrator && function_exists('chimRenderNarratorRoleplayText') ? chimRenderNarratorRoleplayText($currentValue) : $currentValue)],
