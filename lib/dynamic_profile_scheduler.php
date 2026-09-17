@@ -404,3 +404,5 @@ function dps_save($conn, array $npc, array $updates, int $gamets): void {
         dps_query($conn,"INSERT INTO public.core_narrator(id,value) VALUES('gamets_last_updated',$1) ON CONFLICT(id) DO UPDATE SET value=EXCLUDED.value",[(string)$gamets]);
     }
 }
+
+?>

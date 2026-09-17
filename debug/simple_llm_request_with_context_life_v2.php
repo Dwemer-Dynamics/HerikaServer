@@ -830,8 +830,8 @@ if (isset($metadata['last_coords']) && !empty($metadata['last_coords'][3])) {
 if (isset($metadata['low_process_actors'])) {
 
     // Keep only the last 3 entries.
-    $metadataLow_process_actors = array_slice($metadata['low_process_actors'], -3, 3, true);
-    $metadataLow_process_actors = ($metadata['low_process_actors']);
+    $metadataLow_process_actors = array_slice($metadata['low_process_actors'], -1, 1, true);
+    //$metadataLow_process_actors = ($metadata['low_process_actors']);
     foreach ($metadataLow_process_actors as $gamets_lpa_processed => $actorList) {
         if ($gamets_lpa_processed <= $lastItGamets) {
             continue;
@@ -1082,6 +1082,10 @@ if ($isIdleAction && $idleHours > 1) { // If last Idle was Socialize, there a ch
 
     if ($lastIntent === 'Socialize') {
         $lastIntentBasedHint = "Hint: Last intent was 'Socialize', so probably drank items in inventory.";
+    }
+
+    if ($lastIntent === 'Guard') {
+        $lastIntentBasedHint = "Hint: Last intent was 'Guard', so probably stayed alert and did not consume items in inventory.";
     }
 
     if ($lastIntent === 'Sleep') {

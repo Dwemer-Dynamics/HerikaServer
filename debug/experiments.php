@@ -1545,3 +1545,8 @@ if ($argv[1] == '51') {
     );
    
 }
+
+if ($argv[1] == '52') {
+   print_r(DataLastDataExpandedForNPC("Grosta",-50));
+   
+}

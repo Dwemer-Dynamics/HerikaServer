@@ -256,7 +256,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                         "0x{$npcTarget['refid']}"
                                     );
                                     $skyrimCmd->send(cmd: $json);
-                                    error_log("[BGL RUN] {$npc["npc_name"]} — Teleported to {$row['destination']} (formid: {$npcTarget['formid']})");
+                                    error_log("[BGL RUN] {$npc["npc_name"]} — Teleported to {$row['destination']} (formid: {$npcTarget['refid']})");
                                 }
                             }
 
