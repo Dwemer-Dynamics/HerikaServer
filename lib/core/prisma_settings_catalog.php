@@ -105,7 +105,18 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'MAGIC_EVENT_BLACKLIST', 'type' => 'longstring'],
             ['name' => 'LOCATION_BLACKLIST', 'type' => 'longstring'],
             ['name' => 'ITEM_BLACKLIST', 'type' => 'longstring'],
-            ['name' => 'EVENT_TYPE_FILTER', 'type' => 'longstring'],
+            [
+                'name' => 'EVENT_TYPE_FILTER',
+                'type' => 'longstring', // Keep CSV storage and custom types compatible with Prisma and imports.
+                'event_type_choices' => [
+                    'chat', 'chat_background', 'death', 'bleedout', 'itemfound',
+                    'spellcast', 'npcspellcast', 'quest', 'contentbook', 'infoaction',
+                    'rpg_word', 'rpg_lvl', 'rpg_shout', 'welcome', 'waitstart', 'waitstop',
+                    'reanimate', 'info_timeforward', 'backgroundaction', 'innerchat',
+                    'ext_held_item_pickup', 'ext_held_item_drop',
+                ],
+                'help' => 'Selected event types are excluded from AI context. Custom event types are supported as comma-separated names.',
+            ],
         ],
         'Translation' => [
             ['name' => 'TRANSLATION_FUNCTION', 'type' => 'select', 'values' => ['none', 'DeepL']],
