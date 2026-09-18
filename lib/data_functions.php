@@ -5990,7 +5990,7 @@ function call_llm_internal() {
         && ($GLOBALS['CHIM_CORE_CURRENT_NPC_DATA']['npc_name'] ?? '') === ($GLOBALS['HERIKA_NAME'] ?? '')
         && empty($GLOBALS['DIRECT_NARRATOR_DIALOGUE'])
         && in_array($gameRequest[0] ?? '', ['inputtext', 'inputtext_s', 'ginputtext', 'ginputtext_s', 'rechat', 'bored', 'instruction'], true)) {
-        require_once __DIR__ . '/jev_mode.php';
+        require_once __DIR__ . '/decision_router.php';
         $driver = $GLOBALS['CHIM_CORE_CURRENT_CONNECTOR_DATA']['driver'] ?? '';
         if (in_array($driver, ['openrouterjson', 'openaijson', 'google_openaijson', 'groqjson'], true)) {
             chimJevPrepare($contextData);

@@ -36,7 +36,7 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl" . DIRECTORY_SEPARATOR . "head.htm
 $saveSuccess = isset($_GET['_saved']) && $_GET['_saved'] === '1';
 $jevSaveError = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
-    require_once $enginePath . 'lib/jev_mode.php';
+    require_once $enginePath . 'lib/decision_router.php';
     try {
         chimJevValidateSetting($_POST['JEV_MODE_ENABLED'] ?? false);
     } catch (InvalidArgumentException $error) {

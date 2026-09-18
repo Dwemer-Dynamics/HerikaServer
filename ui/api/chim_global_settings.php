@@ -109,7 +109,7 @@ try {
         if (!is_array($settings)) chimGlobalSettingsRespond(['success' => false, 'error' => 'Settings payload is required.'], 400);
 
         if (array_key_exists('JEV_MODE_ENABLED', $settings)) {
-            require_once __DIR__ . '/../../lib/jev_mode.php';
+            require_once __DIR__ . '/../../lib/decision_router.php';
             chimJevValidateSetting($settings['JEV_MODE_ENABLED']);
         }
 

@@ -72,7 +72,7 @@ final class CoreRequestStabilityTest extends TestCase
 
     public function testJevReusesDecisionOnRetryAndFallsBackWithoutPartialState(): void
     {
-        require_once __DIR__ . '/../../lib/jev_mode.php';
+        require_once __DIR__ . '/../../lib/decision_router.php';
         $GLOBALS['db'] = new class {
             public string $key = 'fixture-key';
             public function escape($value) { return $value; }
@@ -106,7 +106,7 @@ final class CoreRequestStabilityTest extends TestCase
 
     public function testJevRejectsUncertainMissingAndInventedChoices(): void
     {
-        require_once __DIR__ . '/../../lib/jev_mode.php';
+        require_once __DIR__ . '/../../lib/decision_router.php';
         [$question, $map] = chimJevChoice('Action', ['Talk', 'Follow']);
         $this->assertSame(['v0' => 'Talk', 'v1' => 'Follow'], $map);
         foreach ([[], ['type' => 'choice', 'choice' => 'invented', 'confidence' => 1],
@@ -125,7 +125,7 @@ final class CoreRequestStabilityTest extends TestCase
 
     public function testJevOwnsDecisionsButPreservesSpeechAndListener(): void
     {
-        require_once __DIR__ . '/../../lib/jev_mode.php';
+        require_once __DIR__ . '/../../lib/decision_router.php';
         $speech = ['message' => 'I will follow you.', 'listener' => 'Player', 'action' => 'Attack', 'mood' => 'angry'];
         unset($GLOBALS['CHIM_JEV_DECISION']);
         $this->assertSame($speech, chimJevMergeResponse($speech));
@@ -145,7 +145,7 @@ final class CoreRequestStabilityTest extends TestCase
 
     public function testJevParameterCandidatesStayBoundToObservedInventory(): void
     {
-        require_once __DIR__ . '/../../lib/jev_mode.php';
+        require_once __DIR__ . '/../../lib/decision_router.php';
         [$options, $counts] = chimJevParameterOptions('GiveItemTo', ['parameters' => ['properties' => [
             'target' => ['type' => 'string'], 'item' => ['type' => 'string'], 'amount' => ['type' => 'integer'],
         ]]], ['inventory' => [
