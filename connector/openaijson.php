@@ -1117,6 +1117,7 @@ class openaijson
 
         if (!empty($this->_buffer))
             $finalData=__jpd_decode_lazy($this->_buffer);
+            if (function_exists('chimJevMergeResponse')) $finalData = chimJevMergeResponse($finalData);
             if (is_array($finalData)) {
                 
                 

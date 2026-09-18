@@ -108,6 +108,11 @@ try {
         $settings = $body['settings'] ?? null;
         if (!is_array($settings)) chimGlobalSettingsRespond(['success' => false, 'error' => 'Settings payload is required.'], 400);
 
+        if (array_key_exists('JEV_MODE_ENABLED', $settings)) {
+            require_once __DIR__ . '/../../lib/jev_mode.php';
+            chimJevValidateSetting($settings['JEV_MODE_ENABLED']);
+        }
+
         $fields = chimGlobalSettingsFieldMap();
         $saved = [];
         foreach ($settings as $name => $value) {

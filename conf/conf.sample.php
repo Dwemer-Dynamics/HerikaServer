@@ -39,6 +39,7 @@ $PLAYER_SPEECH_STYLE=""; //Instructions for how the player character speaks and 
 $PROMPT_TIMESTAMP=false; //Add rough timestamp subdividers to event context (e.g., 'Moments Ago', 'A while ago') to help the LLM understand temporal relationships.
 $PROMPT_HEAD_MARKDOWN_ENABLED=false; //Use Markdown headings instead of XML tags for all prompt sections.
 $COMPACT_CHAT_ENABLED=true; //Use compact text instead of separate messages for conversation history. Does not affect the Narrator.
+$JEV_MODE_ENABLED=false; //Use Jev for NPC actions and emotions; requires the OpenRouter API key.
 $use_emotions_expression = false; //Add emotions support. Changes the affect context/json object offered to LLM must be false by default.
 
 //[Advanced Configuration]

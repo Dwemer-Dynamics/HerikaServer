@@ -83,6 +83,7 @@
             }
 
             chimApplyJsonTemplateHooks();
+            if (function_exists('chimJevConstrainTemplate')) chimJevConstrainTemplate();
         }
     }
 

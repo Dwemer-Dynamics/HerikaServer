@@ -994,6 +994,7 @@ class openrouterjson
         $buffer="";
         if (!empty($this->_buffer))
             $finalData=__jpd_decode_lazy($this->_buffer, true);
+            if (function_exists('chimJevMergeResponse')) $finalData = chimJevMergeResponse($finalData);
             if (is_array($finalData)) {
                 
                 

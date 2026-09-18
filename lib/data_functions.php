@@ -5905,7 +5905,14 @@ function call_llm() {
     global $overrideParameters, $request;
     
     // Call the internal function (which now handles fallback itself)
-    return call_llm_internal();
+    unset($GLOBALS['CHIM_JEV_ATTEMPTED'], $GLOBALS['CHIM_JEV_DECISION']);
+    try {
+        return call_llm_internal();
+    } finally {
+        $jevAttempted = isset($GLOBALS['CHIM_JEV_ATTEMPTED']);
+        unset($GLOBALS['CHIM_JEV_ATTEMPTED'], $GLOBALS['CHIM_JEV_DECISION']);
+        if ($jevAttempted && function_exists('chimRefreshJsonResponseState')) chimRefreshJsonResponseState();
+    }
 }
 
 function call_llm_internal() {
@@ -5976,7 +5983,28 @@ function call_llm_internal() {
         require(__DIR__."/../processor/player_tts.php");
     }
 
-    $connectionHandler->open($contextData,$overrideParameters);
+    $dialogueContext = $contextData;
+    if (filter_var($GLOBALS['JEV_MODE_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN)
+        && !empty($GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'])
+        && ($GLOBALS['HERIKA_NAME'] ?? '') !== 'The Narrator'
+        && ($GLOBALS['CHIM_CORE_CURRENT_NPC_DATA']['npc_name'] ?? '') === ($GLOBALS['HERIKA_NAME'] ?? '')
+        && empty($GLOBALS['DIRECT_NARRATOR_DIALOGUE'])
+        && in_array($gameRequest[0] ?? '', ['inputtext', 'inputtext_s', 'ginputtext', 'ginputtext_s', 'rechat', 'bored', 'instruction'], true)) {
+        require_once __DIR__ . '/jev_mode.php';
+        $driver = $GLOBALS['CHIM_CORE_CURRENT_CONNECTOR_DATA']['driver'] ?? '';
+        if (in_array($driver, ['openrouterjson', 'openaijson', 'google_openaijson', 'groqjson'], true)) {
+            chimJevPrepare($contextData);
+        } else {
+            unset($GLOBALS['CHIM_JEV_DECISION']);
+            Logger::info('[JEV] Normal response fallback: unsupported_dialogue_driver');
+        }
+        $abortForSupersedingUserInput('after_jev');
+        if (function_exists('chimRefreshJsonResponseState')) chimRefreshJsonResponseState();
+        if (!empty($GLOBALS['CHIM_JEV_DECISION'])) {
+            $dialogueContext[] = ['role' => 'system', 'content' => 'The server has already selected the following action and speaking mood. Keep them fixed. Generate only the message, listener and speech formatting fields in the requested JSON. Keep your words consistent with this decision; do not claim an action has succeeded before its result: ' . json_encode($GLOBALS['CHIM_JEV_DECISION'])];
+        }
+    }
+    $connectionHandler->open($dialogueContext,$overrideParameters);
     $connectionOpened = $connectionHandler->primary_handler !== false;
     snapshot_response_prompt_debug_data();
     error_log("[FALLBACK DEBUG] Checking primary_handler status: " . ($connectionHandler->primary_handler === false ? "FALSE" : "OK"));
@@ -6222,7 +6250,22 @@ function call_llm_internal() {
     }
 
     if ($GLOBALS["FUNCTIONS_ARE_ENABLED"] && $outputWasValid)  {
-        $actions=$connectionHandler->processActions();
+        if (!empty($GLOBALS['CHIM_JEV_DECISION'])) {
+            $abortForSupersedingUserInput('before_jev_action');
+            $actions = [];
+            $decision = $GLOBALS['CHIM_JEV_DECISION'];
+            $code = getFunctionCodeName($decision['action']);
+            if ($decision['action'] !== 'Talk' && in_array($code, $GLOBALS['ENABLED_FUNCTIONS'] ?? [], true)) {
+                $execution = buildFunctionExecutionContextFromResponse($decision);
+                if (empty($execution['missing_required']) && chimJevResourcesStillAvailable($decision, $code)) {
+                    queueFunctionExecutionCommand($actions, $alreadysent, $execution, 'jev');
+                } else {
+                    Logger::warn('[JEV] Skipped action because its required resources are no longer available.');
+                }
+            }
+        } else {
+            $actions=$connectionHandler->processActions();
+        }
         if (isset($GLOBALS["action_post_process_fnct"])) {
             $actions=$GLOBALS["action_post_process_fnct"]($actions);
         }

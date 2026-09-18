@@ -34,6 +34,15 @@ ob_start();
 include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl" . DIRECTORY_SEPARATOR . "head.html");
 
 $saveSuccess = isset($_GET['_saved']) && $_GET['_saved'] === '1';
+$jevSaveError = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
+    require_once $enginePath . 'lib/jev_mode.php';
+    try {
+        chimJevValidateSetting($_POST['JEV_MODE_ENABLED'] ?? false);
+    } catch (InvalidArgumentException $error) {
+        $jevSaveError = $error->getMessage();
+    }
+}
 $clearReanimationResult = null;
 $promptContextSectionTitle = 'Context Selections';
 $gsSections = chimPrismaGlobalSettingsSections();
@@ -60,6 +69,7 @@ foreach ($gsSections as $sectionName => $fields) {
 
 function pretty_label(string $flatName): string
 {
+    if ($flatName === 'JEV_MODE_ENABLED') return 'Jev mode';
     if (strpos($flatName, 'FEATURES@MEMORY_EMBEDDING@') === 0) {
         $parts = explode('@', $flatName);
         $last = end($parts) ?: $flatName;
@@ -378,7 +388,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clear_reanimation_sta
     }
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all']) && $jevSaveError === '') {
     $didSave = true;
 
     foreach ($gsSections as $fields) {
@@ -1628,6 +1638,9 @@ body .settings-tabs .settings-tab.is-active {
         </div>
     </div>
 
+    <?php if ($jevSaveError !== ''): ?>
+        <div class="result-error" role="alert"><?php echo htmlspecialchars($jevSaveError); ?></div>
+    <?php endif; ?>
     <?php if ($saveSuccess): ?>
         <div class="result-ok" style="margin-bottom: 16px;">Global settings saved to the database.</div>
     <?php endif; ?>
@@ -1708,7 +1721,7 @@ body .settings-tabs .settings-tab.is-active {
                                                         <?php if ($fieldType === 'boolean'): ?>
                                                             <div class="provider-toggle">
                                                                 <input type="hidden" name="<?php echo htmlspecialchars($fieldName); ?>" value="false">
-                                                                <input type="checkbox" name="<?php echo htmlspecialchars($fieldName); ?>" value="true" <?php echo ($current ? 'checked' : ''); ?> <?php echo $isReadonly ? 'disabled' : ''; ?>>
+                                                                <input type="checkbox" <?php if ($fieldName === 'JEV_MODE_ENABLED') echo 'aria-label="Jev mode"'; ?> name="<?php echo htmlspecialchars($fieldName); ?>" value="true" <?php echo ($current ? 'checked' : ''); ?> <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                                             </div>
                                                         <?php endif; ?>
                                                     </div>
@@ -1784,7 +1797,7 @@ body .settings-tabs .settings-tab.is-active {
                                         <?php if ($fieldType === 'boolean'): ?>
                                             <div class="provider-toggle">
                                                 <input type="hidden" name="<?php echo htmlspecialchars($fieldName); ?>" value="false">
-                                                <input type="checkbox" name="<?php echo htmlspecialchars($fieldName); ?>" value="true" <?php echo ($current ? 'checked' : ''); ?> <?php echo $isReadonly ? 'disabled' : ''; ?>>
+                                                <input type="checkbox" <?php if ($fieldName === 'JEV_MODE_ENABLED') echo 'aria-label="Jev mode"'; ?> name="<?php echo htmlspecialchars($fieldName); ?>" value="true" <?php echo ($current ? 'checked' : ''); ?> <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             </div>
                                         <?php endif; ?>
                                         <?php if (isset($connectorAvailabilityToggles[$fieldName])): ?>

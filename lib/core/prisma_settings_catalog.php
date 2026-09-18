@@ -8,6 +8,8 @@ function chimPrismaGlobalSettingsSections(): array
 {
     return [
         'Prompt & Rechat' => [
+            ['name' => 'JEV_MODE_ENABLED', 'label' => 'Jev mode', 'type' => 'boolean', 'default' => false,
+                'help' => 'Use Jev for NPC actions and emotions. Your dialogue model provides speech and listener. Requires an OpenRouter API key. Unsupported requests use the normal response path.'],
             ['name' => 'PROMPT_HEAD', 'type' => 'longstring'],
             ['name' => 'EMOTEMOODS', 'type' => 'longstring'],
             ['name' => 'RECHAT_MODE', 'type' => 'select', 'values' => ['tight', 'conversational', 'group', 'random']],

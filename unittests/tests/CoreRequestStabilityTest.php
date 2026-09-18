@@ -70,6 +70,100 @@ final class CoreRequestStabilityTest extends TestCase
 {
     private bool $warningHandlerInstalled = false;
 
+    public function testJevReusesDecisionOnRetryAndFallsBackWithoutPartialState(): void
+    {
+        require_once __DIR__ . '/../../lib/jev_mode.php';
+        $GLOBALS['db'] = new class {
+            public string $key = 'fixture-key';
+            public function escape($value) { return $value; }
+            public function fetchOne($query) { return ['api_key' => $this->key]; }
+        };
+        $saved = [];
+        foreach (['FUNCTIONS_ARE_ENABLED', 'EMOTEMOODS', 'use_emotions_expression'] as $name) $saved[$name] = $GLOBALS[$name] ?? null;
+        $GLOBALS['FUNCTIONS_ARE_ENABLED'] = false;
+        $GLOBALS['EMOTEMOODS'] = 'kindly';
+        $GLOBALS['use_emotions_expression'] = false;
+        $calls = 0;
+        $request = static function () use (&$calls) { $calls++; return ['action' => 'v0', 'mood' => 'v0']; };
+        try {
+            chimJevPrepare([['role' => 'user', 'content' => 'Hello']], $request);
+            $this->assertSame('Talk', $GLOBALS['CHIM_JEV_DECISION']['action']);
+            chimJevPrepare([['role' => 'user', 'content' => 'Hello']], $request);
+            $this->assertSame(1, $calls);
+            unset($GLOBALS['CHIM_JEV_ATTEMPTED'], $GLOBALS['CHIM_JEV_DECISION']);
+            chimJevPrepare([], static function () { throw new RuntimeException('http_529'); });
+            $this->assertArrayNotHasKey('CHIM_JEV_DECISION', $GLOBALS);
+            unset($GLOBALS['CHIM_JEV_ATTEMPTED']);
+            $GLOBALS['db']->key = '';
+            chimJevPrepare([], $request);
+            $this->assertSame(1, $calls);
+            $this->assertArrayNotHasKey('CHIM_JEV_DECISION', $GLOBALS);
+        } finally {
+            unset($GLOBALS['CHIM_JEV_ATTEMPTED'], $GLOBALS['CHIM_JEV_DECISION']);
+            foreach ($saved as $name => $value) $GLOBALS[$name] = $value;
+        }
+    }
+
+    public function testJevRejectsUncertainMissingAndInventedChoices(): void
+    {
+        require_once __DIR__ . '/../../lib/jev_mode.php';
+        [$question, $map] = chimJevChoice('Action', ['Talk', 'Follow']);
+        $this->assertSame(['v0' => 'Talk', 'v1' => 'Follow'], $map);
+        foreach ([[], ['type' => 'choice', 'choice' => 'invented', 'confidence' => 1],
+            ['type' => 'choice', 'choice' => 'v1', 'confidence' => 0.49]] as $answer) {
+            try {
+                chimJevReadChoices(['answers' => ['action' => $answer]], ['action' => $question]);
+                $this->fail('Unsafe Jev response was accepted');
+            } catch (RuntimeException $error) {
+                $this->assertSame('invalid_or_uncertain_decision', $error->getMessage());
+            }
+        }
+        $this->assertSame(['action' => 'v1'], chimJevReadChoices(['answers' => ['action' => [
+            'type' => 'choice', 'choice' => 'v1', 'confidence' => 0.9,
+        ]]], ['action' => $question]));
+    }
+
+    public function testJevOwnsDecisionsButPreservesSpeechAndListener(): void
+    {
+        require_once __DIR__ . '/../../lib/jev_mode.php';
+        $speech = ['message' => 'I will follow you.', 'listener' => 'Player', 'action' => 'Attack', 'mood' => 'angry'];
+        unset($GLOBALS['CHIM_JEV_DECISION']);
+        $this->assertSame($speech, chimJevMergeResponse($speech));
+        try {
+            $GLOBALS['CHIM_JEV_DECISION'] = ['action' => 'Follow', 'mood' => 'kindly', 'target' => 'Player'];
+            $merged = chimJevMergeResponse($speech);
+            $this->assertSame('I will follow you.', $merged['message']);
+            $this->assertSame('Player', $merged['listener']);
+            $this->assertSame('Follow', $merged['action']);
+            $this->assertSame('kindly', $merged['mood']);
+            $this->assertSame([$merged], chimJevMergeResponse([$speech]));
+            $this->assertNull(chimJevMergeResponse(null));
+        } finally {
+            unset($GLOBALS['CHIM_JEV_DECISION']);
+        }
+    }
+
+    public function testJevParameterCandidatesStayBoundToObservedInventory(): void
+    {
+        require_once __DIR__ . '/../../lib/jev_mode.php';
+        [$options, $counts] = chimJevParameterOptions('GiveItemTo', ['parameters' => ['properties' => [
+            'target' => ['type' => 'string'], 'item' => ['type' => 'string'], 'amount' => ['type' => 'integer'],
+        ]]], ['inventory' => [
+            ['baseid' => '0000000F', 'name' => 'Gold', 'count' => 0],
+            ['baseid' => '00065C97', 'name' => 'Bread', 'count' => 2],
+        ]], ['Lydia [RefID: 000A2C94]']);
+        $this->assertSame(['Lydia [RefID: 000A2C94]'], $options['target']);
+        $this->assertCount(1, $options['item']);
+        $this->assertStringEndsWith(':Bread', $options['item'][0]);
+        $this->assertSame(2, $counts[$options['item'][0]]);
+        $this->assertSame([1, 2], $options['amount']);
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('freeform_parameter');
+        chimJevParameterOptions('CustomStory', ['parameters' => ['properties' => [
+            'target' => ['type' => 'string', 'description' => 'Write a story'],
+        ]]], [], []);
+    }
+
     public function testDirectorUsesSceneTemplatesAndRestoresConnectorState(): void
     {
         require_once __DIR__ . '/../../lib/director_scene.php';
