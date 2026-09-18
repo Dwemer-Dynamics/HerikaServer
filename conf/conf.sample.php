@@ -351,6 +351,11 @@ $TTS["CHATTERBOX"]["voicelogic"]='voicetype';
 $TTS["CHATTERBOX"]["PARALINGUISTIC_TAGS_ENABLED"]=false; //Enable paralinguistic tags like [laugh], [sigh] for expressive TTS output.
 $TTS["CHATTERBOX"]["PARALINGUISTIC_TAGS_PROMPT"]=''; //Prompt snippet for instructing LLM to use paralinguistic tags.
 $TTS["CHATTERBOX"]["PARALINGUISTIC_TAGS_LIST"]='[clear throat],[sigh],[shush],[cough],[groan],[sniff],[gasp],[chuckle],[laugh]'; //Comma-separated list of supported tags.
+//Higgs TTS 3
+$TTS["HIGGS"]["endpoint"]='http://127.0.0.1:8025';
+$TTS["HIGGS"]["model"]='higgs-v3';
+$TTS["HIGGS"]["voiceid"]='TheNarrator';
+$TTS["HIGGS"]["voicelogic"]='voicetype';
 //OmniVoice
 $TTS["OMNIVOICE"]["endpoint"]='http://127.0.0.1:8021'; //API endpoint.
 $TTS["OMNIVOICE"]["language"]='en'; //Active OmniVoice language profile.

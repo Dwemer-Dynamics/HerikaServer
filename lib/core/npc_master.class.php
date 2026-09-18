@@ -1825,6 +1825,7 @@ FROM restore
         $GLOBALS['TTS']['CHATTERBOX']['voiceid'] = $voiceId;
         $GLOBALS['TTS']['POCKETTTS']['voiceid'] = $voiceId;
         $GLOBALS['TTS']['OMNIVOICE']['voiceid'] = $voiceId;
+        $GLOBALS['TTS']['HIGGS']['voiceid'] = $voiceId;
         $GLOBALS['TTS']['MELOTTS']['voiceid'] = $voiceId;
         $GLOBALS['TTS']['MIMIC3']['voice'] = $voiceId;
         $GLOBALS['TTS']['XVASYNTH']['model'] = $voiceId;
