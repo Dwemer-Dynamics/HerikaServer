@@ -42,6 +42,19 @@ function chimJevRequest(array $state, array $questions, string $key, float $dead
         throw new RuntimeException('http_' . $status);
     }
     $response = json_decode($body, true, 64, JSON_THROW_ON_ERROR);
+    // Record answers before validation so rejected decisions can be diagnosed, without prompts or keys.
+    $selectedOptions = [];
+    foreach ($questions as $field => $question) {
+        $choice = $response['answers'][$field]['choice'] ?? null;
+        $selectedOptions[$field] = is_string($choice) ? ($question['criteria'][$choice] ?? null) : null;
+    }
+    Logger::info('[JEV] Answers: ' . json_encode([
+        'pid' => getmypid(),
+        'npc' => $state['npc'] ?? null,
+        'fields' => array_keys($questions),
+        'answers' => $response['answers'] ?? null,
+        'selected_options' => $selectedOptions,
+    ], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
     $choices = chimJevReadChoices($response, $questions);
     $GLOBALS['DEBUG_DATA']['jev'][] = [
         'input_tokens' => $response['usage']['input_tokens'] ?? null,
