@@ -68,12 +68,21 @@ function chimJevRequest(array $state, array $questions, string $key, float $dead
 function chimJevReadChoices(array $response, array $questions): array
 {
     $choices = [];
+    $expressionDefaults = ['mood' => 'neutral', 'emotion' => 'calm', 'emotion_intensity' => 'low'];
     foreach ($questions as $name => $question) {
         $answer = $response['answers'][$name] ?? [];
         $choice = $answer['choice'] ?? null;
         $confidence = $answer['confidence'] ?? null;
         if (($answer['type'] ?? '') !== 'choice' || !is_string($choice) || !array_key_exists($choice, $question['criteria'])
-            || !is_numeric($confidence) || $confidence < 0.5 || $confidence > 1) {
+            || !is_numeric($confidence) || $confidence < 0 || $confidence > 1) {
+            throw new RuntimeException('invalid_or_uncertain_decision');
+        }
+        if (isset($expressionDefaults[$name])) {
+            if ($confidence < 0.25) {
+                $choice = array_search($expressionDefaults[$name], $question['criteria'], true);
+                if ($choice === false) throw new RuntimeException('missing_expression_default');
+            }
+        } elseif ($confidence < 0.5) {
             throw new RuntimeException('invalid_or_uncertain_decision');
         }
         $choices[$name] = $choice;

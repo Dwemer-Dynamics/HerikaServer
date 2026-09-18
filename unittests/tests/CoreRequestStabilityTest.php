@@ -123,6 +123,28 @@ final class CoreRequestStabilityTest extends TestCase
         ]]], ['action' => $question]));
     }
 
+    public function testJevExpressionThresholdDoesNotDiscardValidAction(): void
+    {
+        require_once __DIR__ . '/../../lib/decision_router.php';
+        $questions = $answers = [];
+        foreach (['action' => ['Talk', 'Follow'], 'mood' => ['neutral', 'happy'],
+            'emotion' => ['calm', 'happy'], 'emotion_intensity' => ['low', 'high']] as $field => $options) {
+            [$questions[$field]] = chimJevChoice($field, $options);
+            $answers[$field] = ['type' => 'choice', 'choice' => 'v1', 'confidence' => 0.5];
+        }
+        $answers['mood']['confidence'] = 0.47;
+        $answers['emotion']['confidence'] = 0.25;
+        $answers['emotion_intensity']['confidence'] = 0.24;
+        $this->assertSame(['action' => 'v1', 'mood' => 'v1', 'emotion' => 'v1', 'emotion_intensity' => 'v0'],
+            chimJevReadChoices(['answers' => $answers], $questions));
+        foreach (['mood', 'emotion', 'emotion_intensity'] as $field) $answers[$field]['confidence'] = 0;
+        $this->assertSame(['action' => 'v1', 'mood' => 'v0', 'emotion' => 'v0', 'emotion_intensity' => 'v0'],
+            chimJevReadChoices(['answers' => $answers], $questions));
+        [$parameter] = chimJevChoice('target', ['Player']);
+        $this->expectException(RuntimeException::class);
+        chimJevReadChoices(['answers' => ['target' => ['type' => 'choice', 'choice' => 'v0', 'confidence' => 0.49]]], ['target' => $parameter]);
+    }
+
     public function testJevOwnsDecisionsButPreservesSpeechAndListener(): void
     {
         require_once __DIR__ . '/../../lib/decision_router.php';
