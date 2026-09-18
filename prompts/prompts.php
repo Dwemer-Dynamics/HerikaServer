@@ -1,6 +1,18 @@
 <?php
 
 require_once("dialogue_prompt.php");
+require_once(__DIR__ . '/../lib/visual_context.php');
+
+$soulgazeCue = '';
+if (($gameRequest[0] ?? '') === 'vision') {
+    $soulgazeCue = chimBuildSoulgazeDialogueCue(
+        strval($gameRequest[3] ?? ''),
+        strval($GLOBALS["ITT"][$GLOBALS["ITTFUNCTION"] ?? '']["AI_PROMPT"] ?? ''),
+        function_exists('chimGetPromptCharacterName') ? chimGetPromptCharacterName() : strval($GLOBALS["HERIKA_NAME"] ?? ''),
+        strval($GLOBALS["PLAYER_NAME"] ?? '')
+    );
+}
+
 
 // Helper function to check if RPG comment should trigger based on type and probability
 function shouldTriggerRPGComment($eventType) {
@@ -209,9 +221,8 @@ $PROMPTS=array(
         "extra"=>["force_tokens_max"=>0]
     ],
     // Database Prompt (Soulgaze)
-    "vision"=>[ 
-        "cue"=>["{$GLOBALS["ITT"][$GLOBALS["ITTFUNCTION"]]["AI_PROMPT"]}. "],
-        "player_request"=>["Soulgaze image description: '{$gameRequest[3]}'"],
+    "vision"=>[
+        "cue"=>[$soulgazeCue],
         "extra"=>["force_tokens_max"=>512]
     ],
     "chatsimfollow"=>[ 
