@@ -32,7 +32,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
     error_log("[BGL] Starting Background Life processing");
 
     if (chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_BGL')) {
-    
+
         $results = $GLOBALS["db"]->fetchAll("select max(gamets) as gamets from eventlog"); // faster
         $maxRow = intval($results[0]["gamets"]);
 
@@ -185,7 +185,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
      ORDER BY gamets DESC, ts DESC
      LIMIT 1 OFFSET 0"
             );
-
+            
 
             if (!empty($actionsRows)) {
                 // Process the actions rows to check for TravelTo or MoveTo
@@ -226,7 +226,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                 );
                                 $skyrimCmd->send(cmd: $json);
 
-                                error_log("[BGL RUN] {$npc["npc_name"]} — Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
+                                error_log("[BGL RUN] {$npc["npc_name"]} — Early Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
 
                                 $lastGameTsRow = $GLOBALS["db"]->fetchAll('SELECT max(gamets) AS last_gamets FROM eventlog');
                                 $lastTsRow = $GLOBALS["db"]->fetchAll("SELECT max(ts) AS ts FROM eventlog WHERE gamets='{$lastGameTsRow[0]['last_gamets']}'");
@@ -243,20 +243,70 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                     'localts' => time(),
                                     'original' => 'backgroundaction',
                                 ]);
+                                $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
+
+                                // Insert response log entry with return home command
+                                $GLOBALS["db"]->insert(
+                                    'responselog',
+                                    [
+                                        'localts' => time(),
+                                        'sent' => 0,
+                                        'actor' => "rolemaster",
+                                        'text' => "",
+                                        'action' => "rolecommand|BackgroundCmd@$refHexString@Track/",
+                                        'tag' => '',
+                                    ]
+                                );
+                                sleep(1); // Give some time for the database to register the action
+                                triggerNpcUpdate($npc["npc_name"]);
 
 
                             } else {
-                                error_log("[BGL RUN] STUCK {$candidateLocation["sim"]} >"._LOCATION_RESOLVE_SIM_THRESHOLD." && {$candidateLocation["refs"]}");   
-                                $npcTargetmaster=new NpcMaster();
-                                $npcTarget=$npcTargetmaster->getByName($row['destination']);
+                                error_log("[BGL RUN] STUCK {$candidateLocation["sim"]} >" . _LOCATION_RESOLVE_SIM_THRESHOLD . " && {$candidateLocation["refs"]}");
+                                $npcTargetmaster = new NpcMaster();
+                                $npcTarget = $npcTargetmaster->getByName($row['destination']);
                                 if ($npcTarget) {
+
                                     $skyrimCmd = new SkyrimCommandBuilder();
                                     $json = $skyrimCmd->ObjectReference->MoveTo(
                                         "0x{$currentNpcData['refid']}",
                                         "0x{$npcTarget['refid']}"
                                     );
                                     $skyrimCmd->send(cmd: $json);
-                                    error_log("[BGL RUN] {$npc["npc_name"]} — Teleported to {$row['destination']} (formid: {$npcTarget['refid']})");
+                                    error_log("[BGL RUN] {$npc["npc_name"]} — 275  Teleported to {$row['destination']} (formid: {$npcTarget['refid']})");
+
+                                    $lastGameTsRow = $GLOBALS["db"]->fetchAll('SELECT max(gamets) AS last_gamets FROM eventlog');
+                                    $lastTsRow = $GLOBALS["db"]->fetchAll("SELECT max(ts) AS ts FROM eventlog WHERE gamets='{$lastGameTsRow[0]['last_gamets']}'");
+
+                                    $last_gamets = (int) $lastGameTsRow[0]['last_gamets'] + 1;
+                                    $last_ts = $lastTsRow[0]['ts'];
+                                    
+                                    $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
+                                    $GLOBALS["db"]->insert('actions_issued', [
+                                        'action' => 'TeleportTo',
+                                        'fullcall' => "TeleportTo:{$row['destination']}:Teleporting to resolve stuck NPC",
+                                        'actorname' => $npc["npc_name"],
+                                        'ts' => $last_ts,
+                                        'gamets' => $last_gamets,
+                                        'localts' => time(),
+                                        'original' => 'backgroundaction',
+                                   ]);
+
+                                    // Insert response log entry with return home command
+                                    $GLOBALS["db"]->insert(
+                                        'responselog',
+                                        [
+                                            'localts' => time(),
+                                            'sent' => 0,
+                                            'actor' => "rolemaster",
+                                            'text' => "",
+                                            'action' => "rolecommand|BackgroundCmd@$refHexString@Track/",
+                                            'tag' => '',
+                                        ]
+                                    );
+                                    sleep(1); // Give some time for the database to register the action
+                                    triggerNpcUpdate($npc["npc_name"]);
+
                                 }
                             }
 
@@ -355,7 +405,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
     }
 
 
-   
+
 
 }
     ?>

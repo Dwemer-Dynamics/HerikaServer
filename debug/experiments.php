@@ -1364,8 +1364,8 @@ if ($argv[1] == '41') {
         array(
             'localts' => time(),
             'sent' => 0,
-            'text' => "ExtCmdRemoveClothes@",
-            'actor' => "Alva",
+            'text' => "ExtCmdKiss@Varek",
+            'actor' => "Jaryra",
             'action' => 'command'
         )
     );

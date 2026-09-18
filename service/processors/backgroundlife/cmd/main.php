@@ -32,7 +32,8 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 ini_set('max_execution_time', 120); // Set maximum execution time to 2 minutes
 
-$enginePath = dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR. ".." . DIRECTORY_SEPARATOR. ".." . DIRECTORY_SEPARATOR. ".." . DIRECTORY_SEPARATOR;;
+$enginePath = dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
+;
 $GLOBALS['ENGINE_PATH'] = $enginePath;
 
 // ─── Includes ─────────────────────────────────────────────────────────────────
@@ -375,7 +376,7 @@ if ($GUARD_TRAVELTO) {
                     );
                     $skyrimCmd->send(cmd: $json);
 
-                    error_log("[BGL RUN] $npcNameEsc — Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
+                    error_log("[BGL RUN] $npcNameEsc — 379 Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
 
                     $db->insert('actions_issued', [
                         'action' => 'TeleportTo',
@@ -386,6 +387,23 @@ if ($GUARD_TRAVELTO) {
                         'localts' => time(),
                         'original' => 'backgroundaction',
                     ]);
+
+                    $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
+
+                    // Insert response log entry with return home command
+                    $db->insert(
+                        'responselog',
+                        [
+                            'localts' => time(),
+                            'sent' => 0,
+                            'actor' => "rolemaster",
+                            'text' => "",
+                            'action' => "rolecommand|BackgroundCmd@$refHexString@Track/",
+                            'tag' => '',
+                        ]
+                    );
+                    sleep(1); // Give some time for the database to register the action
+                    triggerNpcUpdate($npc["npc_name"]);
 
                     die();
                 } else {
@@ -416,7 +434,7 @@ if ($GUARD_TRAVELTO) {
                         );
                         $skyrimCmd->send(cmd: $json);
 
-                        error_log("[BGL RUN] $npcNameEsc — Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
+                        error_log("[BGL RUN] $npcNameEsc — (437) Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
 
                         $db->insert('actions_issued', [
                             'action' => 'TeleportTo',
@@ -428,6 +446,23 @@ if ($GUARD_TRAVELTO) {
                             'original' => 'backgroundaction',
                         ]);
 
+                          $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
+
+                        // Insert response log entry with return home command
+                        $db->insert(
+                            'responselog',
+                            [
+                                'localts' => time(),
+                                'sent' => 0,
+                                'actor' => "rolemaster",
+                                'text' => "",
+                                'action' => "rolecommand|BackgroundCmd@$refHexString@Track/",
+                                'tag' => '',
+                            ]
+                        );
+                        sleep(1); // Give some time for the database to register the action
+                        triggerNpcUpdate($npc["npc_name"]);
+                    
                         die();
                     } else {
                         error_log("[BGL RUN] $npcNameEsc — Could not resolve a valid location for destination: {$uniqueLocations[0]}");
@@ -539,10 +574,10 @@ if ($extdata["background_life_player_unattached"] === true) {
 // We can skip history if the last middle term memory is more recent than the last interaction with the player.
 // Threshold: Only include dialogue history if the last middle term memory is more recent than 24 hours from the last interaction with the player.
 
-if ($middleTermMemorygameTs < ($lastItGamets + (24 / GAMETS_TO_HOURS)))  {
+if ($middleTermMemorygameTs < ($lastItGamets + (24 / GAMETS_TO_HOURS))) {
     $contextDataHistoric = DataLastDataExpandedFor($GLOBALS['HERIKA_NAME'], -100, $sqlFilter);
     error_log("[BGL RUN] Last middle term memory is older than 24 hours from the last interaction with the player.");
-    if ($extdata['background_life_player_unattached']===true) {
+    if ($extdata['background_life_player_unattached'] === true) {
         // NPC unattached, so maybe does not know anything about player
         error_log("[BGL RUN] Unattached NPC, so maybe does not know anything about player.");
         foreach ($contextDataHistoric as $entry) {
@@ -575,7 +610,7 @@ if ($middleTermMemorygameTs < ($lastItGamets + (24 / GAMETS_TO_HOURS)))  {
 } else {
     //Append also last memories to the history, as they are more recent than the last interaction with the player.
     error_log("[BGL] Last middle term memory is more recent than 24 hours from the last interaction with the player. Appending last memory to history.");
-    $lastMemory=$db->fetchOne("select * from memory_summary
+    $lastMemory = $db->fetchOne("select * from memory_summary
      where gamets_truncated>$middleTermMemorygameTs 
      and companions like '%$npcNameEsc%' 
      and summary is not null
@@ -640,7 +675,7 @@ $innerChatEntryRows = $db->fetchAll(
 $innerChats = [];
 $localCounter = 0;
 
-
+$guardOnlyOneItemSellRecord=false;
 foreach (array_reverse($innerChatEntryRows) as $row) {
 
     if (strpos($row['data'], 'can sell these items') !== false) {
@@ -648,6 +683,12 @@ foreach (array_reverse($innerChatEntryRows) as $row) {
             $localCounter++;
             continue; // Skip this entry if it's not one of the last 3 inner chats
             // $row['data'] = "content skipped due to being a trader inner chat";
+        } else {
+            if (!$guardOnlyOneItemSellRecord) {
+                $guardOnlyOneItemSellRecord=true;
+            } else {
+                continue;
+            }
         }
     }
 
@@ -1034,12 +1075,28 @@ if ($isIdleAction && $idleHours > 1) { // If last Idle was Socialize, there a ch
  $currentNpcData, $extdata, $db, $last_ts, $last_gamets, $momentum, $npcNameEsc, $npcMaster, $connector, $currentConnectorData,
  $npcName,$startTime):string
  */
-        $consumtionResponse=requestForComsuption($dynamicBiography, $historyShort, $postHistory, $idleHours, 
-        $lastIntentBasedHint, $currentNpcData, $extdata, $db, $last_ts, $last_gamets, $momentum, 
-        $npcNameEsc, $npcMaster, $connector, $currentConnectorData, $npcName, $startTime);
+        $consumtionResponse = requestForComsuption(
+            $dynamicBiography,
+            $historyShort,
+            $postHistory,
+            $idleHours,
+            $lastIntentBasedHint,
+            $currentNpcData,
+            $extdata,
+            $db,
+            $last_ts,
+            $last_gamets,
+            $momentum,
+            $npcNameEsc,
+            $npcMaster,
+            $connector,
+            $currentConnectorData,
+            $npcName,
+            $startTime
+        );
         if ($consumtionResponse) {
             $history .= "\nThe Narrator: $npcName produced/consumed items while idle: $consumtionResponse";
-        
+
         } else {
             error_log("[BGL RUN] No production/consumption detected during idle period.");
         }
@@ -1199,7 +1256,7 @@ if ($wasSocializeIntentAction && !$bypassInnerThoughts) {
 } else
     $innerThoughtEnforceSocialice = "";
 
-$innerThoughtBuffer=requestForInnerThought(
+$innerThoughtBuffer = requestForInnerThought(
     $npcName,
     $currentNpcData,
     $extdata,
@@ -1235,7 +1292,7 @@ $lettersEnabled = isset($extdata['background_life_letters']) && $extdata['backgr
 
 $innerThoughtStyle = loadBGLStylePrompt('background_life_innerthought');
 
-$decisionBuffer=requestForaction(
+$decisionBuffer = requestForaction(
     $extdata,
     $dynamicBiography,
     $postHistory,
@@ -1243,7 +1300,7 @@ $decisionBuffer=requestForaction(
     $historyShort,
     $innerThoughtBuffer,
     $innerThoughtStyle,
-    $isFullMode, 
+    $isFullMode,
     $connector,
     $currentConnectorData,
     $spreadRumorsAvailable,
@@ -1251,7 +1308,10 @@ $decisionBuffer=requestForaction(
     $bypassTradingActions,
     $npcIsTravelling,
     $lastIssuedBgEvent,
-    $npcNameEsc,$GLOBALS["db"],$fortyEightHoursAgo,$last_gamets
+    $npcNameEsc,
+    $GLOBALS["db"],
+    $fortyEightHoursAgo,
+    $last_gamets
 );
 
 echo $decisionBuffer . PHP_EOL;
