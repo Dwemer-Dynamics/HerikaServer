@@ -410,6 +410,8 @@ function dps_save($conn, array $npc, array $updates, int $gamets): void {
         $values[]=(int)$npc['id'];
         $saved = dps_query($conn,"UPDATE public.{$product['npc_table']} SET ".implode(',',$sets).' WHERE id=$'.count($values),$values);
         if (pg_affected_rows($saved)!==1) throw new RuntimeException('NPC changed during profile update.');
+        else
+            dps_log($npc,'profile_updated_success',['fields'=>array_keys($updates),'gamets'=>$gamets]);
     } else {
         dps_query($conn,"INSERT INTO public.core_narrator(id,value) VALUES('gamets_last_updated',$1) ON CONFLICT(id) DO UPDATE SET value=EXCLUDED.value",[(string)$gamets]);
     }
