@@ -165,6 +165,10 @@ $CONNECTORS=["openrouterjson","openaijson","koboldcppjson"]; //AI Service(s).
 $CONNECTORS_DIARY="openrouter"; //Creates diary entries and memories.
 
 // Core LLM connector defaults (IDs from core_llm_connector table)
+$CORE_CONNECTOR_QUEST_CREATION=4;
+$CORE_CONNECTOR_QUEST_ENGINE=1;
+$CORE_CONNECTOR_QUEST_CREATION_ENABLED=true;
+$CORE_CONNECTOR_QUEST_ENGINE_ENABLED=true;
 $CORE_CONNECTOR_DIRECTOR=1;
 $CORE_CONNECTOR_PLAYER=2;
 $CORE_CONNECTOR_SUMMARY=4;

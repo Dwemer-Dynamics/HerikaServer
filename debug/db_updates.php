@@ -6143,6 +6143,10 @@ if ($checkVersion("general_settings") < 20260502003) {
     try {
         $managedDescriptions = chimGetManagedGeneralSettingDescriptions();
         foreach (chimGetManagedGeneralSettingIds() as $settingId) {
+            // SNQE slots are initialized after legacy connector assignments have been migrated.
+            if (strpos($settingId, 'CORE_CONNECTOR_QUEST_') === 0) {
+                continue;
+            }
             $definition = chimGetSchemaDefinition($settingId);
             $hasLegacyValue = chimReadLegacyGlobalValue($settingId, "__CHIM_SETTING_MISSING__");
             if ($hasLegacyValue === "__CHIM_SETTING_MISSING__") {
@@ -7502,6 +7506,42 @@ if ($checkVersion("general_settings") < 20260825001) {
     if ($b_ok) {
         $updateVersion("general_settings", 20260825001);
         Logger::info("Applied patch general_settings 20260825001");
+    }
+}
+
+// Give SNQE independent assignments once, preserving saved choices on upgrades and retries.
+if ($checkVersion("general_settings") < 20260919001) {
+    $questConnectorSources = [
+        'CORE_CONNECTOR_QUEST_CREATION' => 'CORE_CONNECTOR_MEDIUMTERM',
+        'CORE_CONNECTOR_QUEST_ENGINE' => 'CORE_CONNECTOR_DIRECTOR',
+        'CORE_CONNECTOR_QUEST_CREATION_ENABLED' => 'CORE_CONNECTOR_MEDIUMTERM_ENABLED',
+        'CORE_CONNECTOR_QUEST_ENGINE_ENABLED' => 'CORE_CONNECTOR_DIRECTOR_ENABLED',
+    ];
+    $migrationOk = true;
+    foreach ($questConnectorSources as $settingId => $sourceId) {
+        $default = chimReadLegacyGlobalValue($sourceId, '');
+        $value = chimGetGeneralSetting($sourceId, chimSettingsStringifyValue($default));
+        // The complete engine pipeline previously required both legacy connectors.
+        if ($settingId === 'CORE_CONNECTOR_QUEST_ENGINE_ENABLED') {
+            $memoryAvailable = chimGetGeneralSettingBool('CORE_CONNECTOR_MEDIUMTERM_ENABLED',
+                (bool) chimReadLegacyGlobalValue('CORE_CONNECTOR_MEDIUMTERM_ENABLED', true));
+            $value = chimSettingsStringifyValue(
+                chimSettingsNormalizeScalar($value, ['type' => 'boolean']) && $memoryAvailable
+            );
+        }
+        $idSql = $db->escapeLiteral($settingId);
+        $valueSql = $db->escapeLiteral($value);
+        $descriptionSql = $db->escapeLiteral(chimGetSchemaDescription($settingId));
+        if ($db->execQuery("INSERT INTO public.general_settings (id, value, description, updated_at)
+            VALUES ($idSql, $valueSql, $descriptionSql, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO NOTHING") === false) {
+            $migrationOk = false;
+        }
+    }
+    if ($migrationOk) {
+        $updateVersion("general_settings", 20260919001);
+    } else {
+        Logger::error('Failed to initialize SNQE connector settings; retry the database update.');
     }
 }
 
