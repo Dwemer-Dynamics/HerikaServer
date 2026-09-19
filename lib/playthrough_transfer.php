@@ -180,6 +180,7 @@ function ptx_inspect($conn, string $directory): array {
         if (!is_array($manifest['snapshot']??null) || !is_array($manifest['save']??null) || !is_array($manifest['profiles']??null) || count($manifest['profiles'])>10000) throw new RuntimeException('The package metadata is invalid.');
         $identity=$manifest['snapshot']['player_identity']??[];
         if (!is_array($identity) || (isset($identity['player_name']) && !is_string($identity['player_name'])) || (isset($identity['player_level']) && (!is_int($identity['player_level']) || $identity['player_level']<0))) throw new RuntimeException('Invalid character metadata.');
+        if (isset($identity['character_id']) && (!is_string($identity['character_id']) || ($identity['character_id'] !== '' && !preg_match('/^[a-f0-9]{32}$/D', $identity['character_id'])))) throw new RuntimeException('Invalid character identity.');
         if (isset($identity['player_faction_members'])) {
             if (!is_array($identity['player_faction_members']) || count($identity['player_faction_members'])>10000) throw new RuntimeException('Invalid party metadata.');
             foreach ($identity['player_faction_members'] as $member) if (!is_string($member)) throw new RuntimeException('Invalid party member.');

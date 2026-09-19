@@ -105,6 +105,7 @@ if ($minimeEnabled) {
         if ($sceneClassifierEnabled) {
             $connector = new LLMConnector();
             $sceneClassifierLabels = [
+                "Gemma 3 4B",
                 "Gemma 3N E4B",
                 "Scene Classifier (Gemma 3N E4B)",
                 "Scene Classifier (Gemini 2.5 Flash Lite)"

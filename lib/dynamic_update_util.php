@@ -1186,6 +1186,8 @@ function updateDynamicProfileField($npcName, $field, $historyData) {
         'speechstyle' =>'DYNAMIC_PROMPT_SPEECHSTYLE',
         'goals' => 'DYNAMIC_PROMPT_GOALS'
     ];
+
+   
     
     if (!isset($fieldMapping[$field])) {
         Logger::warn("updateDynamicProfileField: Unknown field '$field' for $npcName");
@@ -1284,7 +1286,7 @@ function updateDynamicProfileField($npcName, $field, $historyData) {
         unset($profileFields[$field]);
 
         foreach ($profileFields as $fieldName => $fieldLabel) {
-            if (!empty(trim($npcData[$fieldName]))) {
+            if ($npcData[$fieldName] && !empty(trim($npcData[$fieldName]))) {
                 $profileValue = trim($npcData[$fieldName]);
                 if ($isNarrator && function_exists('chimRenderNarratorRoleplayText')) {
                     $profileValue = chimRenderNarratorRoleplayText($profileValue);
@@ -1302,7 +1304,8 @@ function updateDynamicProfileField($npcName, $field, $historyData) {
 
         $GLOBALS["HERIKA_NAME"] = $npcName; //note none of these prompts will contain #HERIKA_NAME, as the dialogue flow doesnt do this replacement (which may be a bug)
         $prompt = [
-            ["role" => "user", "content" => "* Dialogue history:\n" . $historyData . ReplacePlayerNamePlaceholder($profileContextString)],
+            ["role" => "user", "content" => "* Dialogue history:\n" . $historyData ,"cache_control" => ["type" => "ephemeral"]],
+            ["role" => "user", "content" => ReplacePlayerNamePlaceholder($profileContextString)],
             ["role" => "user", "content" => "Character name: " . $promptNpcName . "\nCurrent " . ucfirst($field) . ":\n" . ReplacePlayerNamePlaceholder($isNarrator && function_exists('chimRenderNarratorRoleplayText') ? chimRenderNarratorRoleplayText($currentValue) : $currentValue)],
             ["role" => "user", "content" => ReplacePlayerNamePlaceholder($updatePrompt)]
         ];
@@ -1321,6 +1324,8 @@ function updateDynamicProfileField($npcName, $field, $historyData) {
         // Get max tokens from core connector configuration (no hardcoded cap)
         $maxTokens = !empty($currentConnectorData["max_tokens"]) ? (int)$currentConnectorData["max_tokens"] : 4000;
         
+        $prompt[] = ["role" => "user", "content" => "Format your response within " . $maxTokens . " tokens."];
+
         $buffer=$connectionHandler->fast_request($contextData, ["max_tokens" => $maxTokens],"profile");
         
         //$connectionHandler->close();
@@ -1477,4 +1482,3 @@ function triggerImmediateProfileProcessing(?callable $profileProcessor = null): 
     return dps_run();
 }
 ?>
-

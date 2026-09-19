@@ -1,3 +1,4 @@
+<?php include __DIR__ . "/playthrough_auto_switch.php"; ?>
 <?php // Standalone controls use the same server API as the Dashboard. ?>
 <section id="retention-section" class="content-section" data-api="<?= htmlspecialchars($webRoot . '/ui/api/playthrough_retention.php', ENT_QUOTES) ?>" data-csrf="<?= htmlspecialchars($csrfToken, ENT_QUOTES) ?>">
     <h2>Playthrough Saves and cleanup</h2>

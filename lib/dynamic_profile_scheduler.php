@@ -82,9 +82,11 @@ function dps_candidates($conn): array {
     }
     $data = array_column(pg_fetch_all(dps_query($conn,'SELECT id,value FROM public.core_narrator')) ?: [],'value','id');
     $narratorFields = array_values(array_intersect(dps_json($data['dynamic_profile_fields'] ?? ''),['personality','speechstyle','goals']));
-    $candidates[] = ['id'=>0, 'name'=>'The Narrator', 'key'=>'DYNAMIC_PROFILE_STATE_NARRATOR',
+    $narrator = ['id'=>0, 'name'=>'The Narrator', 'key'=>'DYNAMIC_PROFILE_STATE_NARRATOR',
         'fields'=>$narratorFields, 'enabled'=>filter_var($data['dynamic_profile'] ?? false,FILTER_VALIDATE_BOOLEAN) && count($narratorFields)>0,
         'policy'=>dps_policy($data), 'metadata_effective'=>$data];
+    foreach ($narratorFields as $field) $narrator[$field] = $data[$field] ?? null;
+    $candidates[] = $narrator;
     return $candidates;
 }
 
@@ -138,33 +140,61 @@ function dps_account($conn, array $candidates, array $clock): int {
 }
 
 function dps_due(array $state, array $policy, int $gamets, int $now, bool $manual = false): bool {
-    return $state && $now-(int)$state['attempt'] >= $policy['DYNAMIC_PROFILE_COOLDOWN_MINUTES']*60
-        && ($manual || ($gamets-(int)$state['last_game'] >= $policy['DYNAMIC_PROFILE_INTERVAL_DAYS']*dps_product()['day']
-            && (int)$state['total']-(int)$state['consumed'] >= $policy['DYNAMIC_PROFILE_MIN_EVENTS']));
+    if (!$state) return false;
+    // Explicit requests bypass scheduling thresholds, including the real-time cooldown.
+    if ($manual) return true;
+    return $now-(int)$state['attempt'] >= $policy['DYNAMIC_PROFILE_COOLDOWN_MINUTES']*60
+        && $gamets-(int)$state['last_game'] >= $policy['DYNAMIC_PROFILE_INTERVAL_DAYS']*dps_product()['day']
+        && (int)$state['total']-(int)$state['consumed'] >= $policy['DYNAMIC_PROFILE_MIN_EVENTS'];
+}
+
+function dps_context_limit(array $npc): int {
+    $limit = (int)($npc['metadata_effective']['CONTEXT_HISTORY_DYNAMIC_PROFILE'] ?? 50);
+    if ($limit <= 0) $limit = (int)($npc['metadata_effective']['CONTEXT_HISTORY'] ?? 50);
+    return max(1,min(400,$limit));
 }
 
 function dps_context($conn, array $npc, int $gamets): string {
-    $params = [];
-    $audience = dps_audience($npc,$params);
-    $limit = (int)($npc['metadata_effective']['CONTEXT_HISTORY_DYNAMIC_PROFILE'] ?? 50);
-    if ($limit <= 0) $limit = (int)($npc['metadata_effective']['CONTEXT_HISTORY'] ?? 50);
-    $limit = max(1,min(400,$limit));
-    $rows = pg_fetch_all(dps_query($conn,'SELECT type,data,gamets,location FROM public.eventlog WHERE '
-        . dps_event_filter(false) . " AND ($audience) AND gamets <= $gamets ORDER BY rowid DESC LIMIT $limit",$params)) ?: [];
-    return implode("\n",array_map(static fn($row)=>'['.$row['gamets'].' '.$row['type'].' '.$row['location'].'] '.mb_substr($row['data'],0,2000),array_reverse($rows)));
+    try {
+        $limit = dps_context_limit($npc);
+        $data = DataLastDataExpandedForNPC($npc["name"], $limit*-1);
+        $context = [];
+        foreach ($data as $k => $v) {
+            $context[] = $v["content"];
+        }
+        return implode("\n", $context);
+    } catch (Throwable $e) {
+        $params = [];
+        $audience = dps_audience($npc,$params);
+        $limit = dps_context_limit($npc);
+        $rows = pg_fetch_all(dps_query($conn,'SELECT type,data,gamets,location FROM public.eventlog WHERE '
+            . dps_event_filter(false) . " AND ($audience) AND gamets <= $gamets ORDER BY rowid DESC LIMIT $limit",$params)) ?: [];
+        return implode("\n",array_map(static fn($row)=>'['.$row['gamets'].' '.$row['type'].' '.$row['location'].'] '.mb_substr($row['data'],0,2000),array_reverse($rows)));
+    }
 }
 
 // Only explicit manual actions carry overrides; old client timer batches have no scheduling authority.
 function dps_request(array $names): int {
     $conn = ptp_connect();
-    if (!$conn) return 0;
+    if (!$conn) {
+        error_log('[DPS] Manual request rejected: database unavailable.');
+        return 0;
+    }
     try {
         $clock = dps_state($conn,'DYNAMIC_PROFILE_CLOCK');
-        if (!$clock) return 0;
+        if (!$clock) {
+            error_log('[DPS] Manual request rejected: game clock unavailable.');
+            return 0;
+        }
         $count = 0;
         foreach (dps_candidates($conn) as $npc) {
-            if (!$npc['enabled'] || !in_array($npc['name'],$names,true)) continue;
-            dps_store($conn,'DYNAMIC_PROFILE_MANUAL_'.(int)$npc['id'],['epoch'=>$clock['epoch'],'requested'=>time()]);
+            if (!in_array($npc['name'],$names,true)) continue;
+            if (!$npc['enabled']) {
+                dps_log($npc,'manual_request_disabled_or_locked');
+                continue;
+            }
+            dps_store($conn,'DYNAMIC_PROFILE_MANUAL_'.(int)$npc['id'],
+                ['epoch'=>$clock['epoch'],'requested'=>time(),'token'=>bin2hex(random_bytes(16))]);
             $count++;
         }
         return $count;
@@ -184,12 +214,35 @@ function dps_connector_ready(array $npc): bool {
     return !empty($connector['driver']) && !empty($connector['model']);
 }
 
+// Report only identity and reason keys, never whole profiles, prompts, or metadata values.
+function dps_log(array $npc, string $reason, array $details = []): void {
+    error_log('[DPS] '.json_encode(['npc_id'=>(int)$npc['id'],'npc_name'=>$npc['name'],
+        'reason'=>$reason] + $details, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR));
+}
+
+// Compare update inputs, not volatile gameplay metadata such as inventory and activity timestamps.
+function dps_conflicts(array $npc, array $fresh): array {
+    $changed = [];
+    if (!$fresh) return ['npc_missing'];
+    if (!$fresh['enabled']) $changed[] = 'npc_disabled_or_locked';
+    foreach (['name','profile_id','fields','policy'] as $key) {
+        if (($fresh[$key] ?? null) !== ($npc[$key] ?? null)) $changed[] = $key;
+    }
+    if (dps_context_limit($fresh) !== dps_context_limit($npc)) $changed[] = 'context_history_limit';
+    foreach ($npc['fields'] as $field) {
+        if (($fresh[$field] ?? null) !== ($npc[$field] ?? null)) $changed[] = $field;
+    }
+    return $changed;
+}
+
 // One NPC per worker pass; attempts determine ordering so a failing NPC cannot starve others.
 function dps_run(?string $manualName = null, ?callable $generator = null, $connection = null): array {
     $result = ['updated'=>0,'npcs'=>0,'events'=>0];
     $conn = $connection ?? ptp_connect();
     if (!$conn) return $result;
     $locked = false;
+    $manualAttempt = null;
+    $activeNpc = null;
     try {
         if (pg_fetch_result(dps_query($conn,"SELECT pg_try_advisory_lock(hashtext('dynamic_profile_scheduler'))"),0,0) !== 't') return $result;
         $locked = true;
@@ -203,23 +256,58 @@ function dps_run(?string $manualName = null, ?callable $generator = null, $conne
         foreach ($candidates as &$npc) {
             $npc['state'] = dps_state($conn,$npc['key']);
             $request = dps_state($conn,'DYNAMIC_PROFILE_MANUAL_'.(int)$npc['id']);
-            $npc['manual'] = ($request['epoch'] ?? '') === $clock['epoch'] && time()-(int)($request['requested'] ?? 0)<3600;
+            $npc['manual_request'] = $request;
+            $npc['manual'] = ($request['epoch'] ?? '') === $clock['epoch']
+                && time()-(int)($request['requested'] ?? 0)<3600 && (int)($request['attempts'] ?? 0)<3;
         }
         unset($npc);
-        usort($candidates,static fn($a,$b)=>($a['state']['attempt'] ?? 0)<=>($b['state']['attempt'] ?? 0));
+        // Serve explicit requests first; preserve retry fairness within each group.
+        usort($candidates,static function ($a,$b) {
+            if ($a['manual'] !== $b['manual']) return $a['manual'] ? -1 : 1;
+            return ($a['state']['attempt'] ?? 0)<=>($b['state']['attempt'] ?? 0);
+        });
         foreach ($candidates as $npc) {
             if (!$npc['enabled'] || ($manualName !== null && $npc['name'] !== $manualName)) continue;
             $state = $npc['state'];
             if (($state['epoch'] ?? '') !== $clock['epoch'] || !dps_due($state,$npc['policy'],(int)$clock['gamets'],time(),$manualName!==null || $npc['manual'])) continue;
-            if ($generator === null && !dps_connector_ready($npc)) continue;
-            $history = dps_context($conn,$npc,(int)$clock['gamets']);
-            if ($history === '') continue;
+            if ($manualName === null && $npc['manual'] && (int)($npc['manual_request']['retry_after'] ?? 0)>time()) continue;
+            $activeNpc = $npc;
+            $blocked = $generator === null && !dps_connector_ready($npc) ? 'connector_unavailable' : '';
+            $history = $blocked === '' ? dps_context($conn,$npc,(int)$clock['gamets']) : '';
+            if ($blocked === '' && $history === '') $blocked = 'history_empty';
+            if ($blocked !== '') {
+                // Log a queued request's blocked reason once, without consuming a generation attempt.
+                if ($npc['manual'] && ($npc['manual_request']['blocked_reason'] ?? '') !== $blocked) {
+                    $request = $npc['manual_request'];
+                    $blockedRequest = $request;
+                    $blockedRequest['blocked_reason'] = $blocked;
+                    $logged = dps_query($conn,'UPDATE public.conf_opts SET value=$1 WHERE id=$2 AND value::jsonb=$3::jsonb',
+                        [json_encode($blockedRequest,JSON_THROW_ON_ERROR),'DYNAMIC_PROFILE_MANUAL_'.(int)$npc['id'],json_encode($request,JSON_THROW_ON_ERROR)]);
+                    if (pg_affected_rows($logged)===1) dps_log($npc,$blocked);
+                } elseif ($manualName !== null) {
+                    dps_log($npc,$blocked);
+                }
+                continue;
+            }
+            if ($npc['manual']) {
+                $request = $npc['manual_request'];
+                $claimed = $request;
+                $claimed['attempts'] = (int)($request['attempts'] ?? 0)+1;
+                $claimed['retry_after'] = time()+(int)ceil($npc['policy']['DYNAMIC_PROFILE_COOLDOWN_MINUTES']*60);
+                // A new click may arrive at any time; only claim the request we actually observed.
+                $claim = dps_query($conn,'UPDATE public.conf_opts SET value=$1 WHERE id=$2 AND value::jsonb=$3::jsonb',
+                    [json_encode($claimed,JSON_THROW_ON_ERROR),'DYNAMIC_PROFILE_MANUAL_'.(int)$npc['id'],json_encode($request,JSON_THROW_ON_ERROR)]);
+                if (pg_affected_rows($claim)!==1) continue;
+                $manualAttempt = $claimed;
+            }
             $state['attempt'] = time();
             dps_store($conn,$npc['key'],$state);
-            dps_query($conn,'DELETE FROM public.conf_opts WHERE id=$1',['DYNAMIC_PROFILE_MANUAL_'.(int)$npc['id']]);
             $result['npcs']++;
             $updates = ($generator ?? 'dps_generate')($npc,$history);
-            if (!$updates || !$allowed()) break;
+            if (!$updates || !$allowed()) {
+                dps_log($npc,!$updates ? 'generation_failed_or_empty' : 'interaction_cancelled');
+                break;
+            }
             dps_query($conn,'BEGIN');
             try {
                 dps_query($conn,"SELECT pg_advisory_xact_lock(hashtext('dynamic_profile_clock'))");
@@ -231,27 +319,36 @@ function dps_run(?string $manualName = null, ?callable $generator = null, $conne
                 }
                 $current = dps_state($conn,'DYNAMIC_PROFILE_CLOCK');
                 $fresh = array_values(array_filter(dps_candidates($conn),static fn($row)=>$row['key']===$npc['key']));
-                if (($current['epoch'] ?? '') !== $clock['epoch'] || !$fresh || !$fresh[0]['enabled']
-                    || $fresh[0]['name'] !== $npc['name'] || ($fresh[0]['profile_id'] ?? null) !== ($npc['profile_id'] ?? null)
-                    || $fresh[0]['metadata_effective'] !== $npc['metadata_effective'] || !$allowed()) {
-                    dps_query($conn,'ROLLBACK'); break;
-                }
-                foreach ($npc['fields'] as $field) {
-                    if (($fresh[0][$field] ?? null) !== ($npc[$field] ?? null)) {
-                        dps_query($conn,'ROLLBACK'); return $result;
-                    }
+                $conflicts = dps_conflicts($npc,$fresh[0] ?? []);
+                if (($current['epoch'] ?? '') !== $clock['epoch']) $conflicts[] = 'clock_epoch';
+                if (!$allowed()) $conflicts[] = 'interaction_cancelled';
+                if ($conflicts) {
+                    dps_query($conn,'ROLLBACK');
+                    dps_log($npc,'save_conflict',['changed'=>$conflicts]);
+                    break;
                 }
                 dps_save($conn,$npc,$updates,(int)$clock['gamets']);
                 $state['consumed'] = $state['total'];
                 $state['last_game'] = $clock['gamets'];
                 dps_store($conn,$npc['key'],$state);
+                if ($manualAttempt !== null) {
+                    dps_query($conn,'DELETE FROM public.conf_opts WHERE id=$1 AND value::jsonb=$2::jsonb',
+                        ['DYNAMIC_PROFILE_MANUAL_'.(int)$npc['id'],json_encode($manualAttempt,JSON_THROW_ON_ERROR)]);
+                }
                 dps_query($conn,'COMMIT');
                 $result['updated']++;
             } catch (Throwable $e) { pg_query($conn,'ROLLBACK'); throw $e; }
             break;
         }
-    } catch (Throwable $e) { error_log('Dynamic Profiles: '.$e->getMessage()); }
+    } catch (Throwable $e) {
+        error_log('Dynamic Profiles: '.$e->getMessage());
+        if ($activeNpc !== null) dps_log($activeNpc,'update_exception',['error_type'=>get_class($e)]);
+    }
     finally {
+        if ($manualAttempt !== null && !$result['updated']) {
+            dps_log($npc,$manualAttempt['attempts']<3 ? 'manual_retry_pending' : 'manual_retry_exhausted',
+                ['attempt'=>$manualAttempt['attempts'],'retry_after'=>$manualAttempt['retry_after']]);
+        }
         if ($locked) pg_query($conn,"SELECT pg_advisory_unlock(hashtext('dynamic_profile_scheduler'))");
         if ($connection === null) pg_close($conn);
     }
@@ -313,7 +410,11 @@ function dps_save($conn, array $npc, array $updates, int $gamets): void {
         $values[]=(int)$npc['id'];
         $saved = dps_query($conn,"UPDATE public.{$product['npc_table']} SET ".implode(',',$sets).' WHERE id=$'.count($values),$values);
         if (pg_affected_rows($saved)!==1) throw new RuntimeException('NPC changed during profile update.');
+        else
+            dps_log($npc,'profile_updated_success',['fields'=>array_keys($updates),'gamets'=>$gamets]);
     } else {
         dps_query($conn,"INSERT INTO public.core_narrator(id,value) VALUES('gamets_last_updated',$1) ON CONFLICT(id) DO UPDATE SET value=EXCLUDED.value",[(string)$gamets]);
     }
 }
+
+?>

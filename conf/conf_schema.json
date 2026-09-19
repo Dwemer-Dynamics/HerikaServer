@@ -101,6 +101,10 @@
   "CONNECTORS": {"type":"selectmultiple","values":["openaijson","google_openaijson","web_connector","koboldcppjson","openrouterjson","openai","koboldcpp","openrouter","player2json"],"description":"AI Service(s) to be used for most AI features.<br>Select the service(s) you have configured for AI/LLM Connectors below.<br><strong>Non JSON connectors are legacy and no longer supported. We can not debug or fix any issues you have with them!</strong><br><br>Make sure to click the <strong>Current AI Service</strong> button at the top of the page if you change connectors!","_title":"AI/LLM Connectors Selection"},
   "CONNECTORS_DIARY": {"type":"select","values":["openrouter","openai","google_openaijson","koboldcpp"],"description":"Connector used for diary-related generation (manual diary, auto-diary, and dynamic profile updates).<br><br><strong>This is separate from long-term memory recall and memory summary compaction.</strong>"},
   "HERIKA_DYNAMIC": {"userlvl":"basic","type": "longstring","description": "Deprecated. Use the new fields listed above instead."},
+  "CORE_CONNECTOR_QUEST_CREATION": {"userlvl":"basic","type":"foreign:core_llm_connector:id:label","scope":"global","description":"Creates quest ideas, briefings and outlines."},
+  "CORE_CONNECTOR_QUEST_CREATION_ENABLED": {"userlvl":"basic","type":"boolean","scope":"global","default":true,"description":"Make Quest Creation Connector available. Turning this off keeps its connector selection."},
+  "CORE_CONNECTOR_QUEST_ENGINE": {"userlvl":"basic","type":"foreign:core_llm_connector:id:label","scope":"global","description":"Plans quest steps and generates quest code. Use a capable reasoning and coding model."},
+  "CORE_CONNECTOR_QUEST_ENGINE_ENABLED": {"userlvl":"basic","type":"boolean","scope":"global","default":true,"description":"Make Quest Engine Connector available. Turning this off keeps its connector selection."},
   "CORE_CONNECTOR_DIRECTOR": {"userlvl":"basic","type": "foreign:core_llm_connector:id:label","description": "Connector used for Director mode. Recommend to use a 💪Powerful LLM."},
   "CORE_CONNECTOR_DIRECTOR_ENABLED": {"userlvl":"basic","type":"boolean","scope":"global","default":true,"description":"Make the Director Mode connector available. When off, Director Mode tasks are skipped and the connector assignment above is kept for later."},
   "CORE_CONNECTOR_PLAYER": {"userlvl":"basic","type": "foreign:core_llm_connector:id:label","description": "Connector used for player re-speech. Recommend to use a very 🏃‍♀️‍➡️Fast LLM."},
@@ -265,7 +269,7 @@
        "url": {"type":"url","description":"Player2 should be running on the same machine as DwemerDistro! Will connect automatically so do not change the URL. Does not currently support Chat Assist/Creation.","helpurl":"https://dwemerdynamics.com/chim/llm.html#Player2Service"}
     }
   },
-  "TTSFUNCTION": {"type":"select","values":["omnivoice","pockettts","chatterbox","xtts-fastapi","inworld","cartesia","piper-tts","xvasynth","none","melotts","mimic3","azure","11labs","openai","kokoro","koboldcpp","zonos_gradio","deepgram"],"description":"Text-to-Speech service options. Used to generate AI NPC voice.","_title":"Text-to-Speech Service"},
+  "TTSFUNCTION": {"type":"select","values":["omnivoice","higgs","pockettts","chatterbox","xtts-fastapi","inworld","cartesia","piper-tts","xvasynth","none","melotts","mimic3","azure","11labs","openai","kokoro","koboldcpp","zonos_gradio","deepgram"],"description":"Text-to-Speech service options. Used to generate AI NPC voice.","_title":"Text-to-Speech Service"},
 
   "TTS": {
     "_title":"Text-to-Speech Service",
@@ -295,6 +299,13 @@
       "PARALINGUISTIC_TAGS_ENABLED":{"type":"boolean","description":"Enable paralinguistic tags like [laugh], [sigh] for expressive TTS output.","scope":"global"},
       "PARALINGUISTIC_TAGS_PROMPT":{"type":"longstring","description":"Prompt snippet instructing the LLM to use paralinguistic tags. Added to system prompt when enabled.","scope":"global"},
       "PARALINGUISTIC_TAGS_LIST":{"type":"string","description":"Comma-separated list of supported paralinguistic tags (e.g., [laugh],[sigh],[gasp]). Tags are case-insensitive.","scope":"global"}
+    },
+    "HIGGS": {
+      "_title":"Higgs TTS 3",
+      "endpoint":{"type":"url","description":"Higgs service address. DwemerDistro uses port 8025."},
+      "model":{"type":"string","description":"Model ID exposed by the Higgs service. Default: higgs-v3."},
+      "voiceid":{"type":"string","description":"Reference voice name."},
+      "voicelogic":{"type":"select","values":["voicetype","name"],"description":"Select the NPC voice type or name.","scope":"global"}
     },
     "OMNIVOICE": {
       "_title":"OmniVoice",
@@ -434,12 +445,12 @@
       "workspace": {"type":"string","description":"Inworld workspace ID (required for voice cloning). Format: workspaces/{workspace} or just the workspace ID.","helpurl":"https://docs.inworld.ai/"},
       "voiceid": {"type":"string","description":"Voice file name. Works the same as CHIM-XTTS voiceid. Will only work with voices in your Voice Cache. Voice will be automatically cloned to Inworld when first used.","helpurl":"/HerikaServer/ui/xtts_clone.php"},
       "language": {"type":"select","values":["en-US","zh-CN","ko-KR","ja-JP","ru-RU","it-IT","es-ES","pt-BR","de-DE","fr-FR","ar-SA","pl-PL","nl-NL","hi-IN","he-IL"],"description":"Language to use for TTS generation. Uses BCP-47 regional language codes."},
-      "model_id": {"type":"select","values":["inworld-tts-1 (deprecated)","inworld-tts-1-max (deprecated)","inworld-tts-1.5-mini","inworld-tts-1.5-max","inworld-tts-2"],"description":"Inworld model to use. inworld-tts-2 is the higher quality model.","helpurl":"https://docs.inworld.ai/docs/tts/tts-models"},
+      "model_id": {"type":"select","values":["inworld-tts-1 (deprecated)","inworld-tts-1-max (deprecated)","inworld-tts-1.5-mini","inworld-tts-1.5-max","inworld-tts-2","inworld-tts-2-flash"],"description":"Inworld model to use. inworld-tts-2 prioritizes quality; inworld-tts-2-flash prioritizes speed.","helpurl":"https://docs.inworld.ai/docs/tts/tts-models"},
       "temperature": {"type":"number","description":"Sampling temperature (0-2). Higher values make output more random. Default: 1.0"},
       "speed": {"type":"number","description":"Speaking rate/speed (0.5-1.5). Default: 1.0"}
     }
 },
-  "TTSFUNCTION_PLAYER": {"type":"select","userlvl":"basic","scope":"global","values":["omnivoice","pockettts","chatterbox","xtts-fastapi","inworld","cartesia","piper-tts","xvasynth","none","melotts","mimic3","azure","11labs","openai","kokoro","zonos_gradio"],"description":"Text-to-Speech service options. Used to generate your voice.","_title":"Player TTS"},
+  "TTSFUNCTION_PLAYER": {"type":"select","userlvl":"basic","scope":"global","values":["omnivoice","higgs","pockettts","chatterbox","xtts-fastapi","inworld","cartesia","piper-tts","xvasynth","none","melotts","mimic3","azure","11labs","openai","kokoro","zonos_gradio"],"description":"Text-to-Speech service options. Used to generate your voice.","_title":"Player TTS"},
   "TTSFUNCTION_PLAYER_VOICE": {"type":"string","userlvl":"basic","scope":"global","description":"VoiceID to use for the player character."},
   "TTSFUNCTION_PLAYER_VOICE_ID": {"type":"integer","userlvl":"pro","scope":"global","description":"Speaker ID to select a voice from multi-voice model."},
   "TTSFUNCTION_PLAYER_LANGUAGE": {"type":"string","userlvl":"basic","scope":"global","description":"Overrides the TTS language for the player character."},

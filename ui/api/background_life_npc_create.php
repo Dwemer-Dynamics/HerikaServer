@@ -36,6 +36,9 @@ require_once LIB_PATH . DIRECTORY_SEPARATOR . 'background_life_npc_creation.php'
 
 $GLOBALS['db'] = new sql();
 
+// The game confirmation can take a minute; do not lock other browser requests.
+session_write_close();
+
 try {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET') {
         echo json_encode([

@@ -601,13 +601,14 @@ if ($extdata["background_life_player_unattached"] === true) {
 }
 
 // We can skip history if the last middle term memory is more recent than the last interaction with the player.
-// Threshold: Only include dialogue history if the last middle term memory is older than 24 hours from the last interaction with the player.
+// Threshold: Only include dialogue history if the last middle term memory is more recent than 24 hours from the last interaction with the player.
 
-if ($middleTermMemorygameTs > ($lastItGamets + (24 / GAMETS_TO_HOURS)))  {
+if ($middleTermMemorygameTs < ($lastItGamets + (24 / GAMETS_TO_HOURS)))  {
     $contextDataHistoric = DataLastDataExpandedFor($GLOBALS['HERIKA_NAME'], -100, $sqlFilter);
-
-    if ($extdata['background_life_player_unattached']) {
+    error_log("[BGL RUN] Last middle term memory is older than 24 hours from the last interaction with the player.");
+    if ($extdata['background_life_player_unattached']===true) {
         // NPC unattached, so maybe does not know anything about player
+        error_log("[BGL RUN] Unattached NPC, so maybe does not know anything about player.");
         foreach ($contextDataHistoric as $entry) {
             $line = trim($entry['content']);
 
@@ -620,6 +621,7 @@ if ($middleTermMemorygameTs > ($lastItGamets + (24 / GAMETS_TO_HOURS)))  {
                 : "$line\n";
         }
     } else {
+        error_log("[BGL RUN] NPC is attached, including dialogue history.");
         $history = "\n<last_dialogue>\nThis represents last dialogue where player ({$GLOBALS['PLAYER_NAME']}) was present. Can be more dialogues with other NPCs from this point.\n";
         foreach ($contextDataHistoric as $entry) {
             $line = trim($entry['content']);
@@ -636,7 +638,7 @@ if ($middleTermMemorygameTs > ($lastItGamets + (24 / GAMETS_TO_HOURS)))  {
 
 } else {
     //Append also last memories to the history, as they are more recent than the last interaction with the player.
-    
+    error_log("[BGL] Last middle term memory is more recent than 24 hours from the last interaction with the player. Appending last memory to history.");
     $lastMemory=$db->fetchOne("select * from memory_summary
      where gamets_truncated>$middleTermMemorygameTs 
      and companions like '%$npcNameEsc%' 
@@ -828,8 +830,8 @@ if (isset($metadata['last_coords']) && !empty($metadata['last_coords'][3])) {
 if (isset($metadata['low_process_actors'])) {
 
     // Keep only the last 3 entries.
-    $metadataLow_process_actors = array_slice($metadata['low_process_actors'], -3, 3, true);
-    $metadataLow_process_actors = ($metadata['low_process_actors']);
+    $metadataLow_process_actors = array_slice($metadata['low_process_actors'], -1, 1, true);
+    //$metadataLow_process_actors = ($metadata['low_process_actors']);
     foreach ($metadataLow_process_actors as $gamets_lpa_processed => $actorList) {
         if ($gamets_lpa_processed <= $lastItGamets) {
             continue;
@@ -1080,6 +1082,10 @@ if ($isIdleAction && $idleHours > 1) { // If last Idle was Socialize, there a ch
 
     if ($lastIntent === 'Socialize') {
         $lastIntentBasedHint = "Hint: Last intent was 'Socialize', so probably drank items in inventory.";
+    }
+
+    if ($lastIntent === 'Guard') {
+        $lastIntentBasedHint = "Hint: Last intent was 'Guard', so probably stayed alert and did not consume items in inventory.";
     }
 
     if ($lastIntent === 'Sleep') {

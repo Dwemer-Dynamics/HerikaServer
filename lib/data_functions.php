@@ -19,6 +19,7 @@ require_once(__DIR__."/vr_items.php");
 require_once(__DIR__."/visual_context.php");
 require_once(__DIR__."/memory_ranking.php");
 
+define('_LOCATION_RESOLVE_SIM_THRESHOLD', 0.74); // Minimum similarity score for location resolution
 
 function ChangeHerikaName($new_name="") {
     if ($new_name > "") {
@@ -1687,9 +1688,29 @@ function DataPosibleLocationsToGo()
     }
     
     foreach ($retData as $k => $v) {
-        if ($v=="Skyrim") {
+        if (strpos($v,"Skyrim")===0) {
             $retData[$k].=" (exit)";
         }
+    }
+    
+
+    // Also obtains locs from current player coordinates.
+     $locs = $db->fetchAll("SELECT L.name,L.tags, 
+                L.coords <-> P.coords AS distance
+            FROM locations_v L
+            CROSS JOIN (
+                SELECT B.coords
+                FROM public.named_cell A
+                LEFT JOIN locations_v B ON B.formid = A.location_id
+                WHERE A.id = 0
+            ) AS P
+            WHERE L.coords <-> P.coords < 15000
+            ORDER BY distance ASC
+        ");
+    foreach ($locs as $k => $v) {
+        
+        $retData[$v["name"]]=$v["name"];
+        
     }
     //print_r($matches);
     // ? this part with 'Herika can see this beings in range:' seems outdated 
@@ -2115,7 +2136,7 @@ function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") 
 
         $actorcn=$db->escape($actor);
         $results = $db->fetchAll("SELECT speaker,speech,listener,gamets,localts,'speech',gamets - LAG(gamets) OVER (ORDER BY gamets ASC) AS gamets_diff,location,ts
-        FROM speech where companions like '%$actorcn%' order by ts desc LIMIT 1000 OFFSET 0");    
+        FROM speech where companions like '%$actorcn%' order by ts desc LIMIT 1000 OFFSET 0",true);    
          $rawData=[];
         foreach ($results as $row) {
             $rawData[] = $row;
@@ -2133,13 +2154,16 @@ function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") 
         foreach ($orderedData as $speechEvent)  {
             
             if (($speechEvent["gamets_diff"] * 0.0000024) > 1.0) { // more than one hour
-                $lastDialogFull[$speechEvent["ts"]] = array('role' => "user", 'content' => "The Narrator: about ".number_format(floor($speechEvent["gamets_diff"]*0.0000024),0)." hours later...");
+                $lastDialogFull[] = array('role' => "user", 
+                'content' => "The Narrator: about ".number_format(floor($speechEvent["gamets_diff"]*0.0000024),0)." hours later...",
+                "_gs"=>$speechEvent["gamets"]);
             }
 
             
             if ($lastlocation!=$speechEvent["location"]) {
                 $lastlocation=$speechEvent["location"];
-                $lastDialogFull[$speechEvent["ts"]] = array('role' => "user", 'content' => "The Narrator: action moved to new location: $lastlocation");
+                $lastDialogFull[] = array('role' => "user", 'content' => "The Narrator: action moved to new location: $lastlocation",
+                "_gs"=>$speechEvent["gamets"]);
             }
 
             $currentSpeaker="user";
@@ -2158,7 +2182,8 @@ function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") 
                 if ($lastSpeaker==$GLOBALS["PLAYER_NAME"])
                     $talkingto="";
 
-                $lastDialogFull[$speechEvent["ts"]] = array('role' => $currentSpeaker, 'content' => "$lastSpeaker: $buffer $talkingto");   
+                $lastDialogFull[] = array('role' => $currentSpeaker, 'content' => "$lastSpeaker: $buffer $talkingto",
+                "_gs"=>$speechEvent["gamets"]);   
                 $buffer="";
                 $lastSpeaker=$speechEvent["speaker"];
             } else {
@@ -2170,37 +2195,43 @@ function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") 
         }
         
         
-        $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoaction','itemfound') order by gamets desc LIMIT 10 OFFSET 0");    
-        $rawData=[];
-        foreach ($results as $row) {
-            $lastDialogFull[$row["ts"]]= array('role' => 'user', 'content' => "The Narrator: {$row["data"]}");  
-        }
         
-        $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoloc') order by gamets desc LIMIT 10 OFFSET 0");    
-        $rawData=[];
-        foreach ($results as $row) {
-            $lastDialogFull[$row["ts"]]= array('role' => 'user', 'content' => "The Narrator: {$row["data"]}");  
-        }
 
-        ksort($lastDialogFull);
+        $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoaction','itemfound') 
+        and people like '%$actorcn%' and data not  like '%<memory>%' and data not like '%#MEMORY%' order by gamets desc LIMIT 10 OFFSET 0");    
+        $rawData=[];
+        foreach ($results as $row) {
+            $lastDialogFull[]= array('role' => 'user', 'content' => "The Narrator: {$row["data"]}",
+            "_gs"=>$row["gamets"]);
+        }
         
+        $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoloc') and people like '%$actorcn%' order by gamets desc LIMIT 10 OFFSET 0");    
+        $rawData=[];
+        foreach ($results as $row) {
+            $lastDialogFull[]= array('role' => 'user', 'content' => "The Narrator: {$row["data"]}",
+            "_gs"=>$row["gamets"]);
+        }
+    
         $results = $db->fetchAll("SELECT gamets,data,ts
             FROM eventlog
             WHERE type in ('inputtext','inputtext_s','ginputtext','ginputtext_s','narrator_inputtext')
               AND people like '%$actorcn%'
             ORDER BY gamets desc, ts desc");
-        $rawData=[];
-        foreach ($results as $row) {
-            $rawData[] = $row;
-        }
-        $rawData = array_reverse($rawData);
+        
+        $rawData=$results;
+    
         foreach ($rawData as $row) {
-            $lastDialogFull[] = array('role' => 'user', 'content' => "{$row["data"]}");
+            $lastDialogFull[$row["gamets"].$row["ts"]] = array('role' => 'user', 'content' => "{$row["data"]}",
+            "_gs"=>$row["gamets"]);
         }
 
-       
+        // Sort lastDialogFull using the _gs property as the key for sorting
+        usort($lastDialogFull, function($a, $b) {
+            return $a['_gs'] <=> $b['_gs'];
+        });
                 
         $orderedData = array_slice($lastDialogFull, $lastNelements);
+        
         
         Logger::info("Using NPC data retriever");
         
@@ -2693,8 +2724,25 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
         
         $localCounter++;    
     }
-    
-    $orderedData = array_reverse($rawDataFiltered);
+
+    // Remove repeated BGLCHAT sell items rows, as it increases context a lot.
+    $blgchatSellItemsRemove = false;
+    $rawDataReFiltered = [];
+    foreach ($rawDataFiltered as $key => $row) {
+        $rowData = $row["data"];
+        if ($row["subtype"] == "BGLCHAT") {
+            if (strpos($rowData, "can sell these items:  [{") !== false) {
+                if ($blgchatSellItemsRemove)
+                    continue;
+
+                $blgchatSellItemsRemove = true;
+            }
+        }
+
+        $rawDataReFiltered[] = $row;
+    }
+
+    $orderedData = array_reverse($rawDataReFiltered);
 
     //$orderedData = array_slice($orderedData, $lastNelements);
 
@@ -6355,49 +6403,55 @@ function call_llm_internal() {
                             error_log("[ACTION POSTFILTER TravelTo]  $localtarget => {$mang4[0]} => $destination");
 
                             $destinationName=$GLOBALS["db"]->escape(trim($destination));
-                            $dbDestination=$GLOBALS["db"]->fetchOne("SELECT name, similarity(name, '$destinationName') AS sim,formid FROM locations ORDER BY sim DESC LIMIT 1");
+                            //when world='' then 0 else 1 -> gives priority to locations with a world set (Skyrim, Whiterun,...)
+                            $dbDestination=$GLOBALS["db"]->fetchOne("SELECT name, similarity(name, '$destinationName') AS sim,formid FROM locations ORDER BY sim DESC,case when world='' then 0 else 1 end DESC,created_at DESC LIMIT 1");
                             $dbDestinationRegion=$GLOBALS["db"]->fetchOne("SELECT name, similarity(region, '$destinationName') AS sim,formid FROM locations ORDER BY sim DESC LIMIT 1");
 
                             $contextDestinations=DataPosibleLocationsToGo();
 
-                            if (in_array(trim($localtarget),$contextDestinations)) {
-                                // Perfect match
-                                error_log("[ACTION POSTFILTER TravelTo] Seems valid as-is (context destination): <$localtarget> => $localtarget");
-                                $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TravelTo@$localtarget";
-
-                            } else if (in_array($destination,$contextDestinations)) {
-                                error_log("[ACTION POSTFILTER TravelTo] Seemd valid (context destination): $localtarget => $destination");
-                                $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TravelTo@$destination";
+                            if (trim($localtarget)=="Skyrim" || trim($destination)=="Skyrim") {
+                                // Leave as is, probably trying to get out of a building
 
                             } else {
-                                if ($isRolemasteredNpc) {
-                                    if (stripos($destination,"home")===0) {
-                                        // Rolemastered NPC wants to return back home
-                                        $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|ReturnBackHome@"; 
-                                        continue;
+                                if (in_array(trim($localtarget),$contextDestinations)) {
+                                    // Perfect match
+                                    error_log("[ACTION POSTFILTER TravelTo] Seems valid as-is (context destination): <$localtarget> => $localtarget");
+                                    $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TravelTo@$localtarget";
 
-                                    }
-
-                                } 
-                                if (is_array($dbDestination) && isset($dbDestination["formid"])) {
-                                    // TravelToRaw change
-                                    $destination=$dbDestination["formid"];
-                                    error_log("[ACTION POSTFILTER TravelTo] found database entry for $localtarget => $destination => {$dbDestination["name"]}, similarity ({$dbDestination["sim"]})");
-                                    $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TravelToRaw@$destination";    
-                                
-                                } else if (is_array($dbDestinationRegion) && isset($dbDestinationRegion["formid"])) {
-                                    // TravelToRaw change
-                                    $destination=$dbDestinationRegion["formid"];
-
-                                    error_log("[ACTION POSTFILTER TravelTo] found database (searching by region) entry for $localtarget => $destination => {$dbDestinationRegion["name"]}, similarity ({$dbDestinationRegion["sim"]})");
-                                    $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TravelToRaw@$destination";
-
-                                } else if (stripos($destination,"outside")!==false) {
-                                    $destination=DataLastKnownLocationHuman(true,false);
-                                    error_log("[ACTION POSTFILTER TravelTo] reference to outside detected , $localtarget => $destination");
-                                    
-                                } else
+                                } else if (in_array($destination,$contextDestinations)) {
+                                    error_log("[ACTION POSTFILTER TravelTo] Seemd valid (context destination): $localtarget => $destination");
                                     $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TravelTo@$destination";
+
+                                } else {
+                                    if ($isRolemasteredNpc) {
+                                        if (stripos($destination,"home")===0) {
+                                            // Rolemastered NPC wants to return back home
+                                            $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|ReturnBackHome@"; 
+                                            continue;
+
+                                        }
+
+                                    } 
+                                    if (is_array($dbDestination) && isset($dbDestination["formid"])) {
+                                        // TravelToRaw change
+                                        $destination=$dbDestination["formid"];
+                                        error_log("[ACTION POSTFILTER TravelTo] found database entry for $localtarget => $destination => {$dbDestination["name"]}, similarity ({$dbDestination["sim"]})");
+                                        $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TravelToRaw@$destination";    
+                                    
+                                    } else if (is_array($dbDestinationRegion) && isset($dbDestinationRegion["formid"])) {
+                                        // TravelToRaw change
+                                        $destination=$dbDestinationRegion["formid"];
+
+                                        error_log("[ACTION POSTFILTER TravelTo] found database (searching by region) entry for $localtarget => $destination => {$dbDestinationRegion["name"]}, similarity ({$dbDestinationRegion["sim"]})");
+                                        $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TravelToRaw@$destination";
+
+                                    } else if (stripos($destination,"outside")!==false) {
+                                        $destination=DataLastKnownLocationHuman(true,false);
+                                        error_log("[ACTION POSTFILTER TravelTo] reference to outside detected , $localtarget => $destination");
+                                        
+                                    } else
+                                        $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|TravelTo@$destination";
+                                }
                             }
                             
                         } else if ($actionParts2[0]=="MoveTo") {
@@ -8579,6 +8633,40 @@ function getInteriorRef($locationRow) {
         }
     }
     return null;
+}
+
+
+/**
+ * Build a PostgreSQL point literal from NPC metadata last_coords.
+ *
+ * @param array $currentNpcData
+ * @return string|null Point literal in the form '(x,y)' or null when unavailable
+ */
+function getNpcLastCoordsPoint($currentNpcData)
+{
+    $metadata = $currentNpcData['metadata'] ?? null;
+    if (is_string($metadata)) {
+        $metadata = json_decode($metadata, true);
+    }
+
+    $lastCoords = null;
+    if (is_array($metadata) && isset($metadata['last_coords']) && is_array($metadata['last_coords'])) {
+        $lastCoords = $metadata['last_coords'];
+    } elseif (isset($currentNpcData['last_coords']) && is_array($currentNpcData['last_coords'])) {
+        $lastCoords = $currentNpcData['last_coords'];
+    }
+
+    if (!$lastCoords) {
+        return null;
+    }
+
+    $x = $lastCoords[0] ?? null;
+    $y = $lastCoords[1] ?? null;
+    if (!is_numeric($x) || !is_numeric($y)) {
+        return null;
+    }
+
+    return '(' . floatval($x) . ',' . floatval($y) . ')';
 }
 
 /**
