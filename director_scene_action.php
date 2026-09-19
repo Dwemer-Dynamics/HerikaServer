@@ -16,7 +16,7 @@ $request = json_decode(file_get_contents('php://input'), true);
 $id = $request['scene_id'] ?? '';
 $after = $request['after_line'] ?? 0;
 $approvedIndex = $request['approved_action'] ?? null;
-if (!is_string($id) || !preg_match('/^[a-f0-9]{32}$/D', $id) || !is_int($after) || $after < 1 || $after > 5) {
+if (!is_string($id) || !preg_match('/^[a-f0-9]{32}$/D', $id) || !is_int($after) || $after < 1 || $after > 128) {
     http_response_code(400); echo '{"ok":false}'; exit;
 }
 if ($approvedIndex !== null && (!is_int($approvedIndex) || $approvedIndex < 0 || $approvedIndex > 2)) {

@@ -8,9 +8,10 @@ chimRuntimeBootstrap($enginePath, [
     'load_narrator' => true,
 ]);
 
-if (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_MEDIUMTERM')) {
+if (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_QUEST_CREATION')) {
     http_response_code(409);
-    echo json_encode(['error' => 'Background & Memory Tasks are turned off in Global Settings.']);
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'Quest Creation Connector is turned off in Global Settings.']);
     exit;
 }
 
@@ -30,13 +31,18 @@ require_once $enginePath . "lib/core/core_profiles.class.php";
 require_once $enginePath . "lib/core/llm_connector.class.php";
 
 $connector = new LLMConnector();
-$currentConnectorData = $connector->getById($GLOBALS["CORE_CONNECTOR_MEDIUMTERM"]);
+$connectorId = (int) ($GLOBALS["CORE_CONNECTOR_QUEST_CREATION"] ?? 0);
+$currentConnectorData = $connectorId > 0 ? $connector->getById($connectorId) : null;
+if (!$currentConnectorData) {
+    http_response_code(409);
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'Select a valid Quest Creation Connector in Global Settings.']);
+    exit;
+}
 $connector->setOldGlobals($currentConnectorData);
 
 $method = $_SERVER['REQUEST_METHOD'];
 
-$MODEL_1 = "google/gemma-4-26b-a4b-it"; // Initial quest generator
-$MODEL_2 = "google/gemini-3-flash-preview";   // Quest steps generator
 
 
 $formInput = json_decode(file_get_contents("php://input"), true) ?? ["npclist" => []];
@@ -137,9 +143,6 @@ if (sizeof($formInput["npclist"]) == 0) {
     * 'Dungeon' tagged locations are preferred for quest generation as they have interiors (classical D&D dungeon).
     * You can use other locations, but pay attention to tags.";
 
-    $connector = new LLMConnector();
-    $currentConnectorData = $connector->getById($GLOBALS["CORE_CONNECTOR_MEDIUMTERM"]);
-    $connector->setOldGlobals($currentConnectorData);
 
     // Initial quest title provided, probably from web UI
     if ($formInput["questtitle"]) {
@@ -228,8 +231,7 @@ Short briefing:{$formInput["briefing"]}
 
         $buffer = $connectionHandler->fast_request(
             $contextData,
-            //["MAX_TOKENS" => 4096, "model" => "x-ai/grok-4-fast", "temperature" => 0.7],// Builds classical quest, find relic stuff.
-            ["MAX_TOKENS" => 2048, "model" => $MODEL_2, "temperature" => 0.7], // Builds classical quest, find relic stuff.
+            ["MAX_TOKENS" => 2048, "temperature" => 0.7], // Builds classical quest, find relic stuff.
             "questpreplanner"
         );
 
@@ -408,9 +410,7 @@ $suggested",
 
         $buffer = $connectionHandler->fast_request(
             $contextData,
-            //["MAX_TOKENS" => 4096, "model" => "x-ai/grok-4-fast", "temperature" => 0.7],// Builds classical quest, find relic stuff.
-            //["MAX_TOKENS" => 2048, "model" => "google/gemini-2.0-flash-001", "temperature" => 0.7], // Builds classical quest, find relic stuff.
-            ["MAX_TOKENS" => 2048, "model" => $MODEL_1, "temperature" => 0.3], // Builds classical quest, find relic stuff.
+            ["MAX_TOKENS" => 2048, "temperature" => 0.3], // Builds classical quest, find relic stuff.
             "questpreplanner"
         );
 
@@ -721,7 +721,7 @@ $considerFinish
 
     $buffer = $connectionHandler->fast_request(
         $contextData,
-        ["MAX_TOKENS" => 2048, "model" => $MODEL_2, "temperature" => 0.7],
+        ["MAX_TOKENS" => 2048, "temperature" => 0.7],
         "questpreplanner"
     );
 

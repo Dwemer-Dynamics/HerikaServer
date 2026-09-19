@@ -62,7 +62,7 @@ $CHAT_SHORTCUT_ROUTED = ($GLOBALS["CHIM_CHAT_SHORTCUT_ROUTED"] ?? false) === tru
 
 // The submitted mode survives later dropdown changes and one-shot resets.
 $submittedMode = $requestRoutingSnapshot['execution_mode'] ?? '';
-$REQUEST_LOCAL_MODE_OVERRIDE = $PLAYER_INPUT_REQUEST && $submittedMode !== '' && $EXECUTION_MODE != "HYPNOSIS";
+$REQUEST_LOCAL_MODE_OVERRIDE = $PLAYER_INPUT_REQUEST && $submittedMode !== '';
 if ($REQUEST_LOCAL_MODE_OVERRIDE)
     $EXECUTION_MODE = $submittedMode;
 
@@ -176,49 +176,54 @@ if ($EXECUTION_MODE == "STANDARD") {
 
 
 } else if ($EXECUTION_MODE == "HYPNOSIS") {
-    if ($PLAYER_INPUT_REQUEST) {
-        ignore_user_abort(true);
-        $routingInfo = json_decode(base64_decode($gameRequest[4]), true);
-        $requestRoutingSnapshot = $routingInfo;
-        error_log("[CHIM MODE] Hypnosis mode active <$gameRequest[3]> " . json_encode($requestRoutingSnapshot));
-        $userWish = preg_replace('/^[^:]+:\s*/', '', $gameRequest[3]);
-        $output = '';
-        $instruction = escapeshellarg($userWish);
+    ignore_user_abort(true);
+    $target = $requestRoutingSnapshot['listener'] ?? '';
+    $targetMode = $requestRoutingSnapshot['target_mode'] ?? '';
+    $userWish = trim(preg_replace('/^[^:]+:\s*/', '', $gameRequest[3]));
+    $hypnosisError = '';
+    $workerPath = dirname(__DIR__) . '/service/processors/rolemaster/cmd/hypnosis.php';
 
-
-        $target = $requestRoutingSnapshot["listener"];
-        if (!$target) {
-            $GLOBALS["db"]->insert(
-                'responselog',
-                array(
-                    'localts' => time(),
-                    'sent' => 0,
-                    'actor' => "rolemaster",
-                    'text' => '',
-                    'action' => "rolecommand|DebugNotification@Could not find target for hypnosis command",
-                    'tag' => ""
-                )
-            );
-
-            terminate();
-        } else {
-            $managerPath = dirname(__DIR__) . '/service/manager.php';
-            $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
-            exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
-                . ' rolemaster hypnosis ' . $instruction . ' ' . escapeshellarg($target), $output, $returnCode);
-            $db->upsertRow(
-                'conf_opts',
-                array(
-                    'id' => 'chim_mode',
-                    'value' => 'STANDARD'
-                ),
-                "id='chim_mode'"
-            );
-            terminate();
-        }
+    if ($target === '' || !in_array($targetMode, ['direct', 'automatic'], true) ||
+        strcasecmp($target, Narrator::CANONICAL_NAME) === 0 ||
+        strcasecmp($target, chimGetNarratorRoleplayName()) === 0 ||
+        strcasecmp($target, (string)($GLOBALS['PLAYER_NAME'] ?? '')) === 0) {
+        $hypnosisError = 'Choose one NPC for Hypnosis.';
+    } elseif ($userWish === '') {
+        $hypnosisError = 'Enter an instruction for Hypnosis.';
+    } elseif (!$db->fetchOne("SELECT id FROM core_npc_master WHERE npc_name='" . $db->escape($target) . "' LIMIT 1")) {
+        $hypnosisError = 'The Hypnosis target could not be found.';
+    } elseif (!is_readable($workerPath)) {
+        $hypnosisError = 'Hypnosis is unavailable on this server.';
+        Logger::warn('[chim_modes] Hypnosis worker is not installed');
+    } elseif (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_PROFILES')) {
+        $hypnosisError = 'Enable Profile Tasks to use Hypnosis.';
     } else {
-        $GLOBALS["CHIM_EXECUTION_MODE"] = $EXECUTION_MODE = "STANDARD";
+        // Request-local submissions already reset in the client; do not overwrite a newer selection.
+        if (!$REQUEST_LOCAL_MODE_OVERRIDE) {
+            $db->query("UPDATE conf_opts SET value='STANDARD' WHERE id='chim_mode' AND value='HYPNOSIS'");
+        }
+        $managerPath = dirname(__DIR__) . '/service/manager.php';
+        $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
+        $output = [];
+        exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
+            . ' rolemaster hypnosis ' . escapeshellarg($userWish) . ' ' . escapeshellarg($target), $output, $returnCode);
+        // The manager launches a worker; successful dispatch does not prove profile generation completed.
+        if ($returnCode !== 0) {
+            $hypnosisError = 'Hypnosis could not start. Check the server log.';
+            Logger::warn('[chim_modes] Hypnosis dispatch failed with exit code ' . $returnCode);
+        }
     }
+    if ($hypnosisError !== '') {
+        $db->insert('responselog', [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => 'rolemaster',
+            'text' => '',
+            'action' => 'rolecommand|DebugNotification@' . $hypnosisError,
+            'tag' => '',
+        ]);
+    }
+    terminate();
 }
 
 ?>

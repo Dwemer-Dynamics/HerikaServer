@@ -55,7 +55,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
 
         $requiredVersions = [
             'responselog_interaction' => 20260912001,
-            'general_settings' => 20260720002,
+            'general_settings' => 20260919001,
             'core_stt_connector' => 20260502002,
             'core_itt_connector' => 20260502002,
             'descriptions_defaults' => 20260611005,

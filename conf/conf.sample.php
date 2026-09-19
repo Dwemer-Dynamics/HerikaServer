@@ -165,11 +165,15 @@ $CONNECTORS=["openrouterjson","openaijson","koboldcppjson"]; //AI Service(s).
 $CONNECTORS_DIARY="openrouter"; //Creates diary entries and memories.
 
 // Core LLM connector defaults (IDs from core_llm_connector table)
+$CORE_CONNECTOR_QUEST_CREATION=4;
+$CORE_CONNECTOR_QUEST_ENGINE=1;
+$CORE_CONNECTOR_QUEST_CREATION_ENABLED=true;
+$CORE_CONNECTOR_QUEST_ENGINE_ENABLED=true;
 $CORE_CONNECTOR_DIRECTOR=1;
 $CORE_CONNECTOR_PLAYER=2;
 $CORE_CONNECTOR_SUMMARY=4;
 $CORE_CONNECTOR_MEDIUMTERM=4;
-$CORE_CONNECTOR_SCENECLASSIFIER=7; // Gemma 3N E4B
+$CORE_CONNECTOR_SCENECLASSIFIER=7; // Gemma 3 4B
 $SCENE_CLASSIFIER_ENABLED=true; // Enable post-request scene tone/genre classification.
 $CORE_CONNECTOR_PROFILES=1;
 $CORE_CONNECTOR_BGL=1;
@@ -351,6 +355,11 @@ $TTS["CHATTERBOX"]["voicelogic"]='voicetype';
 $TTS["CHATTERBOX"]["PARALINGUISTIC_TAGS_ENABLED"]=false; //Enable paralinguistic tags like [laugh], [sigh] for expressive TTS output.
 $TTS["CHATTERBOX"]["PARALINGUISTIC_TAGS_PROMPT"]=''; //Prompt snippet for instructing LLM to use paralinguistic tags.
 $TTS["CHATTERBOX"]["PARALINGUISTIC_TAGS_LIST"]='[clear throat],[sigh],[shush],[cough],[groan],[sniff],[gasp],[chuckle],[laugh]'; //Comma-separated list of supported tags.
+//Higgs TTS 3
+$TTS["HIGGS"]["endpoint"]='http://127.0.0.1:8025';
+$TTS["HIGGS"]["model"]='higgs-v3';
+$TTS["HIGGS"]["voiceid"]='TheNarrator';
+$TTS["HIGGS"]["voicelogic"]='voicetype';
 //OmniVoice
 $TTS["OMNIVOICE"]["endpoint"]='http://127.0.0.1:8021'; //API endpoint.
 $TTS["OMNIVOICE"]["language"]='en'; //Active OmniVoice language profile.
