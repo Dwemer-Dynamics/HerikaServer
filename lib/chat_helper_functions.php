@@ -3168,6 +3168,8 @@ function chimParseChatModeShortcut($message)
 function chimDecodePlayerRoutingSnapshotField($rawField)
 {
     $result = [
+        "listener" => "",
+        "target_mode" => "",
         "audience" => "",
         "present_actors" => [],
         "chat_shortcut_routed" => false,
@@ -3190,6 +3192,17 @@ function chimDecodePlayerRoutingSnapshotField($rawField)
         return $result;
     }
 
+    if (in_array($payload['source'] ?? '', ['plugin_player_routing_v2', 'plugin_spatial_input_v1'], true)) {
+        $listener = $payload['listener'] ?? '';
+        if (is_string($listener) && strlen($listener) <= 256 && !preg_match('/[\x00-\x1F|]/', $listener)) {
+            $result['listener'] = trim($listener);
+        }
+        $targetMode = $payload['target_mode'] ?? '';
+        if (in_array($targetMode, ['automatic', 'direct', 'everyone', 'narrator'], true)) {
+            $result['target_mode'] = $targetMode;
+        }
+    }
+
     if (!empty($payload["people"]) && is_string($payload["people"])) {
         $result["audience"] = normalizePeoplePipeList(parsePeoplePipeList($payload["people"]));
     } elseif (!empty($payload["companions"]) && is_array($payload["companions"])) {
@@ -3203,7 +3216,7 @@ function chimDecodePlayerRoutingSnapshotField($rawField)
     if (($payload["source"] ?? "") === "plugin_player_routing_v2") {
         $mode = is_string($payload['execution_mode'] ?? null) ? strtoupper(trim($payload['execution_mode'])) : '';
         if (in_array($mode, ['STANDARD', 'WHISPER', 'CLOSE', 'SHOUT', 'NARRATOR',
-            'DIRECTOR', 'CHEATMODE', 'AUTOCHAT', 'INJECTION_LOG', 'INJECTION_CHAT'], true)) {
+            'DIRECTOR', 'CHEATMODE', 'HYPNOSIS', 'AUTOCHAT', 'INJECTION_LOG', 'INJECTION_CHAT'], true)) {
             $result['execution_mode'] = $mode;
         }
         $playerMood = chimNormalizePlayerMood($payload["player_mood"] ?? "");
