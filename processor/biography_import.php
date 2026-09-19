@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . "/lib/core/tts_filter_presets.php";
 /**
  * Safe Biography CSV Import Handler
  * Handles CSV data from game plugin or web upload
@@ -246,7 +247,10 @@ try {
                     'voiceid' => $voiceid,
                     'gender' => $gender,
                     'race' => $race,
-                    'refid' => $refid
+                    'refid' => $refid,
+                    'tts_filter_preset' => array_key_exists('tts_filter_preset', $headerMap)
+                        ? chimBiographyVoiceFilter($getValue('tts_filter_preset') ?? '')
+                        : ($db->fetchOne("SELECT tts_filter_preset FROM combined_bio_templates WHERE npc_name='" . $db->escape($npc_name) . "'")['tts_filter_preset'] ?? null)
                 ),
                 'npc_name'
             );

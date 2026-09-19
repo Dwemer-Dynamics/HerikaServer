@@ -29,3 +29,8 @@ ts: no idea, but I am pretty sure it's coming from Skyrim
 
 Building AI systems is complex, and changes can unintentionally affect other connected systems. Before opening a pull request, follow the repository PR template and make sure the change has been discussed with either `RANGROO` or `tyler.maister` in Discord. When adding new features, prefer making them optional or toggleable where practical.
 
+
+### Biography voice filters
+
+Biography imports and exports accept an optional `tts_filter_preset` column. Choose a trusted preset from the biography editor's Voice Filter list; custom audio filter expressions are not accepted. The preset seeds newly created NPCs only and does not overwrite existing NPC choices. Use `none` to disable filtering explicitly. Older imports without the column preserve saved presets.
+Append the column after refid (column 16) in biography CSV files. An explicitly blank value is treated as none.

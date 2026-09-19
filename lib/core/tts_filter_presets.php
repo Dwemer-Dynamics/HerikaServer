@@ -437,3 +437,14 @@ function applyActiveTtsFilterPresetToOutput($ttsOutput)
     logTtsFilterPresetMessage('debug', "[TTS FILTER] Applied preset '{$presetId}' version " . CHIM_TTS_FILTER_PRESET_VERSION . '.');
     return $ttsOutput;
 }
+
+/** Validate authored biography presets; null means an older import omitted the field. */
+function chimBiographyVoiceFilter($value): ?string
+{
+    if ($value === null) return null;
+    if (!is_string($value)) throw new InvalidArgumentException('Invalid biography Voice Filter.');
+    $id = strtolower(trim($value));
+    if ($id === '') $id = 'none';
+    if (!isset(ttsFilterPresetOptions()[$id])) throw new InvalidArgumentException('Unknown biography Voice Filter: ' . $id);
+    return $id;
+}
