@@ -87,12 +87,9 @@ $contextData = $prompt;
 
 $connectionHandler = $connector->getConnector($currentConnectorData);
 
-$MODEL = "google/gemini-3.7-flash";
-//$MODEL = "nex-agi/deepseek-v3.1-nex-n1:free";
-
 $buffer = $connectionHandler->fast_request(
     $contextData,
-    ["MAX_TOKENS" => 4096, "model" => $MODEL],
+    ["MAX_TOKENS" => 4096],
     "questplanner"
 );
 
@@ -500,7 +497,7 @@ while ($retryCount < $maxRetries && !$validationPassed) {
                 // Make retry request
                 $currentBuffer = $connectionHandler->fast_request(
                     $retryPrompt,
-                    ["MAX_TOKENS" => 4096, "model" => $MODEL, "temperature" => 0.3],
+                    ["MAX_TOKENS" => 4096, "temperature" => 0.3],
                     "questplanner"
                 );
             } else {

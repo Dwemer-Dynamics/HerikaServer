@@ -37,7 +37,6 @@ $method = $_SERVER['REQUEST_METHOD'];
 
 $formInput = json_decode(file_get_contents("php://input"), true);
 
-$MODEL = "google/gemini-3-flash-preview";
 $questType = $formInput["questType"] ?? "miniquest";
 
 $spawnedItemArray = $formInput["spawneditemslist"];
@@ -110,7 +109,7 @@ $contextData = $prompt;
 $connectionHandler = $connector->getConnector($currentConnectorData);
 $buffer = $connectionHandler->fast_request(
     $contextData,
-    ["MAX_TOKENS" => 4096, "model" => $MODEL, "temperature" => 0.3],
+    ["MAX_TOKENS" => 4096, "temperature" => 0.3],
     "questcoder"
 );
 
@@ -156,7 +155,7 @@ $contextData[]=['role' => 'user', 'content' => "Please confirm the quest code is
 If there are any errors, fix them. Return the full corrected PHP code inside a single markdown code block with php syntax."];
 
 $buffer            = $connectionHandler->fast_request($contextData,
-    ["MAX_TOKENS" => 4096, "model" => $MODEL,"temperature"=>0.3],
+    ["MAX_TOKENS" => 4096, "temperature" => 0.3],
     "questcoder_fixer");
 
 // Extract PHP code from markdown code block

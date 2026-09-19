@@ -35,10 +35,6 @@ $connector->setOldGlobals($currentConnectorData);
 
 $method = $_SERVER['REQUEST_METHOD'];
 
-$MODEL_1 = "google/gemma-4-26b-a4b-it"; // Initial quest generator
-$MODEL_2 = "google/gemini-3-flash-preview";   // Quest steps generator
-
-
 $formInput = json_decode(file_get_contents("php://input"), true) ?? ["npclist" => []];
 
 header('Content-Type: application/json');
@@ -228,8 +224,7 @@ Short briefing:{$formInput["briefing"]}
 
         $buffer = $connectionHandler->fast_request(
             $contextData,
-            //["MAX_TOKENS" => 4096, "model" => "x-ai/grok-4-fast", "temperature" => 0.7],// Builds classical quest, find relic stuff.
-            ["MAX_TOKENS" => 2048, "model" => $MODEL_2, "temperature" => 0.7], // Builds classical quest, find relic stuff.
+            ["MAX_TOKENS" => 2048, "temperature" => 0.7],
             "questpreplanner"
         );
 
@@ -408,9 +403,7 @@ $suggested",
 
         $buffer = $connectionHandler->fast_request(
             $contextData,
-            //["MAX_TOKENS" => 4096, "model" => "x-ai/grok-4-fast", "temperature" => 0.7],// Builds classical quest, find relic stuff.
-            //["MAX_TOKENS" => 2048, "model" => "google/gemini-2.0-flash-001", "temperature" => 0.7], // Builds classical quest, find relic stuff.
-            ["MAX_TOKENS" => 2048, "model" => $MODEL_1, "temperature" => 0.3], // Builds classical quest, find relic stuff.
+            ["MAX_TOKENS" => 2048, "temperature" => 0.3],
             "questpreplanner"
         );
 
@@ -721,7 +714,7 @@ $considerFinish
 
     $buffer = $connectionHandler->fast_request(
         $contextData,
-        ["MAX_TOKENS" => 2048, "model" => $MODEL_2, "temperature" => 0.7],
+        ["MAX_TOKENS" => 2048, "temperature" => 0.7],
         "questpreplanner"
     );
 
