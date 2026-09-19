@@ -97,6 +97,8 @@ function pretty_label(string $flatName): string
         'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
         'CORE_CONNECTOR_PROFILES' => 'Profile Tasks',
         'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
+        'CORE_CONNECTOR_QUEST_CREATION' => 'Quest Creation Connector',
+        'CORE_CONNECTOR_QUEST_ENGINE' => 'Quest Engine Connector',
         'CORE_CONNECTOR_BGL' => 'Background Life',
         'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Extractor Fallback',
         'RELLLM_CONNECTOR' => 'Relationship Management',
@@ -1844,14 +1846,14 @@ body .settings-tabs .settings-tab.is-active {
                                     <?php elseif ($fieldType === 'apikey'): ?>
                                         <input type="password" name="<?php echo htmlspecialchars($fieldName); ?>" value="<?php echo htmlspecialchars(strval($current)); ?>" placeholder="Paste API key" <?php echo $readonlyAttr; ?>>
                                     <?php elseif ($fieldType === 'select'): ?>
-                                        <select name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
+                                        <select aria-label="<?php echo htmlspecialchars($label); ?>" name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             <?php foreach (($field['values'] ?? []) as $option): ?>
                                                 <option value="<?php echo htmlspecialchars(strval($option)); ?>" <?php echo (strval($current) === strval($option) ? 'selected' : ''); ?>><?php echo htmlspecialchars(select_option_label($fieldName, strval($option))); ?></option>
                                             <?php endforeach; ?>
                                         </select>
                                     <?php elseif (strpos($fieldType, 'foreign:') === 0): ?>
                                         <?php $parts = explode(':', $fieldType); $fkKey = implode(':', array_slice($parts, 1)); $rows = $foreignOptions[$fkKey] ?? []; ?>
-                                        <select name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
+                                        <select aria-label="<?php echo htmlspecialchars($label); ?>" name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             <option value="" <?php echo (empty($current) ? 'selected' : ''); ?>>None</option>
                                             <?php foreach ($rows as $row): ?>
                                                 <option value="<?php echo htmlspecialchars(strval($row[$parts[2]] ?? '')); ?>" <?php echo (strval($current) === strval($row[$parts[2]] ?? '') ? 'selected' : ''); ?>>
