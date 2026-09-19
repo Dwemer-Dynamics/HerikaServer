@@ -155,12 +155,22 @@ function dps_context_limit(array $npc): int {
 }
 
 function dps_context($conn, array $npc, int $gamets): string {
-    $params = [];
-    $audience = dps_audience($npc,$params);
-    $limit = dps_context_limit($npc);
-    $rows = pg_fetch_all(dps_query($conn,'SELECT type,data,gamets,location FROM public.eventlog WHERE '
-        . dps_event_filter(false) . " AND ($audience) AND gamets <= $gamets ORDER BY rowid DESC LIMIT $limit",$params)) ?: [];
-    return implode("\n",array_map(static fn($row)=>'['.$row['gamets'].' '.$row['type'].' '.$row['location'].'] '.mb_substr($row['data'],0,2000),array_reverse($rows)));
+    try {
+        $limit = dps_context_limit($npc);
+        $data = DataLastDataExpandedForNPC($npc["name"], $limit*-1);
+        $context = [];
+        foreach ($data as $k => $v) {
+            $context[] = $v["content"];
+        }
+        return implode("\n", $context);
+    } catch (Throwable $e) {
+        $params = [];
+        $audience = dps_audience($npc,$params);
+        $limit = dps_context_limit($npc);
+        $rows = pg_fetch_all(dps_query($conn,'SELECT type,data,gamets,location FROM public.eventlog WHERE '
+            . dps_event_filter(false) . " AND ($audience) AND gamets <= $gamets ORDER BY rowid DESC LIMIT $limit",$params)) ?: [];
+        return implode("\n",array_map(static fn($row)=>'['.$row['gamets'].' '.$row['type'].' '.$row['location'].'] '.mb_substr($row['data'],0,2000),array_reverse($rows)));
+    }
 }
 
 // Only explicit manual actions carry overrides; old client timer batches have no scheduling authority.
@@ -400,6 +410,8 @@ function dps_save($conn, array $npc, array $updates, int $gamets): void {
         $values[]=(int)$npc['id'];
         $saved = dps_query($conn,"UPDATE public.{$product['npc_table']} SET ".implode(',',$sets).' WHERE id=$'.count($values),$values);
         if (pg_affected_rows($saved)!==1) throw new RuntimeException('NPC changed during profile update.');
+        else
+            dps_log($npc,'profile_updated_success',['fields'=>array_keys($updates),'gamets'=>$gamets]);
     } else {
         dps_query($conn,"INSERT INTO public.core_narrator(id,value) VALUES('gamets_last_updated',$1) ON CONFLICT(id) DO UPDATE SET value=EXCLUDED.value",[(string)$gamets]);
     }

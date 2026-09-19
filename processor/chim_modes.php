@@ -1,4 +1,4 @@
-<?php 
+<?php
 
 // Check modes should be here
 // * Standard (STANDARD)
@@ -40,13 +40,18 @@
 // * Event Injection With Response  (INJECTION_CHAT)
 //      (Whatever is typed/said is injected into event log as an roleplay instruction expecting response)
 //      Just store player speech on eventlog and follow the standard flow.
+//
+// * HYPNOSIS (HYPNOSIS)
+//      Generates a full profile based on player input.
+//      
 
-if (!isset($db)) $db = new sql();
+if (!isset($db))
+    $db = new sql();
 
-$EXECUTION_MODE_=$db->fetchOne("SELECT value FROM conf_opts WHERE id='chim_mode'");
-$EXECUTION_MODE=isset($EXECUTION_MODE_["value"])?$EXECUTION_MODE_["value"]:"STANDARD";
+$EXECUTION_MODE_ = $db->fetchOne("SELECT value FROM conf_opts WHERE id='chim_mode'");
+$EXECUTION_MODE = isset($EXECUTION_MODE_["value"]) ? $EXECUTION_MODE_["value"] : "STANDARD";
 
-$EXECUTION_MODE=strtoupper($EXECUTION_MODE);
+$EXECUTION_MODE = strtoupper($EXECUTION_MODE);
 $PLAYER_INPUT_REQUEST = in_array(
     $gameRequest[0],
     ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s", "narrator_inputtext"],
@@ -57,8 +62,9 @@ $CHAT_SHORTCUT_ROUTED = ($GLOBALS["CHIM_CHAT_SHORTCUT_ROUTED"] ?? false) === tru
 
 // The submitted mode survives later dropdown changes and one-shot resets.
 $submittedMode = $requestRoutingSnapshot['execution_mode'] ?? '';
-$REQUEST_LOCAL_MODE_OVERRIDE = $PLAYER_INPUT_REQUEST && $submittedMode !== '';
-if ($REQUEST_LOCAL_MODE_OVERRIDE) $EXECUTION_MODE = $submittedMode;
+$REQUEST_LOCAL_MODE_OVERRIDE = $PLAYER_INPUT_REQUEST && $submittedMode !== '' && $EXECUTION_MODE != "HYPNOSIS";
+if ($REQUEST_LOCAL_MODE_OVERRIDE)
+    $EXECUTION_MODE = $submittedMode;
 
 if ($PLAYER_INPUT_REQUEST && $CHAT_SHORTCUT_ROUTED && isset($gameRequest[3]) && is_string($gameRequest[3])) {
     $speakerSeparator = strpos($gameRequest[3], ":");
@@ -81,6 +87,8 @@ if ($PLAYER_INPUT_REQUEST && $CHAT_SHORTCUT_ROUTED && isset($gameRequest[3]) && 
 }
 $REQUEST_LOCAL_MODE_OVERRIDE = $REQUEST_LOCAL_MODE_OVERRIDE || $SYMBOL_MODE_OVERRIDE;
 
+// error_log("[chim_modes] Execution mode: $EXECUTION_MODE (local override: " . ($REQUEST_LOCAL_MODE_OVERRIDE ? "yes" : "no") . ") $submittedMode  {$gameRequest[0]}{$gameRequest[3]}");
+
 // Retire the old free-form Spawn mode without leaving upgraded installs stuck in it.
 if ($EXECUTION_MODE === "SPAWN") {
     $db->upsertRow(
@@ -95,33 +103,33 @@ if ($EXECUTION_MODE === "SPAWN") {
 }
 
 if (!$PLAYER_INPUT_REQUEST) {
-    $EXECUTION_MODE="STANDARD";
+    $EXECUTION_MODE = "STANDARD";
 }
 
 // Store globally for later use (e.g., updating speech table after LLM response)
 $GLOBALS["CHIM_EXECUTION_MODE"] = $EXECUTION_MODE;
 
-if ($EXECUTION_MODE=="STANDARD") {
+if ($EXECUTION_MODE == "STANDARD") {
 
 
-} else if ($EXECUTION_MODE=="WHISPER") {
+} else if ($EXECUTION_MODE == "WHISPER") {
     // Routing distance is request-local and supplied by the CHIM plugin.
 
-} else if ($EXECUTION_MODE=="CLOSE") {
+} else if ($EXECUTION_MODE == "CLOSE") {
     // Routing distance and the nearby group audience are supplied by the CHIM plugin.
 
-} else if ($EXECUTION_MODE=="NARRATOR") {
-    if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext_s","narrator_inputtext"], true)) {
+} else if ($EXECUTION_MODE == "NARRATOR") {
+    if (in_array($gameRequest[0], ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s", "narrator_inputtext"], true)) {
         $gameRequest[0] = "narrator_inputtext";
     }
-    
-} else if ($EXECUTION_MODE=="DIRECTOR") {
-    
+
+} else if ($EXECUTION_MODE == "DIRECTOR") {
+
     ignore_user_abort(true);
 
     $userWish = preg_replace('/^[^:]+:\s*/', '', $gameRequest[3]);
-    $output='';
-    $instruction=escapeshellarg($userWish);
+    $output = '';
+    $instruction = escapeshellarg($userWish);
     if (!$REQUEST_LOCAL_MODE_OVERRIDE) {
         $db->upsertRow(
             'conf_opts',
@@ -135,38 +143,82 @@ if ($EXECUTION_MODE=="STANDARD") {
     $managerPath = dirname(__DIR__) . '/service/manager.php';
     $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
     exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
-        . ' rolemaster instruction ' . $instruction . ' notify ' . (int)($_GET['director_generation'] ?? 0), $output, $returnCode);
+        . ' rolemaster instruction ' . $instruction . ' notify ' . (int) ($_GET['director_generation'] ?? 0), $output, $returnCode);
     terminate();
 
-} else if ($EXECUTION_MODE=="CHEATMODE") {
+} else if ($EXECUTION_MODE == "CHEATMODE") {
     // Process all input as cheat commands
     $cleaned_player_dialogue = preg_replace('/^[^:]+:/', '', $gameRequest[3]);
     $newSpeech = $REQUEST_LOCAL_MODE_OVERRIDE
         ? $cleaned_player_dialogue
-        : strtr($cleaned_player_dialogue, ["#"=>""]);
+        : strtr($cleaned_player_dialogue, ["#" => ""]);
     $gameRequest[0] = "cheatmode";
     $gameRequest[3] = "<$newSpeech>";
     $GLOBALS["FUNCTIONS_ARE_ENABLED"] = true;
-    
-} else if ($EXECUTION_MODE=="AUTOCHAT") {
-    
+
+} else if ($EXECUTION_MODE == "AUTOCHAT") {
+
     $cleaned_player_dialogue = preg_replace('/^[^:]+:\s*/', '', $gameRequest[3]);
-    $gameRequest[3]="**(".trim($cleaned_player_dialogue).")";
+    $gameRequest[3] = "**(" . trim($cleaned_player_dialogue) . ")";
     // Route through player_rewrite.php only when Player Respeech is globally available.
     $GLOBALS["PLAYER_RESPEECH"] = chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_PLAYER');
-    
-} else if ($EXECUTION_MODE=="INJECTION_LOG") {
+
+} else if ($EXECUTION_MODE == "INJECTION_LOG") {
     $cleaned_player_dialogue = preg_replace('/^[^:]+:\s*/', '', $gameRequest[3]);
-    $gameRequest[3]="(".trim($cleaned_player_dialogue).")";
+    $gameRequest[3] = "(" . trim($cleaned_player_dialogue) . ")";
     logEvent($gameRequest);
     terminate();
-    
-} else if ($EXECUTION_MODE=="INJECTION_CHAT") {
+
+} else if ($EXECUTION_MODE == "INJECTION_CHAT") {
     $cleaned_player_dialogue = preg_replace('/^[^:]+:\s*/', '', $gameRequest[3]);
 
-    $gameRequest[3]="(".trim($cleaned_player_dialogue).")";
+    $gameRequest[3] = "(" . trim($cleaned_player_dialogue) . ")";
 
-    
+
+} else if ($EXECUTION_MODE == "HYPNOSIS") {
+    if ($PLAYER_INPUT_REQUEST) {
+        ignore_user_abort(true);
+        $routingInfo = json_decode(base64_decode($gameRequest[4]), true);
+        $requestRoutingSnapshot = $routingInfo;
+        error_log("[CHIM MODE] Hypnosis mode active <$gameRequest[3]> " . json_encode($requestRoutingSnapshot));
+        $userWish = preg_replace('/^[^:]+:\s*/', '', $gameRequest[3]);
+        $output = '';
+        $instruction = escapeshellarg($userWish);
+
+
+        $target = $requestRoutingSnapshot["listener"];
+        if (!$target) {
+            $GLOBALS["db"]->insert(
+                'responselog',
+                array(
+                    'localts' => time(),
+                    'sent' => 0,
+                    'actor' => "rolemaster",
+                    'text' => '',
+                    'action' => "rolecommand|DebugNotification@Could not find target for hypnosis command",
+                    'tag' => ""
+                )
+            );
+
+            terminate();
+        } else {
+            $managerPath = dirname(__DIR__) . '/service/manager.php';
+            $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
+            exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
+                . ' rolemaster hypnosis ' . $instruction . ' ' . escapeshellarg($target), $output, $returnCode);
+            $db->upsertRow(
+                'conf_opts',
+                array(
+                    'id' => 'chim_mode',
+                    'value' => 'STANDARD'
+                ),
+                "id='chim_mode'"
+            );
+            terminate();
+        }
+    } else {
+        $GLOBALS["CHIM_EXECUTION_MODE"] = $EXECUTION_MODE = "STANDARD";
+    }
 }
 
 ?>

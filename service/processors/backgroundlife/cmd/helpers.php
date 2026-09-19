@@ -421,7 +421,7 @@ function requestForaction(
         $lastActionsSummary[$action['gamets']] = "$actionParts[0] $actionParts[1] ($hoursAgo hours ago)";
     }
     
-    $step2Content .= "<text>\nLast actions issued:\n" . implode("\n", $lastActionsSummary) . "\n</text>\n\n";
+    $step2Content .= "<text>\nLast actions issued:\n" . implode("\n", array_reverse($lastActionsSummary)) . "\n</text>\n\n";
     $step2Content .= "<text>\n$innerThoughtBuffer\n</text>\n\n";
     $step2Content .= $innerThoughtStyle . "\n\n";
 
