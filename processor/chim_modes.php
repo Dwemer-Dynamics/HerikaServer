@@ -195,6 +195,8 @@ if ($EXECUTION_MODE == "STANDARD") {
     } elseif (!is_readable($workerPath)) {
         $hypnosisError = 'Hypnosis is unavailable on this server.';
         Logger::warn('[chim_modes] Hypnosis worker is not installed');
+    } elseif (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_PROFILES')) {
+        $hypnosisError = 'Enable Profile Tasks to use Hypnosis.';
     } else {
         // Request-local submissions already reset in the client; do not overwrite a newer selection.
         if (!$REQUEST_LOCAL_MODE_OVERRIDE) {

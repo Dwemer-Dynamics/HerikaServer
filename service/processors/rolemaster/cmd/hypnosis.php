@@ -47,6 +47,8 @@ $npc['fields'] = [
     'occupation'
 ];
 
+$newvalue = [];
+$generationFailed = false;
 foreach ($npc['fields'] as $field) {
     $prompt = "Note: There is no story for this character, you will have to create it (be imaginative), Skyrim lore based, based on this hint.";
     $prompt .= "\nMandatory hint from rolemaster to {$GLOBALS["argv"][4]} : " . $GLOBALS["argv"][3];
@@ -59,18 +61,27 @@ foreach ($npc['fields'] as $field) {
         $prompt .= "\nCreate a new speech style for the character, consistent with their personality and goals. Also create character's filler words and common expressions";
     }
     $newvalue[$field] = updateDynamicProfileField($GLOBALS["argv"][4], $field, $prompt);
+    if (!is_string($newvalue[$field]) || trim($newvalue[$field]) === '') {
+        $generationFailed = true;
+        Logger::warn('[HYPNOSIS] Profile generation failed; existing fields were kept');
+        break;
+    }
     error_log("[HYPNOSIS] " . print_r($newvalue[$field], true));
 }
 
-foreach ($newvalue as $field => $value) {
-    $GLOBALS["db"]->upsertRow(
+$saved = false;
+if (!$generationFailed) {
+    // Save all four generated fields together, preserving names such as J'zargo.
+    $escapedTarget = $GLOBALS['db']->escape($GLOBALS['argv'][4]);
+    $saved = $GLOBALS["db"]->upsertRow(
         'core_npc_master',
-        array(
-            $field => $value
-        ),
-        "npc_name='{$GLOBALS["argv"][4]}'"
+        $newvalue,
+        "npc_name='{$escapedTarget}'"
     );
 }
+$notification = $saved
+    ? "Updated basic profile for {$GLOBALS['argv'][4]}"
+    : 'Hypnosis could not update the profile. Existing fields were kept.';
 $GLOBALS["db"]->insert(
     'responselog',
     array(
@@ -78,7 +89,7 @@ $GLOBALS["db"]->insert(
         'sent' => 0,
         'actor' => "rolemaster",
         'text' => '',
-        'action' => "rolecommand|DebugNotification@Updated basic profile for {$GLOBALS["argv"][4]}",
+        'action' => 'rolecommand|DebugNotification@' . $notification,
         'tag' => ""
     )
 );
