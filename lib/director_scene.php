@@ -2,6 +2,10 @@
 require_once __DIR__ . '/director_scene_contract.php';
 require_once __DIR__ . '/core/tts_connector.class.php';
 require_once __DIR__ . '/core/narrator.class.php';
+require_once __DIR__ . '/chat_helper_functions.php';
+// Rolemaster runs outside main.php, which normally sets the dialogue chunk sizes.
+if (!defined('MAXIMUM_SENTENCE_SIZE')) define('MAXIMUM_SENTENCE_SIZE', 125);
+if (!defined('MINIMUM_SENTENCE_SIZE')) define('MINIMUM_SENTENCE_SIZE', 15);
 
 // Activate each actor's existing profile before evaluating its action permissions.
 function chimDirectorActorGlobals(array $npc): void
@@ -158,7 +162,11 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         ['role' => 'user', 'content' => $instruction],
     ];
     $scene = chimRequestDirectorScene($connection, $prompt, $actors, $catalog, $player);
-    $scene['schema'] = 'chim.director_scene.v1';
+    $scene = dwemerSplitDirectorScene($scene, static function (array $line) use ($actors): array {
+        chimDirectorActorGlobals($actors[$line['speaker']]);
+        return split_sentences_stream(cleanResponse($line['text']));
+    });
+    $scene['schema'] = 'chim.director_scene.v2';
     $scene['generation'] = (int)($GLOBALS['argv'][5] ?? 0);
     foreach ($scene['lines'] as $index => &$line) {
         chimDirectorActorGlobals($actors[$line['speaker']]);

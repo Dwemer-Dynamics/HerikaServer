@@ -21,7 +21,7 @@ try {
         if (!is_string($_POST['expected_token'] ?? null) || !preg_match('/^[a-f0-9]{64}$/D', $_POST['expected_token'])) {
             throw new InvalidArgumentException('Reload this page before changing playthroughs.');
         }
-        if (!is_string($_POST['action'] ?? null) || !in_array($_POST['action'], ['switch','new','delete'], true)
+        if (!is_string($_POST['action'] ?? null) || !in_array($_POST['action'], ['switch','new','delete','auto_switch','associate'], true)
             || isset($_POST['name']) && !is_string($_POST['name'])) {
             throw new InvalidArgumentException('Invalid playthrough request.');
         }
@@ -46,7 +46,23 @@ try {
             $GLOBALS['db'] = new sql();
         }
         $input = array_intersect_key($_POST, array_flip(['profile_id','name','expected_token','delete_token','delete_confirmation']));
-        $result = $_POST['action'] === 'delete' ? pth_delete($conn,$input) : pth_change($conn,$_POST['action'],$input);
+        require_once dirname(__DIR__, 2) . '/lib/playthrough_switching.php';
+        if ($_POST['action'] === 'auto_switch') {
+            if (!in_array($_POST['enabled'] ?? null, ['0','1'], true)) throw new InvalidArgumentException('Invalid toggle value.');
+            $runtime = ptr_runtime_begin_switch(30.0, $conn);
+            try {
+                pth_query($conn,'BEGIN');
+                $state = pth_state($conn);
+                if (!$state['available'] || !hash_equals($state['token'],$_POST['expected_token'])) throw new RuntimeException('Reload this page before changing the setting.');
+                ptr_write($conn,'PLAYTHROUGH_AUTO_SWITCH',$_POST['enabled']==='1');
+                pas_invalidate($conn);
+                ptr_write($conn,'PLAYTHROUGH_HOME_REVISION',bin2hex(random_bytes(16)));
+                pth_query($conn,'COMMIT');
+            } catch (Throwable $error) { @pg_query($conn,'ROLLBACK'); throw $error; }
+            finally { ptr_runtime_finish_switch($runtime); }
+            $result = ['message'=>$_POST['enabled']==='1' ? 'Automatic switching enabled. Reload your Skyrim save to connect its character.' : 'Automatic switching disabled.'];
+        } elseif ($_POST['action'] === 'associate') $result = pas_manual($conn,$input);
+        else $result = $_POST['action'] === 'delete' ? pth_delete($conn,$input) : pth_change($conn,$_POST['action'],$input);
         $response = ['ok'=>true] + $result;
         $_SESSION['pth_notice'] = $response['message'];
     }

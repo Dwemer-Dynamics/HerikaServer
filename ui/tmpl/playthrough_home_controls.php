@@ -13,6 +13,7 @@ $pthEscape = static fn($value) => htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
         <button type="button" id="pth-new" disabled>New playthrough</button>
         <a href="<?= $pthEscape($pthRoot . '/ui/' . $pthManager) ?>?tab=storage">Manage saves</a>
     </div>
+    <?php include __DIR__ . "/playthrough_auto_switch.php"; ?>
     <p id="pth-help">Close the game before switching. Then load its matching game save.</p>
     <p id="pth-status" role="status" aria-live="polite"></p>
     <noscript>Enable JavaScript to switch here, or open Manage saves.</noscript>

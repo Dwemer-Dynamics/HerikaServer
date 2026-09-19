@@ -36,7 +36,7 @@ require_once $enginePath . 'lib/core/core_profiles.class.php';
 require_once $enginePath . 'lib/core/llm_connector.class.php';
 require_once $enginePath . 'lib/core/tts_connector.class.php';
 require_once $enginePath . 'lib/lazy_xml.php';
-require_once $enginePath . 'debug/background_action_handler.php';
+require_once $enginePath . 'service/processors/backgroundlife/cmd/background_action_handler.php';
 
 require_once $enginePath . "lib/scriptproxy_papyrus.php";
 require_once $enginePath . "lib/core/activity_status.php";
@@ -228,6 +228,7 @@ function handleDeleteRumor() {
 }
 
 function handleCreateBackgroundNpc() {
+    session_write_close();
     $result = chimBglCreateNpc($_POST);
     $formData = $result['form_data'] ?? chimBglNpcCreationFormData($_POST);
     if (!($result['ok'] ?? false)) {
@@ -435,9 +436,9 @@ if (!function_exists('race_icon_web_path')) {
         $npcData=$npcMaster->getByName($npcName);
         $extendedData=$npcMaster->getExtendedData($npcData);
         if (!isset($extendedData['background_life_commands']) || $extendedData['background_life_commands']===false) {
-            `php $enginePath/debug/simple_llm_request_with_context_life.php "$npcName" full forceaction`;
+            `php $enginePath/service/processors/backgroundlife/cmd/main_lw.php "$npcName" full forceaction`;
         } else {
-            `php $enginePath/debug/simple_llm_request_with_context_life_v2.php "$npcName" full forceaction`;
+            `php $enginePath/service/processors/backgroundlife/cmd/main.php "$npcName" full forceaction`;
         }
 
         // Add your handler code here
@@ -457,7 +458,7 @@ if (!function_exists('race_icon_web_path')) {
         
         // Add your handler code here
            // Add your handler code here
-        `php $enginePath/debug/simple_llm_request_with_context_life.php "$npcName" forceletter`;
+        `php $enginePath/service/processors/backgroundlife/cmd/main_lw.php "$npcName" forceletter`;
         echo json_encode(['ok' => true, 'message' => "Reporting request processed for $npcName"]);
     }
 
@@ -471,7 +472,7 @@ if (!function_exists('race_icon_web_path')) {
         }
         
         // Add your handler code here
-        `php $enginePath/debug/simple_llm_request_with_context_life_command.php "$npcName" Track`;
+        `php $enginePath/service/processors/backgroundlife/cmd/simple_command.php "$npcName" Track`;
         echo json_encode(['ok' => true, 'message' => "Coords update processed for $npcName"]);
     }
 
@@ -479,7 +480,7 @@ if (!function_exists('race_icon_web_path')) {
         global $enginePath;
         
         // Update coordinates for all NPCs
-        `php $enginePath/debug/simple_llm_request_with_context_life_command.php "The Narrator" TrackAll`;
+        `php $enginePath/service/processors/backgroundlife/cmd/simple_command.php "The Narrator" TrackAll`;
         echo json_encode(['ok' => true, 'message' => 'All NPC coords update processed']);
     }
 
@@ -3036,6 +3037,40 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
 
         document.addEventListener('DOMContentLoaded', function () {
             const npcModal = document.getElementById('create-background-npc');
+            const npcForm = npcModal.querySelector('form');
+            const npcSubmit = npcForm.querySelector('button[type="submit"]');
+            const npcStatus = document.getElementById('npc-create-status');
+            npcForm.addEventListener('submit', async function (event) {
+                event.preventDefault();
+                if (npcSubmit.disabled) return;
+                const body = new URLSearchParams(new FormData(npcForm));
+                npcSubmit.disabled = true;
+                npcSubmit.textContent = 'Creating NPC...';
+                npcForm.setAttribute('aria-busy', 'true');
+                npcStatus.textContent = 'Keep Skyrim unpaused. This can take up to one minute.';
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 75000);
+                try {
+                    const response = await fetch('api/background_life_npc_create.php', {
+                        method: 'POST', body, signal: controller.signal
+                    });
+                    const result = await response.json();
+                    if (!response.ok || !result.success) {
+                        throw new Error(result.error || 'NPC creation could not finish.');
+                    }
+                    npcStatus.textContent = result.message;
+                    closeCreateNpcModal();
+                } catch (error) {
+                    npcStatus.textContent = error.name === 'AbortError'
+                        ? 'Still waiting. Submit the same name to check again without creating another NPC.'
+                        : error.message;
+                } finally {
+                    clearTimeout(timeout);
+                    npcSubmit.disabled = false;
+                    npcSubmit.textContent = 'Create NPC';
+                    npcForm.setAttribute('aria-busy', 'false');
+                }
+            });
             if (npcModal && npcModal.dataset.autoOpen === '1') {
                 openCreateNpcModal();
             }
@@ -3310,6 +3345,7 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
             </div>
         <?php endif; ?>
 
+        <p id="npc-create-status" role="status" aria-live="polite"></p>
         <form method="post" action="">
             <input type="hidden" name="action" value="create_background_npc">
             <div class="bgl-create-form-grid">

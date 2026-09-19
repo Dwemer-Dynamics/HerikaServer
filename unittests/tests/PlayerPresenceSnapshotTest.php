@@ -234,7 +234,7 @@ final class PlayerPresenceSnapshotTest extends TestCase
 
     public function testExecutionModeIsValidatedIndependentlyOfSavedMood(): void
     {
-        foreach (['DIRECTOR', 'STANDARD'] as $mode) {
+        foreach (['DIRECTOR', 'STANDARD', 'HYPNOSIS'] as $mode) {
             foreach (['', 'happy', 'custom'] as $mood) {
                 $payload = ['source' => 'plugin_player_routing_v2', 'execution_mode' => $mode, 'player_mood' => $mood];
                 $this->assertSame($mode, chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode($payload)))['execution_mode']);
@@ -245,6 +245,26 @@ final class PlayerPresenceSnapshotTest extends TestCase
             ['source' => 'plugin_player_routing_v2', 'execution_mode' => ['DIRECTOR']], []] as $payload) {
             $this->assertSame('', chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode($payload)))['execution_mode']);
         }
+    }
+
+    public function testHypnosisTargetSnapshotRejectsMalformedListenerMetadata(): void
+    {
+        foreach (['plugin_player_routing_v2', 'plugin_spatial_input_v1'] as $source) {
+            $snapshot = chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode([
+                'source' => $source, 'listener' => ' Lydia ', 'target_mode' => 'direct',
+            ])));
+            $this->assertSame('Lydia', $snapshot['listener']);
+            $this->assertSame('direct', $snapshot['target_mode']);
+        }
+        foreach ([['Lydia'], "Lydia\n", 'Lydia|Faendal', str_repeat('x', 257)] as $listener) {
+            $snapshot = chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode([
+                'source' => 'plugin_player_routing_v2', 'listener' => $listener, 'target_mode' => ['everyone'],
+            ])));
+            $this->assertSame('', $snapshot['listener']);
+            $this->assertSame('', $snapshot['target_mode']);
+        }
+        $snapshot = chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode(['listener' => 'Lydia'])));
+        $this->assertSame('', $snapshot['listener']);
     }
 
     public function testPlayerMoodIsDecodedOnlyFromThePluginRoutingSnapshot(): void

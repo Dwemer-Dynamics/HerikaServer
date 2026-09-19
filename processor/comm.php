@@ -2111,7 +2111,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
     $npcList = explode(',', $gameRequest[3]);
     $enabledNPCs = [];
 
-    Logger::info("updateprofiles_batch_async: Checking " . count($npcList) . ",{$gameRequest[3]} NPCs for enabled dynamic profiles");
+    Logger::info("updateprofiles_batch_async_manual: Checking " . count($npcList) . ",{$gameRequest[3]} NPCs for enabled dynamic profiles");
 
     // First pass: quickly check which NPCs have DYNAMIC_PROFILE enabled
     foreach ($npcList as $npcName) {
@@ -2127,7 +2127,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             // Check if narrator has dynamic profile enabled
             if ($narrator->getBool('dynamic_profile', false)) {
                 $enabledNPCs[] = $npcName;
-                Logger::debug("updateprofiles_batch_async: The Narrator has dynamic profile enabled");
+                Logger::debug("updateprofiles_batch_async_manual: The Narrator has dynamic profile enabled");
             }
             continue;
         }
@@ -2166,13 +2166,13 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         try {
             $queueId = queueDynamicProfileBatch($enabledNPCs, $gameRequest);
             echo "The Narrator|rolecommand|DebugNotification@Updating $enabledCount dynamic profile" . ($enabledCount == 1 ? "" : "s") . "..." . PHP_EOL;
-            Logger::info("updateprofiles_batch_async: Queued $enabledCount profiles as $queueId: " . implode(', ', $enabledNPCs));
+            Logger::info("updateprofiles_batch_async_manual: Queued $enabledCount profiles as $queueId: " . implode(', ', $enabledNPCs));
         } catch (Throwable $e) {
-            Logger::error("updateprofiles_batch_async: Failed to queue profiles: " . $e->getMessage());
+            Logger::error("updateprofiles_batch_async_manual: Failed to queue profiles: " . $e->getMessage());
             echo "The Narrator|rolecommand|DebugNotification@Unable to queue dynamic profile updates." . PHP_EOL;
         }
     } else {
-        Logger::info("updateprofiles_batch_async: No profiles to update - none had DYNAMIC_PROFILE enabled");
+        Logger::info("updateprofiles_batch_async_manual: No profiles to update - none had DYNAMIC_PROFILE enabled");
     }
 
     terminate();

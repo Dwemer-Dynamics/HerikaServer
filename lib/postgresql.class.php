@@ -27,6 +27,11 @@ class sql
             die("SQL: Error in connection.");
         }         
         
+        if (isset($_SERVER['HTTP_X_CHIM_PLAYTHROUGH'])
+            || in_array(basename($_SERVER['SCRIPT_FILENAME'] ?? ''), ['main.php','gamedata.php'], true)) {
+            require_once __DIR__ . '/playthrough_switching.php';
+            pas_guard(self::$link, true);
+        }
         // Ensure consistent schema resolution across sessions
         pg_query(self::$link, "SET search_path TO public");
         if ($this->debug_level > 4)
@@ -410,11 +415,13 @@ class sql
         return $finalData;
     }
 
-    public function fetchOne($q)
+    public function fetchOne($q, array $params = [])
     {
         $startTime = microtime(true);
         $this->re_connect();
-        $result = pg_query(self::$link, $q);
+        $result = $params
+            ? pg_query_params(self::$link, $q, $params)
+            : pg_query(self::$link, $q);
         // error_log($q);
         
         $endTime = microtime(true);

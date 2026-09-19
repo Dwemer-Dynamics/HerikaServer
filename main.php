@@ -1380,6 +1380,7 @@ if (in_array($gameRequest[0],["rechat","narration"]) ) {
 
 
 // Handle narrator_welcome events (must be AFTER comm.php which converts init to narrator_welcome)
+
 if ($gameRequest[0] == "narrator_welcome") {
     // Load narrator profile with full connector configuration
     require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
@@ -2470,12 +2471,8 @@ if ($bookReadingTask) {
 } else {
     $bookReadingTaskText="";
 }
-// Narration-like requests should stay descriptive instead of drifting into
-// ordinary conversation turns.
-$isVisionRequest = $gameRequest[0] === "vision";
-if ($isVisionRequest) {
-    $GLOBALS["COMMAND_PROMPT"] = "Relay only the supplied Soulgaze image description. Never identify, position, or describe a person unless that information is explicit in the image description. Do not add facts from memory, biographies, prior dialogue, nearby actor data, current activities, or world knowledge. If the image description leaves a person's identity uncertain, keep them unnamed. Use the Talk action.";
-} else if ($gameRequest[0] === "narration" || $gameRequest[0] === "narrator_welcome") {
+// Narration requests retain their descriptive response instruction.
+if ($gameRequest[0] === "narration" || $gameRequest[0] === "narrator_welcome") {
     $GLOBALS["COMMAND_PROMPT"] = "Respond with atmospheric narration only. Use the Talk action.";
 }
 
@@ -2520,6 +2517,7 @@ if (isset($GLOBALS["TTSFUNCTION"]) && !empty($GLOBALS["TTSFUNCTION"])) {
     $ttsMap = [
         'melotts' => 'MELOTTS',
         'xtts-fastapi' => 'XTTSFASTAPI',
+        'higgs' => 'HIGGS',
         'omnivoice' => 'OMNIVOICE',
         'chatterbox' => 'CHATTERBOX',
         'pockettts' => 'POCKETTTS',
@@ -2594,43 +2592,28 @@ if (!empty($GLOBALS["OGHMA_HINT"])) {
     $knowledgeSection = "\n\n<knowledge>\n" . $GLOBALS["OGHMA_HINT"] . "\n</knowledge>";
 }
 
-if ($isVisionRequest) {
-    $systemPromptRaw = "<roleplay_instructions>\nYou are #HERIKA_NAME#, explaining a Soulgaze image to #PLAYER_NAME#. The image description in the request is your only evidence about the depicted scene.\n</roleplay_instructions>" .
-        "\n\n<general_instructions>\n" . $GLOBALS["COMMAND_PROMPT"] .
-        "\n</general_instructions>" . $actionsList . $paralinguisticTagsPrompt . "\n";
-    $promptCompositionSections = [
-        'roleplay_instructions' => 'Soulgaze visual-only response role',
-        'general_instructions' => $GLOBALS["COMMAND_PROMPT"] ?? '',
-        'actions' => $actionsList ?? '',
-        'paralinguistic_tags' => $paralinguisticTagsPrompt ?? '',
-    ];
-    $contextDataFull = [];
-    $compactHistoryBlock = '';
-    $memoryInjectionCtx = [];
-} else {
-    $systemPromptRaw = "<roleplay_instructions>\n" . $GLOBALS["PROMPT_HEAD"] .
-        "\n</roleplay_instructions>" . $worldPrompt .
-        "\n\n<character>\n" . $GLOBALS["HERIKA_PERS"] . $dynamicBiography . $latestDiaryContext . $characterBottomInjections .
-        "\n</character>" . $knowledgeSection .
-        "\n\n<general_instructions>\n" . $GLOBALS["COMMAND_PROMPT"] .
-        "\n</general_instructions>" . $actionsList . $nearbySections . $promptBottomInjections . $paralinguisticTagsPrompt .
-        "\n" . $rumorsText.
-        "\n" . $bookReadingTaskText . "\n";
+$systemPromptRaw = "<roleplay_instructions>\n" . $GLOBALS["PROMPT_HEAD"] .
+    "\n</roleplay_instructions>" . $worldPrompt .
+    "\n\n<character>\n" . $GLOBALS["HERIKA_PERS"] . $dynamicBiography . $latestDiaryContext . $characterBottomInjections .
+    "\n</character>" . $knowledgeSection .
+    "\n\n<general_instructions>\n" . $GLOBALS["COMMAND_PROMPT"] .
+    "\n</general_instructions>" . $actionsList . $nearbySections . $promptBottomInjections . $paralinguisticTagsPrompt .
+    "\n" . $rumorsText.
+    "\n" . $bookReadingTaskText . "\n";
 
-    $promptCompositionSections = [
-        'roleplay_instructions' => $GLOBALS["PROMPT_HEAD"] ?? '',
-        'world' => $worldPrompt ?? '',
-        'character' => ($GLOBALS["HERIKA_PERS"] ?? '') . ($dynamicBiography ?? '') . ($latestDiaryContext ?? '') . ($characterBottomInjections ?? ''),
-        'knowledge' => $knowledgeSection ?? '',
-        'general_instructions' => $GLOBALS["COMMAND_PROMPT"] ?? '',
-        'actions' => $actionsList ?? '',
-        'nearby_actors' => $nearbySections ?? '',
-        'plugin_injections' => $promptBottomInjections ?? '',
-        'paralinguistic_tags' => $paralinguisticTagsPrompt ?? '',
-        'rumors' => $rumorsText ?? '',
-        'book_reading_task' => $bookReadingTaskText ?? ''
-    ];
-}
+$promptCompositionSections = [
+    'roleplay_instructions' => $GLOBALS["PROMPT_HEAD"] ?? '',
+    'world' => $worldPrompt ?? '',
+    'character' => ($GLOBALS["HERIKA_PERS"] ?? '') . ($dynamicBiography ?? '') . ($latestDiaryContext ?? '') . ($characterBottomInjections ?? ''),
+    'knowledge' => $knowledgeSection ?? '',
+    'general_instructions' => $GLOBALS["COMMAND_PROMPT"] ?? '',
+    'actions' => $actionsList ?? '',
+    'nearby_actors' => $nearbySections ?? '',
+    'plugin_injections' => $promptBottomInjections ?? '',
+    'paralinguistic_tags' => $paralinguisticTagsPrompt ?? '',
+    'rumors' => $rumorsText ?? '',
+    'book_reading_task' => $bookReadingTaskText ?? ''
+];
 
 $systemPrompt = chimFormatPromptXmlSections(
     strtr(
@@ -2774,9 +2757,7 @@ if ($gameRequest[0] == "funcret") {
     $contextData = array_merge($head, ($contextDataFull), $prompt);
     
 }
-if ($isVisionRequest) {
-    $contextData = chimBuildVisualOnlyVisionContext($head, strval($gameRequest[3] ?? ''));
-}
+
 chimRequestPerformanceMark('prompt_ready');
 
 

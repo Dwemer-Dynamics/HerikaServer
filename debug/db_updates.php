@@ -3486,157 +3486,43 @@ if (!$existsColumn || !$existsColumn[0]["column_name"]) {
     echo '<script>alert("A patch (add service column to core_llm_connector) has been applied to Database")</script>';
 }
 
-if ($checkVersion("core_llm_connector") < 20260423001) {
-    Logger::debug("Applying core_llm_connector 20260423001 - Seeding dedicated scene classifier connector");
-    try {
-        $sceneClassifierLabel = "Gemma 3N E4B";
-        $sceneClassifierLabelEscaped = $db->escape($sceneClassifierLabel);
-        $existingSceneClassifier = $db->fetchOne(
-            "SELECT id FROM public.core_llm_connector WHERE LOWER(COALESCE(label,'')) = LOWER('{$sceneClassifierLabelEscaped}') LIMIT 1"
-        );
-
-        if (!$existingSceneClassifier || !isset($existingSceneClassifier["id"])) {
-            $openRouterBadge = $db->fetchOne("SELECT id FROM public.core_api_badge WHERE LOWER(label) = 'openrouter' LIMIT 1");
-            $openRouterBadgeId = intval($openRouterBadge["id"] ?? 0);
-
-            $insertPayload = [
-                "label" => $sceneClassifierLabel,
-                "metadata" => "{}",
-                "url" => "https://openrouter.ai/api/v1/chat/completions",
-                "model" => "google/gemma-3n-e4b-it",
-                "provider" => "openrouter",
-                "driver" => "openrouterjson",
-                "max_tokens" => 128,
-                "enforce_json" => 1,
-                "prefill_json" => 0,
-                "json_schema" => 1,
-                "temperature" => 0.2,
-                "service" => "openrouter"
-            ];
-            if ($openRouterBadgeId > 0) {
-                $insertPayload["api_badge_id"] = $openRouterBadgeId;
-            }
-
-            $db->insert("public.core_llm_connector", $insertPayload);
-            Logger::info("Inserted dedicated scene classifier connector '{$sceneClassifierLabel}'");
-        } else {
-            Logger::info("Dedicated scene classifier connector already exists with ID " . intval($existingSceneClassifier["id"]));
-        }
-
-        $updateVersion("core_llm_connector", 20260423001);
-        Logger::info("Applied patch core_llm_connector 20260423001");
-    } catch (Exception $e) {
-        Logger::error("Error applying core_llm_connector 20260423001: " . $e->getMessage());
+// Supersede the legacy classifier seeds without resetting customized connectors.
+if ($checkVersion("core_llm_connector") < 20260919001) {
+    $migrationOk = $db->execQuery("
+        UPDATE public.core_llm_connector
+        SET model = 'google/gemma-3-4b-it', label = 'Gemma 3 4B'
+        WHERE model = 'google/gemma-3n-e4b-it'
+          AND url = 'https://openrouter.ai/api/v1/chat/completions'
+          AND driver = 'openrouterjson'
+          AND LOWER(label) IN (
+              'gemma 3n e4b', 'scene classifier (gemma 3n e4b)',
+              'scene classifier (gemini 2.5 flash lite)'
+          )
+    ") !== false;
+    if ($migrationOk) {
+        $migrationOk = $db->execQuery("
+            INSERT INTO public.core_llm_connector (
+                label, metadata, url, model, provider, driver, max_tokens,
+                enforce_json, prefill_json, api_badge_id, json_schema, temperature, service
+            )
+            SELECT 'Gemma 3 4B', '{}', 'https://openrouter.ai/api/v1/chat/completions',
+                   'google/gemma-3-4b-it', 'openrouter', 'openrouterjson', 128,
+                   1, 0, (SELECT id FROM public.core_api_badge WHERE LOWER(label) = 'openrouter' ORDER BY id LIMIT 1),
+                   1, 0.2, 'openrouter'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM public.core_llm_connector
+                WHERE LOWER(label) IN (
+                    'gemma 3 4b', 'gemma 3n e4b', 'scene classifier (gemma 3n e4b)',
+                    'scene classifier (gemini 2.5 flash lite)'
+                )
+            )
+        ") !== false;
     }
-}
-
-if ($checkVersion("core_llm_connector") < 20260423002) {
-    Logger::debug("Applying core_llm_connector 20260423002 - Migrating scene classifier default to Gemma 3N E4B");
-    try {
-        $sceneClassifierLabel = "Gemma 3N E4B";
-        $legacySceneClassifierLabel = "Scene Classifier (Gemma 3N E4B)";
-        $legacySceneClassifierLabel2 = "Scene Classifier (Gemini 2.5 Flash Lite)";
-        $sceneClassifierLabelEscaped = $db->escape($sceneClassifierLabel);
-        $legacySceneClassifierLabelEscaped = $db->escape($legacySceneClassifierLabel);
-        $legacySceneClassifierLabelEscaped2 = $db->escape($legacySceneClassifierLabel2);
-
-        $sceneClassifierRow = $db->fetchOne(
-            "SELECT id FROM public.core_llm_connector
-             WHERE LOWER(COALESCE(label,'')) = LOWER('{$sceneClassifierLabelEscaped}')
-                OR LOWER(COALESCE(label,'')) = LOWER('{$legacySceneClassifierLabelEscaped}')
-                OR LOWER(COALESCE(label,'')) = LOWER('{$legacySceneClassifierLabelEscaped2}')
-             ORDER BY id ASC
-             LIMIT 1"
-        );
-
-        $openRouterBadge = $db->fetchOne("SELECT id FROM public.core_api_badge WHERE LOWER(label) = 'openrouter' LIMIT 1");
-        $openRouterBadgeId = intval($openRouterBadge["id"] ?? 0);
-
-        $sceneClassifierPayload = [
-            "label" => $sceneClassifierLabel,
-            "metadata" => "{}",
-            "url" => "https://openrouter.ai/api/v1/chat/completions",
-            "model" => "google/gemma-3n-e4b-it",
-            "provider" => "openrouter",
-            "driver" => "openrouterjson",
-            "max_tokens" => 128,
-            "enforce_json" => 1,
-            "prefill_json" => 0,
-            "json_schema" => 1,
-            "temperature" => 0.2,
-            "service" => "openrouter"
-        ];
-        if ($openRouterBadgeId > 0) {
-            $sceneClassifierPayload["api_badge_id"] = $openRouterBadgeId;
-        }
-
-        if ($sceneClassifierRow && isset($sceneClassifierRow["id"])) {
-            $db->updateRow("public.core_llm_connector", $sceneClassifierPayload, "id=" . intval($sceneClassifierRow["id"]));
-            Logger::info("Updated dedicated scene classifier connector ID " . intval($sceneClassifierRow["id"]) . " to Gemma 3N E4B");
-        } else {
-            $db->insert("public.core_llm_connector", $sceneClassifierPayload);
-            Logger::info("Inserted dedicated scene classifier connector '{$sceneClassifierLabel}'");
-        }
-
-        $updateVersion("core_llm_connector", 20260423002);
-        Logger::info("Applied patch core_llm_connector 20260423002");
-    } catch (Exception $e) {
-        Logger::error("Error applying core_llm_connector 20260423002: " . $e->getMessage());
-    }
-}
-
-if ($checkVersion("core_llm_connector") < 20260423003) {
-    Logger::debug("Applying core_llm_connector 20260423003 - Shortening scene classifier connector label");
-    try {
-        $sceneClassifierLabel = "Gemma 3N E4B";
-        $legacySceneClassifierLabels = [
-            "Scene Classifier (Gemma 3N E4B)",
-            "Scene Classifier (Gemini 2.5 Flash Lite)"
-        ];
-
-        $conditions = [];
-        $conditions[] = "LOWER(COALESCE(label,'')) = LOWER('" . $db->escape($sceneClassifierLabel) . "')";
-        foreach ($legacySceneClassifierLabels as $legacyLabel) {
-            $conditions[] = "LOWER(COALESCE(label,'')) = LOWER('" . $db->escape($legacyLabel) . "')";
-        }
-
-        $sceneClassifierRow = $db->fetchOne(
-            "SELECT id FROM public.core_llm_connector WHERE " . implode(" OR ", $conditions) . " ORDER BY id ASC LIMIT 1"
-        );
-
-        $openRouterBadge = $db->fetchOne("SELECT id FROM public.core_api_badge WHERE LOWER(label) = 'openrouter' LIMIT 1");
-        $openRouterBadgeId = intval($openRouterBadge["id"] ?? 0);
-
-        $sceneClassifierPayload = [
-            "label" => $sceneClassifierLabel,
-            "metadata" => "{}",
-            "url" => "https://openrouter.ai/api/v1/chat/completions",
-            "model" => "google/gemma-3n-e4b-it",
-            "provider" => "openrouter",
-            "driver" => "openrouterjson",
-            "max_tokens" => 128,
-            "enforce_json" => 1,
-            "prefill_json" => 0,
-            "json_schema" => 1,
-            "temperature" => 0.2,
-            "service" => "openrouter"
-        ];
-        if ($openRouterBadgeId > 0) {
-            $sceneClassifierPayload["api_badge_id"] = $openRouterBadgeId;
-        }
-
-        if ($sceneClassifierRow && isset($sceneClassifierRow["id"])) {
-            $db->updateRow("public.core_llm_connector", $sceneClassifierPayload, "id=" . intval($sceneClassifierRow["id"]));
-            Logger::info("Renamed scene classifier connector ID " . intval($sceneClassifierRow["id"]) . " to '{$sceneClassifierLabel}'");
-        } else {
-            $db->insert("public.core_llm_connector", $sceneClassifierPayload);
-            Logger::info("Inserted dedicated scene classifier connector '{$sceneClassifierLabel}'");
-        }
-
-        $updateVersion("core_llm_connector", 20260423003);
-        Logger::info("Applied patch core_llm_connector 20260423003");
-    } catch (Exception $e) {
-        Logger::error("Error applying core_llm_connector 20260423003: " . $e->getMessage());
+    if ($migrationOk) {
+        $updateVersion("core_llm_connector", 20260919001);
+        Logger::info("Applied scene classifier model refresh 20260919001");
+    } else {
+        Logger::error("Failed to apply scene classifier model refresh 20260919001");
     }
 }
 
@@ -3956,6 +3842,8 @@ if ($checkVersion("bio_templates_seed")<20250913001) {
 
 // Always (re)create combined view once base tables exist
 try {
+    $db->execQuery("ALTER TABLE public.bio_templates ADD COLUMN IF NOT EXISTS tts_filter_preset TEXT");
+    $db->execQuery("ALTER TABLE public.bio_templates_custom ADD COLUMN IF NOT EXISTS tts_filter_preset TEXT");
     $db->execQuery("DROP VIEW IF EXISTS public.combined_bio_templates CASCADE;");
     $db->execQuery("
         CREATE VIEW public.combined_bio_templates AS
@@ -3973,7 +3861,7 @@ try {
                c.voiceid,
                c.gender,
                c.race,
-               c.refid
+               c.refid, c.tts_filter_preset
           FROM public.bio_templates_custom c
         UNION ALL
         SELECT b.npc_name,
@@ -3990,7 +3878,7 @@ try {
                b.voiceid,
                b.gender,
                b.race,
-               b.refid
+               b.refid, b.tts_filter_preset
           FROM (public.bio_templates b
                 LEFT JOIN public.bio_templates_custom c
                   ON ((b.npc_name)::text = (c.npc_name)::text))
@@ -6255,6 +6143,10 @@ if ($checkVersion("general_settings") < 20260502003) {
     try {
         $managedDescriptions = chimGetManagedGeneralSettingDescriptions();
         foreach (chimGetManagedGeneralSettingIds() as $settingId) {
+            // SNQE slots are initialized after legacy connector assignments have been migrated.
+            if (strpos($settingId, 'CORE_CONNECTOR_QUEST_') === 0) {
+                continue;
+            }
             $definition = chimGetSchemaDefinition($settingId);
             $hasLegacyValue = chimReadLegacyGlobalValue($settingId, "__CHIM_SETTING_MISSING__");
             if ($hasLegacyValue === "__CHIM_SETTING_MISSING__") {
@@ -7617,6 +7509,42 @@ if ($checkVersion("general_settings") < 20260825001) {
     }
 }
 
+// Give SNQE independent assignments once, preserving saved choices on upgrades and retries.
+if ($checkVersion("general_settings") < 20260919001) {
+    $questConnectorSources = [
+        'CORE_CONNECTOR_QUEST_CREATION' => 'CORE_CONNECTOR_MEDIUMTERM',
+        'CORE_CONNECTOR_QUEST_ENGINE' => 'CORE_CONNECTOR_DIRECTOR',
+        'CORE_CONNECTOR_QUEST_CREATION_ENABLED' => 'CORE_CONNECTOR_MEDIUMTERM_ENABLED',
+        'CORE_CONNECTOR_QUEST_ENGINE_ENABLED' => 'CORE_CONNECTOR_DIRECTOR_ENABLED',
+    ];
+    $migrationOk = true;
+    foreach ($questConnectorSources as $settingId => $sourceId) {
+        $default = chimReadLegacyGlobalValue($sourceId, '');
+        $value = chimGetGeneralSetting($sourceId, chimSettingsStringifyValue($default));
+        // The complete engine pipeline previously required both legacy connectors.
+        if ($settingId === 'CORE_CONNECTOR_QUEST_ENGINE_ENABLED') {
+            $memoryAvailable = chimGetGeneralSettingBool('CORE_CONNECTOR_MEDIUMTERM_ENABLED',
+                (bool) chimReadLegacyGlobalValue('CORE_CONNECTOR_MEDIUMTERM_ENABLED', true));
+            $value = chimSettingsStringifyValue(
+                chimSettingsNormalizeScalar($value, ['type' => 'boolean']) && $memoryAvailable
+            );
+        }
+        $idSql = $db->escapeLiteral($settingId);
+        $valueSql = $db->escapeLiteral($value);
+        $descriptionSql = $db->escapeLiteral(chimGetSchemaDescription($settingId));
+        if ($db->execQuery("INSERT INTO public.general_settings (id, value, description, updated_at)
+            VALUES ($idSql, $valueSql, $descriptionSql, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO NOTHING") === false) {
+            $migrationOk = false;
+        }
+    }
+    if ($migrationOk) {
+        $updateVersion("general_settings", 20260919001);
+    } else {
+        Logger::error('Failed to initialize SNQE connector settings; retry the database update.');
+    }
+}
+
 if ($checkVersion("quest_asset_library") < 20260718003) {
     Logger::debug("Applying quest_asset_library 20260718003 - add curated quest spawn templates");
 
@@ -8360,6 +8288,14 @@ Logger::info(__FILE__." update file processed");
 //----------------------------------------------------
         
 Logger::info(__FILE__." update file processed. This file has ".__LINE__." lines.");
+
+// Add plugin storage before refreshing the schema used to upgrade older playthroughs.
+if ($checkVersion('npc_plugin_extended_data') < 20260919001) {
+    if (!$GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/core/database_schema/plugin_extended_data.sql'))) {
+        throw new RuntimeException('NPC plugin data migration failed.');
+    }
+    $updateVersion('npc_plugin_extended_data', 20260919001);
+}
 
 // Install durable event accounting before refreshing the snapshot schema.
 if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_profile_scheduler.sql')) === false) {

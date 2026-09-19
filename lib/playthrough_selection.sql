@@ -42,9 +42,10 @@ $$ LANGUAGE plpgsql;
 -- Identity is read from the captured schema, never from a different live playthrough.
 CREATE OR REPLACE FUNCTION chim_meta.playthrough_identity(source_schema text)
 RETURNS jsonb AS $$
-DECLARE player_name text; raw text; stats jsonb; level_text text; player_level integer;
+DECLARE character_id text; player_name text; raw text; stats jsonb; level_text text; player_level integer;
 BEGIN
     IF to_regclass(format('%I.core_player',source_schema)) IS NOT NULL THEN
+        EXECUTE format('SELECT value FROM %I.core_player WHERE id=$1',source_schema) INTO character_id USING 'playthrough_id';
         EXECUTE format('SELECT value FROM %I.core_player WHERE id=$1',source_schema) INTO player_name USING 'player_name';
         EXECUTE format('SELECT value FROM %I.core_player WHERE id=$1',source_schema) INTO raw USING 'stats';
         BEGIN stats := raw::jsonb; EXCEPTION WHEN invalid_text_representation THEN stats := NULL; END;
@@ -54,7 +55,7 @@ BEGIN
     IF nullif(btrim(player_name),'') IS NULL AND to_regclass(format('%I.general_settings',source_schema)) IS NOT NULL THEN
         EXECUTE format('SELECT value FROM %I.general_settings WHERE id=$1',source_schema) INTO player_name USING 'PLAYER_NAME';
     END IF;
-    RETURN jsonb_build_object('version',1,'player_name',coalesce(btrim(player_name),''),'player_level',player_level);
+    RETURN jsonb_build_object('version',1,'character_id',coalesce(character_id,''),'player_name',coalesce(btrim(player_name),''),'player_level',player_level);
 END;
 $$ LANGUAGE plpgsql STABLE;
 

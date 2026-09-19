@@ -94,6 +94,8 @@ function chimPortableGlobalFields(): array
         'CORE_CONNECTOR_MEDIUMTERM_ENABLED' => 'boolean',
         'CORE_CONNECTOR_PROFILES_ENABLED' => 'boolean',
         'CORE_CONNECTOR_DIRECTOR_ENABLED' => 'boolean',
+        'CORE_CONNECTOR_QUEST_CREATION_ENABLED' => 'boolean',
+        'CORE_CONNECTOR_QUEST_ENGINE_ENABLED' => 'boolean',
         'CORE_CONNECTOR_BGL_ENABLED' => 'boolean',
         'RELATIONSHIP_SYSTEM_ENABLED' => 'boolean',
         'SCENE_CLASSIFIER_ENABLED' => 'boolean',

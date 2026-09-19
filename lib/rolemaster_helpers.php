@@ -555,7 +555,7 @@ function testSpawnRandomNPC()
 function getLocationReferences($locationFormId)
 {
     $parm4 = $locationFormId;
-    $dbDestination = $GLOBALS["db"]->fetchOne("SELECT refs,name FROM locations where formid=$locationFormId");
+    $dbDestination = $GLOBALS["db"]->fetchOne("SELECT refs,name,formid FROM locations where formid=$locationFormId");
     if ($dbDestination) {
         if ($dbDestination["refs"] != "") {
             // refs are populated when plugin send locations. 
@@ -606,10 +606,10 @@ function getLocationReferences($locationFormId)
                 }
                 $parm4 = $unsignedInt;
             } else {
-                $parm4 = $dbDestination["formid"];
+                $parm4 = (int)$dbDestination["formid"];
             }
         } else
-            $parm4 = $dbDestination["formid"];
+            $parm4 = (int)$dbDestination["formid"];
     }
 
     return $parm4;
@@ -755,7 +755,8 @@ function npcProfileBase($name, $class, $race, $gender, $location, $taskId, $addi
         $locationCn = $GLOBALS["db"]->escape($location);
         $dbDestination = $GLOBALS["db"]->fetchOne("SELECT refs,name, similarity(name, '$locationCn') AS sim,formid FROM locations ORDER BY sim DESC LIMIT 1");
         if ($dbDestination) {
-            $parm4 = quest_reference_normalize_formid($dbDestination["formid"] ?? 0) ?? 0;
+            // locations.formid is BIGINT; PostgreSQL returns its decimal value as a string.
+            $parm4 = (int)($dbDestination["formid"] ?? 0);
             $locationRef = getLocationReferences($parm4);
             if ($locationRef) {
                 $parm4 = $locationRef;
@@ -787,7 +788,7 @@ function npcProfileBase($name, $class, $race, $gender, $location, $taskId, $addi
     $wireParm4 = quest_reference_formid_for_papyrus($parm4);
     $wireParm5 = quest_reference_formid_for_papyrus($parm5);
 
-    $GLOBALS["db"]->insert(
+    $spawnQueued = $GLOBALS["db"]->insertReturningId(
         'responselog',
         [
             'localts' => time(),
@@ -796,7 +797,8 @@ function npcProfileBase($name, $class, $race, $gender, $location, $taskId, $addi
             'text' => "",
             'action' => "rolecommand|spawnCharacter@{$name}@$wireParm1@$wireParm2@$wireParm3@$wireParm4@$patchedTaskid@$wireParm5",
             'tag' => "",
-        ]
+        ],
+        'rowid'
     );
     if ($rumors) {
         $GLOBALS["db"]->insert(
@@ -811,6 +813,7 @@ function npcProfileBase($name, $class, $race, $gender, $location, $taskId, $addi
             ]
         );
     }
+    return (bool)$spawnQueued;
 }
 
 // basetype: note, book , or allowed $GLOBALS["item_types"] 
@@ -1958,7 +1961,7 @@ function getLocationsNearNpcCoords($npcName)
          and coords <-> '{$pointEsc}'::point < 6000
          and world IN ('{$worldEsc}','')
          ORDER BY case when world = '{$worldEsc}' then coords <-> '{$pointEsc}'::point else (coords <-> '{$pointEsc}'::point) + 100000 end ASC
-         LIMIT 35"
+         LIMIT 35",true
     );
 
     if ($currentLocationName) {

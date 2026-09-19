@@ -436,15 +436,15 @@ The character's primary goal is to make a living by mining ores and selling them
 - Can't work all the time, use 8H rule: 8h working,8h resting,8h socializing. If hungry or thirsty, must first address survival needs before working.
 
 2. Selling Iron Ore
-- The character sells Iron Ore to Thorgar, who is located at \"Whistling Mine (Interior)\".
+- The character sells Iron Ore to Jaryra, who is located at \"Elysium Estate (interior)\".
 - Before leaving the mine or changing activities, check the inventory:
-  - If the character has enough Iron Ore to sell, trade with Thorgar (Iron Ore aprox value is 7 gold coins each one).
+  - If the character has enough Iron Ore to sell, travel and look for Jaryra (Iron Ore aprox value is 7 gold coins each one).
   - If there is no ore available, continue mining.
 
 3. Selling Gold Ore
-- Gold Ore is more valuable and should eventually be sold to Jorl Stoneman in Whiterun.
-- Jorl is the preferred buyer because he pays a high price (100 gold per Gold Ore).
-- Traveling to Whiterun is a long journey, so only make the trip when it is worthwhile (for example, when carrying a meaningful amount of Gold Ore).
+- Gold Ore is more valuable and should eventually be sold to Jaryra  at \"Elysium Estate (interior)\".
+- Jaryra is the preferred buyer because she pays a high price (100 gold per Gold Ore).
+- Traveling to \"Elysium Estate (interior)\" is a long journey, so only make the trip when it is worthwhile (for example, when carrying a meaningful amount of Gold Ore).
 
 4. Social Activities
 - On some evenings, the character should travel to Winterhold.
@@ -467,7 +467,7 @@ When working at the mine, the character produces resources over time:
 
 - Gold Ore (Item RefID: 0x0005acde)
   - Production rate: 0.3 units per hour.
-  - Gold Ore is rare and should be preserved for selling to Jorl Stoneman.
+  - Gold Ore is rare and should be preserved for selling to Jaryra
 ",
     ];
 
@@ -638,7 +638,7 @@ Must sell fish to merchants,(e.g at Candlehearth Hall), innkeepers and citizens 
 if ($argv[1] == '9a') {
 
     $npcMaster = new NpcMaster();
-    $npcname = "Jaryra";
+    $npcname = "Gularzob";
     $npc = $npcMaster->getByName($npcname);
 
     $GLOBALS["db"]->insert(
@@ -1307,7 +1307,7 @@ if ($argv[1] == '38') {
 // GSPOSES
 if ($argv[1] == '39') {
 
-    if ($argv[2] == '0') {
+    if ($argv[3] == '0') {
 
         $GLOBALS["db"]->insert(
             'responselog',
@@ -1315,7 +1315,7 @@ if ($argv[1] == '39') {
                 'localts' => time(),
                 'sent' => 0,
                 'text' => "CommandAnimation@IdleForceDefaultState",
-                'actor' => "{$argv[3]}",
+                'actor' => "{$argv[2]}",
                 'action' => 'command'
             )
         );
@@ -1325,11 +1325,26 @@ if ($argv[1] == '39') {
             array(
                 'localts' => time(),
                 'sent' => 0,
-                'text' => "CommandAnimation@{$argv[2]}",
-                'actor' => "{$argv[3]}",
+                'text' => "CommandAnimation@{$argv[3]}",
+                'actor' => "{$argv[2]}",
                 'action' => 'command'
             )
         );
+
+        $npcMaster = new NpcMaster();
+        $npc = $npcMaster->getByName($argv[2]);
+
+        $skyrimCmd = new SkyrimCommandBuilder();
+
+        //Stop reading animation
+
+        $json = $skyrimCmd->Actor->SetHeadTracking("0x{$npc["refid"]}", false);
+        $skyrimCmd->send(cmd: $json);
+
+        $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+        $skyrimCmd->send(cmd: $json);
+
+
     }
 }
 
@@ -1349,8 +1364,8 @@ if ($argv[1] == '41') {
         array(
             'localts' => time(),
             'sent' => 0,
-            'text' => "ExtCmdRemoveClothes@",
-            'actor' => "Alva",
+            'text' => "ExtCmdKiss@Varek",
+            'actor' => "Jaryra",
             'action' => 'command'
         )
     );
@@ -1460,7 +1475,7 @@ if ($argv[1] == "48") {
 
     $npcMaster = new NpcMaster();
     $npcname = "Grosta";
-    $npc= $npcMaster->getByName($npcname);
+    $npc = $npcMaster->getByName($npcname);
     $skyrimCmd = new SkyrimCommandBuilder();
 
     $json = $skyrimCmd->Actor->AddToFaction("0x{$npc["refid"]}", "0x0001dd09"); //WEPlayerFriend
@@ -1474,3 +1489,64 @@ if ($argv[1] == "48") {
 }
 
 
+if ($argv[1] == '49') {
+
+
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $npc["refid"] = "14";
+
+    $json = $skyrimCmd->Actor->PlayIdle("0x{$npc["refid"]}", "0x000b5e20");
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+
+}
+
+if ($argv[1] == '50') {
+
+    $npcMaster = new NpcMaster();
+    $npcname = "Gralnach";
+    $npc = $npcMaster->getByName($npcname);
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x00019E19", 0, 0, 155);
+    $skyrimCmd->send(cmd: $json);
+
+    /*$GLOBALS["db"]->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => "rolemaster",
+            'text' => "",
+            'action' => "rolecommand|BackgroundCmd@0x{$npc["refid"]}@ReturnHome",
+            'tag' => __FILE__ . ":" . __LINE__,
+        ]
+    );*/
+}
+
+if ($argv[1] == '51') {
+    $npcMaster = new NpcMaster();
+    $npcname = "Gularzob";
+    $npc = $npcMaster->getByName($npcname);
+
+    $GLOBALS['db']->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => 'rolemaster',
+            'text' => '',
+            'action' => "rolecommand|BackgroundCmd@0x{$npc["refid"]}@MoveToPlayer",
+            'tag' => '',
+        ]
+    );
+   
+}
+
+if ($argv[1] == '52') {
+   print_r(DataLastDataExpandedForNPC("Grosta",-50));
+   
+}
