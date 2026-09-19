@@ -27,4 +27,4 @@ $ptxEscape=static fn($value)=>htmlspecialchars($value,ENT_QUOTES,'UTF-8');
         <button type="button" id="ptx-import-confirm" hidden disabled>Import save</button>
     </div>
 </dialog>
-<script src="<?= $ptxEscape($ptxRoot) ?>/ui/js/playthrough_transfer.js?v=1"></script>
+<script src="<?= $ptxEscape($ptxRoot) ?>/ui/js/playthrough_transfer.js?v=2"></script>
