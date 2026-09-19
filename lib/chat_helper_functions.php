@@ -283,6 +283,7 @@ function cleanResponse($rawResponse)
             'xtts-fastapi' => 'XTTSFASTAPI',
             'chatterbox' => 'CHATTERBOX',
             'pockettts' => 'POCKETTTS',
+            'higgs' => 'HIGGS',
             'omnivoice' => 'OMNIVOICE',
             'mimic3' => 'MIMIC3',
             'xvasynth' => 'XVASYNTH',
@@ -1099,6 +1100,7 @@ function applyVoiceIdToTtsGlobals(string $voiceid): void
     $GLOBALS['TTS']['CHATTERBOX']['voiceid']   = $voiceid;
     $GLOBALS['TTS']['POCKETTTS']['voiceid']    = $voiceid;
     $GLOBALS['TTS']['OMNIVOICE']['voiceid']    = $voiceid;
+    $GLOBALS['TTS']['HIGGS']['voiceid']    = $voiceid;
     $GLOBALS['TTS']['MELOTTS']['voiceid']      = $voiceid;
     $GLOBALS['TTS']['MIMIC3']['voice']         = $voiceid;
     $GLOBALS['TTS']['XVASYNTH']['model']       = $voiceid;
