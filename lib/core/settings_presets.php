@@ -44,6 +44,8 @@ function chimSettingsPresetConnectorAvailability(bool $available): array
         'SCENE_CLASSIFIER_ENABLED' => $available,
         'CORE_CONNECTOR_PROFILES_ENABLED' => $available,
         'CORE_CONNECTOR_DIRECTOR_ENABLED' => $available,
+        'CORE_CONNECTOR_QUEST_CREATION_ENABLED' => $available,
+        'CORE_CONNECTOR_QUEST_ENGINE_ENABLED' => $available,
         'CORE_CONNECTOR_BGL_ENABLED' => $available,
         'RELATIONSHIP_SYSTEM_ENABLED' => $available,
     ];
