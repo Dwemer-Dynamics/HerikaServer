@@ -8289,6 +8289,14 @@ Logger::info(__FILE__." update file processed");
         
 Logger::info(__FILE__." update file processed. This file has ".__LINE__." lines.");
 
+// Add plugin storage before refreshing the schema used to upgrade older playthroughs.
+if ($checkVersion('npc_plugin_extended_data') < 20260919001) {
+    if (!$GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/core/database_schema/plugin_extended_data.sql'))) {
+        throw new RuntimeException('NPC plugin data migration failed.');
+    }
+    $updateVersion('npc_plugin_extended_data', 20260919001);
+}
+
 // Install durable event accounting before refreshing the snapshot schema.
 if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_profile_scheduler.sql')) === false) {
     throw new RuntimeException('Dynamic profile migration failed.');

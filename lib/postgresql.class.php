@@ -415,11 +415,13 @@ class sql
         return $finalData;
     }
 
-    public function fetchOne($q)
+    public function fetchOne($q, array $params = [])
     {
         $startTime = microtime(true);
         $this->re_connect();
-        $result = pg_query(self::$link, $q);
+        $result = $params
+            ? pg_query_params(self::$link, $q, $params)
+            : pg_query(self::$link, $q);
         // error_log($q);
         
         $endTime = microtime(true);
