@@ -1031,18 +1031,16 @@ function DataLastInfoFor($actorBeingCalled, $lastNelements = -2,$addNPCDescripti
                 Logger::warn("DataLastInfoFor: unexpected value for HERIKA_NAME={$GLOBALS["HERIKA_NAME"]} | actor={$actor} actorname={$actorName} ");
             } */
 
+            $interactionContext = "";
             if ((strpos($actor,"(")===false) && ($GLOBALS["HERIKA_NAME"]!="The Narrator") && (strpos($GLOBALS["HERIKA_NAME"],"actor")===false)) {   
                 $interactions=DirectConversationsWith($actor);
                 if ($interactions==0) {
-                    $ittext="{$actor} ({$GLOBALS["HERIKA_NAME"]} never talked to {$actorName} before, {$GLOBALS["HERIKA_NAME"]} should speak to this person as to a stranger or traveler...)";
+                    $interactionContext=" ({$GLOBALS["HERIKA_NAME"]} never talked to {$actorName} before, {$GLOBALS["HERIKA_NAME"]} should speak to this person as to a stranger or traveler...)";
                 } else if ($interactions<5) {
-                    $ittext="{$actor} ({$GLOBALS["HERIKA_NAME"]} has talked to {$actorName} a couple of times before)";
-                } else {
-                    $ittext="{$actor}";
+                    $interactionContext=" ({$GLOBALS["HERIKA_NAME"]} has talked to {$actorName} a couple of times before)";
                 }
-            } else {
-                $ittext="{$actor}";
             }
+            $ittext = $actor . $interactionContext;
 
             if ($actor==$GLOBALS["PLAYER_NAME"]) {
                 // Player - read from core_player table (don't reveal they're "the player character")
@@ -1128,8 +1126,8 @@ function DataLastInfoFor($actorBeingCalled, $lastNelements = -2,$addNPCDescripti
                     Logger::debug("Could not load player data for context: " . $e->getMessage());
                 }
                 
-                // Don't append $ittext for player - profileString already starts with player name
-                $actorDetailedListWithProfile[] = $profileString;
+                // Keep familiarity guidance without repeating the player's profile name.
+                $actorDetailedListWithProfile[] = $profileString . $interactionContext;
                 
             } else {
                 
