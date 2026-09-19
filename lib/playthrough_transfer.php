@@ -1,6 +1,18 @@
 <?php
 require_once __DIR__ . '/playthrough_home.php';
 
+// Both directions accept the same JSON nesting depth without logging saved row contents.
+function ptx_decode_row(string $line, string $table, int $row): array {
+    try {
+        $value=json_decode($line,true,512,JSON_THROW_ON_ERROR|JSON_BIGINT_AS_STRING);
+    } catch (JsonException $error) {
+        error_log('Playthrough transfer: Invalid JSON in table '.$table.', row '.$row.': '.$error->getMessage());
+        throw new RuntimeException('A saved row contains invalid or overly nested JSON. Check the server log for details.',0,$error);
+    }
+    if (!is_array($value)) throw new RuntimeException('A saved row must contain named columns.');
+    return $value;
+}
+
 // Transfer files are private, session-owned and short lived; never extract ZIP paths.
 function ptx_directory(string $id = ''): string {
     $base = sys_get_temp_dir().'/dwemer-playthrough-'.substr(hash('sha256',dirname(__DIR__)),0,16);
@@ -126,7 +138,13 @@ function ptx_export($conn, int $id, string $expected, string $directory): array 
             try {
                 do {
                     $batch=pg_fetch_all(pth_query($conn,'FETCH 250 FROM ptx_rows')) ?: [];
-                    foreach ($batch as $record) { $line=$record['data']."\n";$expanded+=strlen($line);if (strlen($line)>33554432 || $expanded>21474836480) throw new RuntimeException('This save exceeds the transfer size limit (20 GB total or 32 MB per row).');if (fwrite($output,$line)!==strlen($line)) throw new RuntimeException('Temporary storage is full.');$rows++; }
+                    foreach ($batch as $record) {
+                        $line=$record['data']."\n";$expanded+=strlen($line);
+                        if (strlen($line)>33554432 || $expanded>21474836480) throw new RuntimeException('This save exceeds the transfer size limit (20 GB total or 32 MB per row).');
+                        ptx_decode_row($line,$table,$rows+1);
+                        if (fwrite($output,$line)!==strlen($line)) throw new RuntimeException('Temporary storage is full.');
+                        $rows++;
+                    }
                 } while ($batch);
             } finally { fclose($output);pth_query($conn,'CLOSE ptx_rows'); }
             $sequences=[];
@@ -253,7 +271,7 @@ function ptx_import($conn, string $directory, string $name, array $mapping, stri
                 while (!feof($stream)) {
                     $line=fgets($stream,33554434);if ($line===false) break;
                     if (strlen($line)>33554432 || !str_ends_with($line,"\n")) throw new RuntimeException('A saved row is too large or incomplete.');
-                    $value=json_decode($line,true,128,JSON_THROW_ON_ERROR|JSON_BIGINT_AS_STRING);
+                    $value=ptx_decode_row($line,$table,$rows+1);
                     if (!is_array($value) || count($value)!==count($names) || array_diff_key($value,$names)) throw new RuntimeException('Saved row columns do not match the manifest.');
                     $batch[]=trim($line);$bytes+=strlen($line);$rows++;
                     if (count($batch)>=250 || $bytes>=1048576) { pth_query($conn,'INSERT INTO '.$relation.' SELECT * FROM json_populate_recordset(NULL::'.$relation.',$1::json)',['['.implode(',',$batch).']']);$batch=[];$bytes=0; }
@@ -285,6 +303,7 @@ function ptx_import($conn, string $directory, string $name, array $mapping, stri
         pth_query($conn,'COMMENT ON SCHEMA '.pg_escape_identifier($conn,$raw).' IS '.pg_escape_literal($conn,json_encode($manifest['snapshot'],JSON_THROW_ON_ERROR)));
         ptx_progress($directory,'Checking compatibility…');$runtime=ptr_runtime_begin_switch(30,$conn);
         if (!ptr_lock($conn)) throw new RuntimeException('Another Playthrough Save operation is running.');$locked=true;
+        ptr_ensure_schema($conn);
         pth_query($conn,'LOCK TABLE public.core_profiles IN SHARE MODE');
         if (!hash_equals($profilesVersion,hash('sha256',json_encode(ptx_profiles($conn))))) throw new RuntimeException('Global profiles changed. Check the file again.');
         $stage=pts_prepare_playthrough($conn,$raw);
