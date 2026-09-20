@@ -5,7 +5,7 @@ ini_set('display_errors', 1);
 
 $enginePath = dirname(__FILE__) . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR;
 $GLOBALS['ENGINE_PATH'] = $enginePath;
-
+$GLOBALS['ENGINE_ROOT'] = $enginePath;
 // ─── Includes ─────────────────────────────────────────────────────────────────
 
 require_once $enginePath . 'lib/runtime_bootstrap.php';
@@ -1550,3 +1550,77 @@ if ($argv[1] == '52') {
    print_r(DataLastDataExpandedForNPC("Grosta",-50));
    
 }
+
+if ($argv[1] == '53') {
+   require_once __DIR__ . "/../lib/director_scene.php";
+    $json_data = <<< EOT
+{
+  "actions": [],
+  "lines": [
+    {
+      "listener": "Varek",
+      "speaker": "Lydia",
+      "text": "Do you remember the first time we ventured together, my Thane? You were barely out of Whiterun, and I swore an oath that day to stand at your side. I think Garvilda laughed herself hoarse when you tripped over that root and nearly skewered yourself with your own sword."
+    },
+    {
+      "listener": "Lydia",
+      "speaker": "Jaryra",
+      "text": "Ha! I remember it well. He came charging into Cragslane Cavern like a man possessed, and I was kneeling in the dirt with nothing but chains and despair. He cut my bonds, looked me dead in the eyes, and said… what was it? Something perfectly heroic, I'm sure."
+    },
+    {
+      "listener": "Jaryra",
+      "speaker": "Lydia",
+      "text": "Oh, it was grand. He said, 'You're safe now.' Three words. All that armor, all that steel, and the man had three words in him. I wept. Not from relief, mind you, from laughing so hard I thought my ribs would crack."
+    },
+    {
+      "listener": "Lydia",
+      "speaker": "Jaryra",
+      "text": "Sister, don't tease him too harshly. He's come a long way from that fumbling Thane who couldn't tell a draugr from a door handle. Now he clears barrows, learns Words of Power, and somehow still manages to trip over the same kinds of roots."
+    },
+    {
+      "listener": "Varek",
+      "speaker": "Lydia",
+      "text": "By the gods, we've been through a lot together, haven't we, my Thane? A fumbling warrior, a sworn shield, and a freed slave, walking into crypts that would send most folk running for the hills. And yet here we are, sitting in a dead king's tomb, laughing like we're home. I wouldn't trade a single stumble for all the gold in Belethor's coffers."
+    }
+  ]
+}
+EOT;
+    $fakeScene=json_decode($json_data, true);
+    print_r($fakeScene);
+    $master = new NpcMaster();
+    $npc1 = $master->getByName("Lydia");
+    $npc2 = $master->getByName("Jaryra");
+
+    $actors = [
+        "Lydia" => $npc1,
+        "Jaryra" => $npc2,
+    ];
+
+    $scene = dwemerSplitDirectorScene($fakeScene, static function (array $line) use ($actors): array {
+        chimDirectorActorGlobals($actors[$line['speaker']]);
+        return split_sentences_stream(cleanResponse($line['text']));
+    });
+
+    print_r($scene);
+
+    $scene['schema'] = 'chim.director_scene.v2';
+    $scene['generation'] = (int)($GLOBALS['argv'][5] ?? 0);
+    foreach ($scene['lines'] as $index => &$line) {
+        chimDirectorActorGlobals($actors[$line['speaker']]);
+        $GLOBALS['ENGINE_ROOT'] = $enginePath;
+        $line['actor_refid'] = $actors[$line['speaker']]['refid'] ?? '';
+        $line['utterance_id'] = 'director-' . $scene['id'] . '-' . $index;
+        
+        $line['tts_cache_key'] = md5($line['utterance_id']);
+        $audio = $GLOBALS['ENGINE_ROOT'] . '/soundcache/' . $line['tts_cache_key'] . '.wav';
+
+        error_log($line['utterance_id']. " " . $audio);
+
+        if (!is_file($audio) || filesize($audio) <= 44) callNpcTtsWithFallback($line['text'], 'default', $line['utterance_id']);
+        if (!is_file($audio) || filesize($audio) <= 44) {
+            dwemerDirectorLogError('Director audio generation failed');
+            throw new RuntimeException('Director audio generation failed');
+        }
+    }
+}
+
