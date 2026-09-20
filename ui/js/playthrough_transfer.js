@@ -12,8 +12,8 @@
         return data;
     }
     function setBusy(value) {
-        busy=value;el('close').disabled=value;el('check').disabled=value || !el('file').files.length;
-        el('file').disabled=value;el('name').disabled=value;
+        busy=value;el('close').disabled=value;el('check').disabled=value || !job || !el('file').files.length;
+        el('file').disabled=value || !job;el('name').disabled=value;
         el('profiles').querySelectorAll('select').forEach(select=>select.disabled=value);
         el('progress').hidden=!value;el('progress').removeAttribute('value');validate();
     }
@@ -48,7 +48,7 @@
                 el('status').textContent='Your file is ready. Choose Download file to save it.';
                 if (result.runtime_ready===false) el('error').textContent='The file is ready, but the background worker did not confirm it restarted. Check server status before playing.';
             } else el('status').textContent='Choose a file to check its contents.';
-        } catch (error) { el('error').textContent=error.message;el('status').textContent=''; }
+        } catch (error) { el('error').textContent=job?error.message:`Could not prepare the transfer. ${error.message} Close this dialog and try again.`;el('status').textContent=''; }
         finally { stopPoll();setBusy(false); }
     }
     document.addEventListener('click',event=>{

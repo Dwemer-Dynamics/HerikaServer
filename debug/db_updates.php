@@ -8305,9 +8305,12 @@ if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_pro
 // Keep the installed snapshot functions and pgAdmin comments aligned with the current table policy.
 require_once dirname(__DIR__) . '/lib/playthrough_schema.php';
 require_once dirname(__DIR__) . '/lib/playthrough_preferences.php';
+require_once dirname(__DIR__) . '/lib/playthrough_retention.php';
 $playthroughPolicyConn = ptp_connect();
 if ($playthroughPolicyConn) {
     try {
+        // Upgrade existing metadata before the first save/import; fresh setup also uses this helper.
+        ptr_ensure_schema($playthroughPolicyConn);
         if (!pts_update_playthrough_policy($playthroughPolicyConn)) {
             Logger::error('Playthrough Save table policy update failed; retry the database update.');
         }

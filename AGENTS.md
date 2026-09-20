@@ -1,5 +1,16 @@
 # HerikaServer Agent Notes
 
+## Start here
+
+- This repository is the PHP/PostgreSQL backend for [CHIM](https://github.com/Dwemer-Dynamics/CHIM), the Skyrim client. Read [the agent guide](docs/agent-guide.md), [development checks](docs/building.md), and [custom plugin development](docs/custom-plugins.md) as relevant.
+- Identify whether this is a source checkout or running server; record the branch/commit, installed versions and active runtime path before changes. Target source PRs at `unstable` unless directed otherwise.
+- Preserve credentials, `conf/`, databases, profiles, memories, media and installed extensions. Do not use the running server as a disposable test environment.
+- Work on third-party plugin source in its own maintained repository, not an installed `ext/` copy. Most extension paths are ignored by Git; do not force-add them here.
+- Diagnose with current logs and code, redact secrets/private dialogue, and distinguish PHP checks, database tests, deployment and in-game results.
+- Keep this file and `docs/` in server distributions and updates. Update the linked guides when entry points, build requirements or extension contracts change.
+
+## Paired settings
+
 - Global Settings and Profiles must remain feature-equivalent between their PHP pages and the in-game Prisma Settings hub.
 - When adding, removing, renaming, or changing a setting in `ui/global_settings.php` or `ui/core/core_profiles.php`, update `lib/core/prisma_settings_catalog.php` in the same change.
 - Keep structural fields in `ui/api/chim_global_settings.php` and `ui/api/chim_profile_manager.php` allowlisted and typed. Preserve unknown profile metadata for plugin compatibility, but never map arbitrary client keys to database columns.

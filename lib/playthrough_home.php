@@ -18,7 +18,8 @@ function pth_state($conn): array {
     $ready = pg_fetch_result(pth_query($conn, 'SELECT to_regclass($1) IS NOT NULL AND to_regclass($2) IS NOT NULL',
         [$meta . '.playthrough_profiles', $meta . '.settings']), 0, 0) === 't';
     if (!$ready) return ['available'=>false, 'active_id'=>0, 'token'=>'', 'playthroughs'=>[]];
-    $rows = pg_fetch_all(pth_query($conn, "SELECT p.id,p.name,p.schema_name,p.is_active,p.storage_type,p.retention_kind,p.xmin::text AS row_version,n.oid AS schema_oid,
+    $rows = pg_fetch_all(pth_query($conn, "SELECT p.id,p.name,p.schema_name,p.is_active,p.storage_type,
+        COALESCE(to_jsonb(p)->>'retention_kind','unclassified') AS retention_kind,p.xmin::text AS row_version,n.oid AS schema_oid,
         to_jsonb(p)->>'retention_pinned' AS pinned,p.player_name,p.last_gamets,p.created_at,p.size_bytes,
         to_jsonb(p)->>'player_faction_members' AS player_faction_members,
         obj_description(n.oid,'pg_namespace') AS manifest
