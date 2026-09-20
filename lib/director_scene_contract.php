@@ -1,5 +1,11 @@
 <?php
 
+function dwemerDirectorLogError(string $message, ?Throwable $error = null): void
+{
+    if ($error) $message .= ': ' . $error->getMessage();
+    error_log('[DIRECTOR] ' . $message);
+}
+
 // Constrain the scene to the current cast and each action's existing parameter contract.
 function dwemerDirectorResponseFormat(array $actors, array $catalog, string $player): array
 {
@@ -88,31 +94,51 @@ function dwemerValidateDirectorScene(array $scene, array $actors, array $catalog
     $actions = $scene['actions'] ?? [];
     if (!is_array($lines) || !array_is_list($lines) || count($lines) < 1 || count($lines) > 5
         || !is_array($actions) || !array_is_list($actions) || count($actions) > 3) {
+        dwemerDirectorLogError('Director returned an invalid scene size');
         throw new RuntimeException('Director returned an invalid scene size');
     }
     $result = ['id' => bin2hex(random_bytes(16)), 'lines' => [], 'actions' => []];
     $cast = [];
     foreach ($lines as $index => $line) {
         $lineNumber = $index + 1;
-        if (!is_array($line)) throw new RuntimeException("Director line {$lineNumber}: expected an object");
+        if (!is_array($line)) {
+            $message = "Director line {$lineNumber}: expected an object";
+            dwemerDirectorLogError($message);
+            throw new RuntimeException($message);
+        }
         foreach (['speaker', 'listener', 'text'] as $field) {
             if (!is_string($line[$field] ?? null) || trim($line[$field]) === '') {
-                throw new RuntimeException("Director line {$lineNumber}: missing or empty {$field}");
+                $message = "Director line {$lineNumber}: missing or empty {$field}";
+                dwemerDirectorLogError($message);
+                throw new RuntimeException($message);
             }
         }
         $speaker = trim($line['speaker']);
         $listener = trim($line['listener']);
         $text = trim($line['text']);
         if ($speaker === $player || $speaker === 'The Narrator') {
+            dwemerDirectorLogError("Director line {$lineNumber}: player or narrator cannot speak");
             throw new RuntimeException("Director line {$lineNumber}: player or narrator cannot speak");
         }
-        if (!isset($actors[$speaker])) throw new RuntimeException("Director line {$lineNumber}: speaker is not an eligible NPC");
-        if ($listener !== $player && !isset($actors[$listener])) {
-            throw new RuntimeException("Director line {$lineNumber}: listener is not present");
+        if (!isset($actors[$speaker])) {
+            $message = "Director line {$lineNumber}: speaker is not an eligible NPC";
+            dwemerDirectorLogError($message);
+            throw new RuntimeException($message);
         }
-        if ($speaker === $listener) throw new RuntimeException("Director line {$lineNumber}: speaker and listener are the same");
+        if ($listener !== $player && !isset($actors[$listener])) {
+            $message = "Director line {$lineNumber}: listener is not present";
+            dwemerDirectorLogError($message);
+            throw new RuntimeException($message);
+        }
+        if ($speaker === $listener) {
+            $message = "Director line {$lineNumber}: speaker and listener are the same";
+            dwemerDirectorLogError($message);
+            throw new RuntimeException($message);
+        }
         if (mb_strlen($text) > 600 || preg_match('/[\x00-\x1f]/', $text)) {
-            throw new RuntimeException("Director line {$lineNumber}: text exceeds 600 characters or contains control characters");
+            $message = "Director line {$lineNumber}: text exceeds 600 characters or contains control characters";
+            dwemerDirectorLogError($message);
+            throw new RuntimeException($message);
         }
         $cast[$speaker] = true;
         $result['lines'][] = compact('speaker', 'listener', 'text');
@@ -122,6 +148,7 @@ function dwemerValidateDirectorScene(array $scene, array $actors, array $catalog
     foreach ($actions as $action) {
         if (!is_array($action) || !is_string($action['command_name'] ?? null)
             || !is_string($action['speaker'] ?? null) || !is_int($action['after_line'] ?? null)) {
+            dwemerDirectorLogError('Invalid Director action');
             throw new RuntimeException('Invalid Director action');
         }
         $code = $action['command_name'];
@@ -133,21 +160,25 @@ function dwemerValidateDirectorScene(array $scene, array $actors, array $catalog
         if (!$definition || !in_array($speaker, $definition['speakers'], true)
             || $after < 1 || $after > count($lines)
             || ($speaker !== 'The Narrator' && $result['lines'][$after - 1]['speaker'] !== $speaker)) {
+            dwemerDirectorLogError('Unavailable or incorrectly attached Director action');
             throw new RuntimeException('Unavailable or incorrectly attached Director action');
         }
         $parameters = $action['parameters'] ?? [];
         if (!is_array($parameters) || ($parameters && array_is_list($parameters))) {
+            dwemerDirectorLogError('Invalid Director parameters');
             throw new RuntimeException('Invalid Director parameters');
         }
         $schema = $definition['parameters'] ?? [];
         foreach ($schema['required'] ?? [] as $key) {
             if (!array_key_exists($key, $parameters) || $parameters[$key] === '' || $parameters[$key] === null) {
+                dwemerDirectorLogError('Missing required Director parameter');
                 throw new RuntimeException('Missing required Director parameter');
             }
         }
         foreach ($parameters as $key => $value) {
             $property = $schema['properties'][$key] ?? null;
             if (!is_array($property) || in_array($key, ['authority', 'dispatch', 'action_source'], true)) {
+                dwemerDirectorLogError('Unknown Director parameter');
                 throw new RuntimeException('Unknown Director parameter');
             }
             if ($value === null && !in_array($key, $schema['required'] ?? [], true)) {
@@ -163,6 +194,7 @@ function dwemerValidateDirectorScene(array $scene, array $actors, array $catalog
                 || (isset($property['enum']) && !in_array($value, $property['enum'], true))
                 || (is_numeric($value) && (isset($property['minimum']) && $value < $property['minimum']
                     || isset($property['maximum']) && $value > $property['maximum']))) {
+                dwemerDirectorLogError('Invalid Director parameter value');
                 throw new RuntimeException('Invalid Director parameter value');
             }
         }
@@ -170,7 +202,10 @@ function dwemerValidateDirectorScene(array $scene, array $actors, array $catalog
         $result['actions'][] = ['speaker' => $speaker, 'after_line' => $after,
             'command_name' => $code, 'parameters' => $parameters];
     }
-    if (count($cast) > 3) throw new RuntimeException('Director exceeds three NPC speakers');
+    if (count($cast) > 6) {
+        dwemerDirectorLogError('Director exceeds six NPC speakers');
+        throw new RuntimeException('Director exceeds six NPC speakers');
+    }
     return $result;
 }
 
@@ -182,11 +217,20 @@ function dwemerSplitDirectorScene(array $scene, callable $split): array
     $lastChunk = [];
     foreach ($scene['lines'] as $index => $line) {
         $texts = $split($line);
-        if (!is_array($texts) || !$texts) throw new RuntimeException('Director turn has no speech');
+        if (!is_array($texts) || !$texts) {
+            dwemerDirectorLogError('Director turn has no speech');
+            throw new RuntimeException('Director turn has no speech');
+        }
         foreach ($texts as $text) {
-            if (!is_string($text) || trim($text) === '') throw new RuntimeException('Director speech chunk is empty');
+            if (!is_string($text) || trim($text) === '') {
+                dwemerDirectorLogError('Director speech chunk is empty');
+                throw new RuntimeException('Director speech chunk is empty');
+            }
             $chunks[] = array_replace($line, ['text' => trim($text), 'turn' => $index + 1]);
-            if (count($chunks) > 128) throw new RuntimeException('Director exceeds 128 speech chunks');
+            if (count($chunks) > 128) {
+                dwemerDirectorLogError('Director exceeds 128 speech chunks');
+                throw new RuntimeException('Director exceeds 128 speech chunks');
+            }
         }
         $lastChunk[$index + 1] = count($chunks);
     }
