@@ -179,6 +179,7 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         return split_sentences_stream(cleanResponse($line['text']));
     });
     $scene['schema'] = 'chim.director_scene.v2';
+    $scene['id'] =  bin2hex(random_bytes(16));
     $scene['generation'] = (int)($GLOBALS['argv'][5] ?? 0);
     foreach ($scene['lines'] as $index => &$line) {
         chimDirectorActorGlobals($actors[$line['speaker']]);
