@@ -90,10 +90,13 @@ if (!isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]) ) {
         $nearbyNpcsRaw = DataBeingsInCloseRange($isBoredInstruction);
         $nearbyNpcsList = array_filter(array_map('trim', explode('|', $nearbyNpcsRaw)));
         if ($isBoredInstruction) {
+            $currentParty = json_decode(DataGetCurrentPartyConf(), true);
+            $eligibleBoredActors = is_array($currentParty) ? array_keys($currentParty) : [];
             $allowedActorMap = chimRolemasterBoredActorMap(
                 $nearbyNpcsRaw,
                 (string)$GLOBALS["PLAYER_NAME"],
-                $boredSeedActor
+                $boredSeedActor,
+                $eligibleBoredActors
             );
             $GLOBALS["ROLEMASTER_BORED_ALLOWED_ACTORS"] = $allowedActorMap;
             $historyData .= "# BORED EVENT SCENE\n";

@@ -18,18 +18,42 @@ function chimRolemasterBoredActorKey(string $actorName): string
         : strtolower($actorName);
 }
 
-function chimRolemasterBoredActorMap(string $actorsInRange, string $playerName = '', string $seedActor = ''): array
+function chimRolemasterBoredActorMap(
+    string $actorsInRange,
+    string $playerName = '',
+    string $seedActor = '',
+    ?array $eligibleActors = null
+): array
 {
+    $eligibleActorKeys = null;
+    if ($eligibleActors !== null) {
+        $eligibleActorKeys = [];
+        foreach ($eligibleActors as $eligibleActor) {
+            $eligibleActor = trim((string)$eligibleActor);
+            if ($eligibleActor !== '') {
+                $eligibleActorKeys[chimRolemasterBoredActorKey($eligibleActor)] = true;
+            }
+        }
+    }
+
+    $seedActor = trim($seedActor);
+    if ($seedActor !== '' && $eligibleActorKeys !== null) {
+        $eligibleActorKeys[chimRolemasterBoredActorKey($seedActor)] = true;
+    }
+
     $actors = [];
     foreach (preg_split('/[|\/]/', $actorsInRange) ?: [] as $actor) {
         $actor = trim($actor);
         if ($actor === '' || ($playerName !== '' && strcasecmp($actor, $playerName) === 0)) {
             continue;
         }
-        $actors[chimRolemasterBoredActorKey($actor)] = $actor;
+        $actorKey = chimRolemasterBoredActorKey($actor);
+        if ($eligibleActorKeys !== null && !isset($eligibleActorKeys[$actorKey])) {
+            continue;
+        }
+        $actors[$actorKey] = $actor;
     }
 
-    $seedActor = trim($seedActor);
     if ($seedActor !== '' && ($playerName === '' || strcasecmp($seedActor, $playerName) !== 0)) {
         $actors[chimRolemasterBoredActorKey($seedActor)] = $seedActor;
     }

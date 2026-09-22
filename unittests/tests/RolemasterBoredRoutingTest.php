@@ -31,6 +31,35 @@ final class RolemasterBoredRoutingTest extends TestCase
         ], $actors);
     }
 
+    public function testActorMapLimitsTargetsToActivePartyAndKeepsSeed(): void
+    {
+        $actors = chimRolemasterBoredActorMap(
+            '|Bruce Wayne|Leia|Legendary Dawnguard|Sotne|',
+            'Hawke',
+            'Leia',
+            ['Bruce Wayne', 'Leia']
+        );
+
+        $this->assertSame([
+            'bruce wayne' => 'Bruce Wayne',
+            'leia' => 'Leia',
+        ], $actors);
+    }
+
+    public function testActorMapKeepsSeedWhenActivePartyIsEmpty(): void
+    {
+        $actors = chimRolemasterBoredActorMap(
+            '|Camilla Valerius|Lucan Valerius|',
+            'RANGROO',
+            'Camilla Valerius',
+            []
+        );
+
+        $this->assertSame([
+            'camilla valerius' => 'Camilla Valerius',
+        ], $actors);
+    }
+
     public function testInstructionsRejectInventedActorsAndRequireSeed(): void
     {
         $actors = chimRolemasterBoredActorMap('|Camilla Valerius|Lucan Valerius|', 'RANGROO', 'Camilla Valerius');
