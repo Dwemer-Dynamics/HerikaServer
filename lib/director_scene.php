@@ -182,6 +182,7 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
     $scene['id'] =  bin2hex(random_bytes(16));
     $scene['generation'] = (int)($GLOBALS['argv'][5] ?? 0);
     foreach ($scene['lines'] as $index => &$line) {
+        dwemerDirectorLogError('Processing line ' . $index . ' for speaker ' . $line['speaker'] . ' with text: ' . $line['text']);
         chimDirectorActorGlobals($actors[$line['speaker']]);
         $line['actor_refid'] = $actors[$line['speaker']]['refid'] ?? '';
         $line['utterance_id'] = 'director-' . $scene['id'] . '-' . $index;
