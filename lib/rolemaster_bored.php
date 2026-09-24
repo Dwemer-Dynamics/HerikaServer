@@ -11,6 +11,81 @@ function chimBoredEventChancePasses(int $chance, int $roll): bool
     return $roll < $chance;
 }
 
+function chimBoredEventCaptureActivitySnapshot($db): array
+{
+    $row = $db->fetchOne(
+        "SELECT
+             COALESCE((SELECT MAX(rowid) FROM eventlog), 0) AS event_rowid,
+             COALESCE((SELECT MAX(rowid) FROM speech), 0) AS speech_rowid"
+    );
+
+    if (
+        !is_array($row)
+        || !array_key_exists('event_rowid', $row)
+        || !array_key_exists('speech_rowid', $row)
+        || !is_numeric($row['event_rowid'])
+        || !is_numeric($row['speech_rowid'])
+    ) {
+        throw new RuntimeException('Unable to capture a valid bored activity snapshot');
+    }
+
+    return [
+        'event_rowid' => max(0, intval($row['event_rowid'])),
+        'speech_rowid' => max(0, intval($row['speech_rowid'])),
+    ];
+}
+
+function chimBoredEventFindSupersedingActivity($db, array $snapshot): ?array
+{
+    $eventRowId = max(0, intval($snapshot['event_rowid'] ?? 0));
+    $speechRowId = max(0, intval($snapshot['speech_rowid'] ?? 0));
+    $row = $db->fetchOne(
+        "SELECT activity.activity_rowid, activity.activity_type
+         FROM (VALUES (1)) AS guard(dummy)
+         LEFT JOIN LATERAL (
+             SELECT activity_rowid, activity_type
+             FROM (
+                 SELECT rowid AS activity_rowid, type AS activity_type
+                 FROM eventlog
+                 WHERE rowid > {$eventRowId}
+                   AND (
+                       type = 'user_input'
+                       OR (
+                           type = 'chat'
+                           AND COALESCE(delivery_state, 'spoken') IN ('emitted', 'spoken')
+                       )
+                   )
+                 UNION ALL
+                 SELECT rowid AS activity_rowid, 'speech' AS activity_type
+                 FROM speech
+                 WHERE rowid > {$speechRowId}
+             ) AS superseding_activity
+             LIMIT 1
+         ) AS activity ON TRUE"
+    );
+
+    if (
+        !is_array($row)
+        || !array_key_exists('activity_rowid', $row)
+        || !array_key_exists('activity_type', $row)
+    ) {
+        throw new RuntimeException('Unable to validate the bored activity snapshot');
+    }
+
+    if ($row['activity_rowid'] === null && $row['activity_type'] === null) {
+        return null;
+    }
+
+    if (!is_numeric($row['activity_rowid']) || trim((string)$row['activity_type']) === '') {
+        throw new RuntimeException('Received an invalid bored activity validation result');
+    }
+
+    return [
+        'rowid' => intval($row['activity_rowid']),
+        'type' => trim((string)$row['activity_type']),
+    ];
+}
+
 function chimRolemasterBoredActorKey(string $actorName): string
 {
     return function_exists('mb_strtolower')
