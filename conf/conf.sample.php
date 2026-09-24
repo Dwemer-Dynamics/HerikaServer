@@ -33,6 +33,7 @@ $OGHMA_KNOWLEDGE=""; //Comma-separated specialist knowledge classes available to
 $OGHMA_AMOUNT=1; //Number of Oghma keywords to extract from each response. More keyword extraction will mean longer response times.
 $OGHMA_RESULT_LIMIT=3; //Maximum number of Oghma articles included in one prompt after forced and conversational selection.
 $OGHMA_EXTRACTOR_FALLBACK=false; //Allow one bounded connector fallback for explicit unresolved knowledge requests.
+$OGHMA_MULTILINGUAL_ROUTING=false; //Use the Oghma connector to route unmatched dialogue and validate weak matches in any language.
 $OGHMA_EXTRACTOR_TIMEOUT_MS=1500; //Hard timeout for the optional Oghma connector fallback.
 $PLAYER_RESPEECH=true; //Use default diary connector AI to rewrite player speech. Currently only triggers when starting speech with **.
 $PLAYER_SPEECH_STYLE=""; //Instructions for how the player character speaks and communicates. Used as context when rewriting player dialogue.
