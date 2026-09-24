@@ -8297,6 +8297,40 @@ if ($checkVersion('npc_plugin_extended_data') < 20260919001) {
     $updateVersion('npc_plugin_extended_data', 20260919001);
 }
 
+// Two-way courier letters between the player and Background Life NPCs (lib/bgl_letters.php).
+if ($checkVersion("bgl_letters") < 20260924001) {
+    Logger::debug("Applying bgl_letters 20260924001 - create player/NPC letter correspondence table");
+
+    $db->execQuery("
+        CREATE TABLE IF NOT EXISTS public.bgl_letters (
+            id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            npc_name varchar NOT NULL,
+            npc_refid varchar,
+            direction varchar(16) NOT NULL,
+            title varchar NOT NULL,
+            body text NOT NULL,
+            in_reply_to bigint,
+            status varchar(32) NOT NULL,
+            courier_state varchar(32),
+            courier_name varchar,
+            courier_event_rowid bigint,
+            fee integer DEFAULT 0,
+            sent_gamets bigint,
+            deliver_gamets bigint,
+            read_gamets bigint,
+            discussed_gamets bigint,
+            localts bigint,
+            state_changed_localts bigint
+        )
+    ");
+    $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_letters_npc_idx ON public.bgl_letters (lower(npc_name))");
+    $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_letters_status_idx ON public.bgl_letters (status, courier_state)");
+    $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_letters_reply_idx ON public.bgl_letters (in_reply_to)");
+
+    $updateVersion("bgl_letters", 20260924001);
+    Logger::info("Applied patch bgl_letters 20260924001");
+}
+
 // Install durable event accounting before refreshing the snapshot schema.
 if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_profile_scheduler.sql')) === false) {
     throw new RuntimeException('Dynamic profile migration failed.');

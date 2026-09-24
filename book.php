@@ -101,6 +101,14 @@ if ($alreadyinDb) {
 
 }
 
+// A Background Life letter the player just opened: mark it read and let the sender know.
+try {
+    require_once($path . "lib" . DIRECTORY_SEPARATOR . "bgl_letters.php");
+    chimLetterMarkReadByTitle((string)$title, (int)($_GET["gamets"] ?? 0), (int)($_GET["ts"] ?? 0));
+} catch (Throwable $e) {
+    Logger::warn("[BGL_LETTERS] Could not record letter read: " . $e->getMessage());
+}
+
 $readRequestId = trim(strval($_GET['read_request_id'] ?? ''));
 $bookFormId = trim(strval($_GET['book_form_id'] ?? ''));
 if ($readRequestId !== '' || $bookFormId !== '') {
