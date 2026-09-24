@@ -14,12 +14,7 @@ $GLOBALS["TASKS"]["letters"]["fn"] = function () {
         $GLOBALS["db"] = new sql();
     }
 
-    // Couriers and deliveries only make sense while the game is running.
     require_once($enginePath . "lib/game_activity.php");
-    if (!chimHasRecentGameActivity()) {
-        return;
-    }
-
     require_once($enginePath . "lib/chat_helper_functions.php");
     require_once($enginePath . "lib/data_functions.php");
     require_once($enginePath . "lib/rolemaster_helpers.php");
@@ -29,6 +24,11 @@ $GLOBALS["TASKS"]["letters"]["fn"] = function () {
     require_once($enginePath . "lib/bgl_letters.php");
 
     try {
+        // While the game is closed or idle, hold courier timers instead of letting them expire.
+        if (!chimHasRecentGameActivity()) {
+            chimLetterPauseCourierClock();
+            return;
+        }
         chimLetterCourierTick(new NpcMaster());
     } catch (Throwable $e) {
         Logger::error("[BGL_LETTERS] Courier tick failed: " . $e->getMessage());

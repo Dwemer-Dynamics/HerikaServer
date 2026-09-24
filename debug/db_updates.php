@@ -8314,6 +8314,8 @@ if ($checkVersion("bgl_letters") < 20260924001) {
             courier_state varchar(32),
             courier_name varchar,
             courier_event_rowid bigint,
+            courier_attempts integer DEFAULT 0,
+            delivery_attempts integer DEFAULT 0,
             fee integer DEFAULT 0,
             sent_gamets bigint,
             deliver_gamets bigint,

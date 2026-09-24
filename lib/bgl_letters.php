@@ -4,9 +4,10 @@
  * Two-way courier correspondence between the player and Background Life NPCs.
  *
  * bgl_letters is the single record of every letter in both directions:
- *   to_npc    : written by the player in the Prisma panel. A spawned courier walks to the
- *               player, takes the letter and a fee, and after a travel delay the letter lands
- *               in the NPC's inventory and memory.
+ *   to_npc    : written by the player in the Prisma panel. One spawned courier walks to the
+ *               player and collects every waiting letter for one combined fee; after a travel
+ *               delay each letter lands in its NPC's inventory and memory. If the courier fails
+ *               at any step, the letters are sent anyway (see the courier state machine).
  *               status: awaiting_courier -> in_transit -> delivered | failed
  *   to_player : written by the NPC through Background Life and sent with the vanilla courier.
  *               status: sent -> read
@@ -45,6 +46,26 @@ function chimLetterFee(): int
 function chimLetterCourierTimeout(): int
 {
     return max(30, (int)($GLOBALS['BGL_LETTER_COURIER_TIMEOUT'] ?? 180));
+}
+
+// Maximum player letters per in-game day; 0 means no limit.
+function chimLetterDailyLimit(): int
+{
+    return max(0, (int)($GLOBALS['BGL_LETTER_DAILY_LIMIT'] ?? 0));
+}
+
+function chimLetterDailyLimitReached(): bool
+{
+    $limit = chimLetterDailyLimit();
+    if ($limit === 0) {
+        return false;
+    }
+    $since = chimLetterNowGamets() - (int)round(24 * CHIM_LETTER_GAMETS_PER_HOUR);
+    $row = $GLOBALS['db']->fetchOne(
+        "SELECT COUNT(*) AS n FROM bgl_letters WHERE direction = 'to_npc' AND sent_gamets > $1",
+        [$since]
+    );
+    return (int)($row['n'] ?? 0) >= $limit;
 }
 
 // Distinct from the vanilla courier ("Courier") so CHIM never confuses the two actors.
@@ -207,6 +228,9 @@ function chimLetterSendFromPlayer(NpcMaster $npcMaster, string $refid, string $n
     if ($pending) {
         throw new DomainException("A letter to {$npcName} is still waiting for the courier.");
     }
+    if (chimLetterDailyLimitReached()) {
+        throw new DomainException('The courier service takes no more letters today. Try again tomorrow.');
+    }
 
     if ($replyTo > 0) {
         $original = chimLetterGetById($replyTo);
@@ -244,35 +268,70 @@ function chimLetterSendFromPlayer(NpcMaster $npcMaster, string $refid, string $n
 }
 
 /**
- * Hand the letter over: take the fee, start the travel timer.
- * $viaCourier is false when the courier never arrived and the fallback runs.
+ * Hand over every letter waiting for a courier: one combined fee, one notification, and the
+ * travel timer starts for each. $viaCourier is false when the fallback "teleports" the letters
+ * because the courier could not spawn or reach the player. Returns the number collected.
  */
-function chimLetterCollect(array $letter, bool $viaCourier): void
+function chimLetterCollectAll(bool $viaCourier): int
 {
-    $fee = (int)($letter['fee'] ?? 0);
+    $letters = $GLOBALS['db']->fetchAll(
+        "SELECT * FROM bgl_letters WHERE direction = 'to_npc' AND status = 'awaiting_courier' ORDER BY id ASC"
+    ) ?: [];
+    if (!$letters) {
+        return 0;
+    }
+
+    $fee = 0;
+    $names = [];
+    foreach ($letters as $letter) {
+        $fee += (int)($letter['fee'] ?? 0);
+        $names[$letter['npc_name']] = true;
+    }
     if ($fee > 0) {
         $builder = new SkyrimCommandBuilder();
         // 0x14 is the player, 0xF is gold. Skyrim removes what the player has if they are short.
         $builder->send($builder->ObjectReference->RemoveItem('0x00000014', '0x0000000F', $fee, true));
     }
 
-    $npcName = $letter['npc_name'];
+    $count = count($letters);
+    $what = $count === 1 ? 'your letter' : "your {$count} letters";
+    $to = chimLetterJoinNames(array_keys($names));
     $feeText = $fee > 0 ? " for {$fee} gold" : '';
     chimLetterNotify($viaCourier
-        ? "The courier takes your letter to {$npcName}{$feeText}."
-        : "A courier collected your letter to {$npcName}{$feeText}.");
+        ? "The courier takes {$what} to {$to}{$feeText}."
+        : "A courier collected {$what} to {$to}{$feeText}.");
 
-    chimLetterUpdate((int)$letter['id'], [
-        'status' => 'in_transit',
-        'deliver_gamets' => chimLetterNowGamets() + (int)round(chimLetterDelayHours() * CHIM_LETTER_GAMETS_PER_HOUR),
-    ]);
+    $deliverAt = chimLetterNowGamets() + (int)round(chimLetterDelayHours() * CHIM_LETTER_GAMETS_PER_HOUR);
+    foreach ($letters as $letter) {
+        $state = (string)($letter['courier_state'] ?? 'queued');
+        chimLetterUpdate((int)$letter['id'], [
+            'status' => 'in_transit',
+            'deliver_gamets' => $deliverAt,
+            // The lead letter keeps its courier state; the rest are simply collected.
+            'courier_state' => $state === 'queued' ? 'collected' : $state,
+        ]);
+    }
+    return $count;
+}
+
+function chimLetterJoinNames(array $names): string
+{
+    $names = array_values(array_filter(array_map('chimLetterWireSafe', $names)));
+    if (count($names) <= 1) {
+        return $names[0] ?? 'their recipients';
+    }
+    if (count($names) > 4) {
+        return implode(', ', array_slice($names, 0, 3)) . ' and ' . (count($names) - 3) . ' others';
+    }
+    $last = array_pop($names);
+    return implode(', ', $names) . ' and ' . $last;
 }
 
 /**
  * The letter reaches the NPC: a physical note in their inventory, a history row they will see
  * in dialogue, a long-term memory, and a nudge so Background Life gives them a chance to answer.
  */
-function chimLetterDeliver(NpcMaster $npcMaster, array $letter): bool
+function chimLetterDeliver(NpcMaster $npcMaster, array $letter, bool $placeNote = true): bool
 {
     $npcName = $letter['npc_name'];
     $player = chimLetterPlayerName();
@@ -282,7 +341,9 @@ function chimLetterDeliver(NpcMaster $npcMaster, array $letter): bool
 
     $npc = $npcMaster->getByName($npcName);
     $refid = trim((string)($npc['refid'] ?? $letter['npc_refid'] ?? ''));
-    if ($refid !== '') {
+    // Fail-safe: after repeated delivery errors the note is skipped, but the NPC still learns
+    // the contents below, which is what matters for conversation.
+    if ($refid !== '' && $placeNote) {
         chimLetterPlaceInInventory((string)$letter['title'], $body, chimLetterSignedRefId($refid));
     }
 
@@ -327,10 +388,14 @@ function chimLetterDeliver(NpcMaster $npcMaster, array $letter): bool
  */
 function chimLetterPlaceInInventory(string $title, string $body, int $actorRefId): void
 {
+    // The picture is cosmetic: if rendering fails (missing GD, font or background), the note is
+    // still placed and its text still resolves through the books row.
     if (function_exists('createLetter')) {
         ob_start();
         try {
             createLetter($title, $body);
+        } catch (Throwable $e) {
+            Logger::warn("[BGL_LETTERS] Could not render the letter image for '{$title}': " . $e->getMessage());
         } finally {
             ob_end_clean();
         }
@@ -504,6 +569,15 @@ function chimLetterBuildCorrespondenceBlock(string $npcName, bool $markDiscussed
 }
 
 // ─── Courier state machine ───────────────────────────────────────────────────
+//
+// One courier exists at a time and carries every letter waiting when it arrives. Every path
+// ends with the letters in transit: if the courier cannot spawn, cannot reach the player, or the
+// pipeline stalls for any reason, the letters are "teleported" (collected without a courier).
+// A dismissed courier stays tracked until it is no longer seen, so none are left roaming.
+//
+// courier_state on the lead letter: spawn_requested -> approaching -> departing -> dismissing -> done
+
+const CHIM_LETTER_ACTIVE_COURIER_STATES = "('spawn_requested', 'approaching', 'departing', 'dismissing')";
 
 function chimLetterMaxEventRowId(): int
 {
@@ -521,6 +595,14 @@ function chimLetterEventSeen(string $type, string $needle, int $sinceRowId): boo
     return !empty($row);
 }
 
+// The courier is still in the world: it spawned (possibly late) or an actor scan saw it nearby.
+function chimLetterCourierSighted(string $name, int $sinceRowId): bool
+{
+    return chimLetterEventSeen('status_msg', "spawned@{$name}@", $sinceRowId)
+        || chimLetterEventSeen('infonpc_close', $name, $sinceRowId)
+        || chimLetterEventSeen('infonpc', $name, $sinceRowId);
+}
+
 function chimLetterSetCourierState(array $letter, string $state, array $extra = []): void
 {
     chimLetterUpdate((int)$letter['id'], array_merge([
@@ -529,30 +611,45 @@ function chimLetterSetCourierState(array $letter, string $state, array $extra = 
     ], $extra));
 }
 
-function chimLetterSpawnCourier(array $letter): void
+function chimLetterActiveCourier(): array
+{
+    return $GLOBALS['db']->fetchOne(
+        'SELECT * FROM bgl_letters WHERE courier_state IN ' . CHIM_LETTER_ACTIVE_COURIER_STATES . ' ORDER BY id ASC LIMIT 1'
+    ) ?: [];
+}
+
+function chimLetterSpawnCourier(array $lead): void
 {
     $name = chimLetterCourierName();
     $races = ['nord', 'imperial', 'breton'];
     $genders = ['male', 'female'];
     $marker = chimLetterMaxEventRowId();
 
-    $queued = function_exists('npcProfileBase')
-        ? npcProfileBase($name, 'merchant', $races[array_rand($races)], $genders[array_rand($genders)], 'nearby', '0')
-        : false;
+    $queued = false;
+    try {
+        $queued = function_exists('npcProfileBase')
+            && npcProfileBase($name, 'merchant', $races[array_rand($races)], $genders[array_rand($genders)], 'nearby', '0');
+    } catch (Throwable $e) {
+        Logger::warn('[BGL_LETTERS] Courier spawn failed: ' . $e->getMessage());
+    }
 
     if (!$queued) {
-        Logger::warn("[BGL_LETTERS] Could not queue courier spawn for letter {$letter['id']}; using fallback");
-        chimLetterCollect($letter, false);
-        chimLetterSetCourierState($letter, 'done');
+        Logger::warn("[BGL_LETTERS] Could not queue a courier for letter {$lead['id']}; teleporting the letters");
+        chimLetterCollectAll(false);
+        chimLetterSetCourierState($lead, 'done');
         return;
     }
-    chimLetterSetCourierState($letter, 'spawn_requested', ['courier_name' => $name, 'courier_event_rowid' => $marker]);
+    chimLetterSetCourierState($lead, 'spawn_requested', [
+        'courier_name' => $name,
+        'courier_event_rowid' => $marker,
+        'courier_attempts' => 0,
+    ]);
 }
 
 // Give the spawned courier a small profile and make sure it is friendly, then walk to the player.
-function chimLetterSendCourierToPlayer(NpcMaster $npcMaster, array $letter): bool
+function chimLetterSendCourierToPlayer(NpcMaster $npcMaster, array $lead): bool
 {
-    $name = $letter['courier_name'];
+    $name = $lead['courier_name'];
     $courier = $npcMaster->getByName($name);
     $refid = trim((string)($courier['refid'] ?? ''));
     if (!$courier || $refid === '') {
@@ -563,7 +660,7 @@ function chimLetterSendCourierToPlayer(NpcMaster $npcMaster, array $letter): boo
     $courier['core'] = "{$name}. A courier who carries letters across Skyrim for a small fee.";
     $courier['npc_static_bio'] = "{$name} is a courier. They collect sealed letters from travelers and deliver them anywhere in Skyrim.";
     $courier['speechstyle'] = 'Brisk, polite and practical, like someone with many more letters to deliver today.';
-    $courier['goals'] = "Collect a sealed letter from {$player} addressed to {$letter['npc_name']}, take the courier fee, promise delivery, then leave. Never fight.";
+    $courier['goals'] = "Collect sealed letters from {$player}, take the courier fee, promise delivery, then leave. Never fight.";
     $npcMaster->updateByArray($courier);
 
     $builder = new SkyrimCommandBuilder();
@@ -572,17 +669,48 @@ function chimLetterSendCourierToPlayer(NpcMaster $npcMaster, array $letter): boo
     $builder->send($builder->Actor->SetFactionRank("0x{$refid}", '0x0001dd09', 1));
 
     $marker = chimLetterMaxEventRowId();
-    chimLetterQueueCommand("rolecommand|moveToPlayer@{$name}@letter{$letter['id']}@7");
-    chimLetterSetCourierState($letter, 'approaching', ['courier_event_rowid' => $marker]);
+    chimLetterQueueCommand("rolecommand|moveToPlayer@{$name}@letter{$lead['id']}@7");
+    chimLetterSetCourierState($lead, 'approaching', ['courier_event_rowid' => $marker]);
     return true;
 }
 
-function chimLetterDismissCourier(array $letter): void
+// Send Despawn and keep watching; chimLetterCourierTick re-sends it while the courier is still seen.
+function chimLetterDismissCourier(array $lead): void
 {
-    $name = (string)($letter['courier_name'] ?? '');
-    if ($name !== '') {
-        chimLetterQueueCommand("rolecommand|Despawn@{$name}@0");
+    $name = (string)($lead['courier_name'] ?? '');
+    if ($name === '') {
+        chimLetterSetCourierState($lead, 'done');
+        return;
     }
+    $marker = chimLetterMaxEventRowId();
+    chimLetterQueueCommand("rolecommand|Despawn@{$name}@0");
+    chimLetterSetCourierState($lead, 'dismissing', [
+        'courier_event_rowid' => $marker,
+        'courier_attempts' => (int)($lead['courier_attempts'] ?? 0) + 1,
+    ]);
+}
+
+// Fail-safe: deliver the letters without the courier, and clean up whatever courier may exist.
+function chimLetterTeleportAndDismiss(array $lead, string $reason): void
+{
+    Logger::warn("[BGL_LETTERS] {$reason}; teleporting letters (lead letter {$lead['id']})");
+    chimLetterCollectAll(false);
+    chimLetterDismissCourier($lead);
+}
+
+/**
+ * Pause courier timers while the game is closed or idle, so a returning player does not find
+ * their letters teleported just because they were away. Called by the processor instead of a tick.
+ */
+function chimLetterPauseCourierClock(): void
+{
+    if (!chimLetterTableReady()) {
+        return;
+    }
+    $GLOBALS['db']->execQuery(
+        'UPDATE bgl_letters SET state_changed_localts = ' . time()
+        . " WHERE status = 'awaiting_courier' OR courier_state IN " . CHIM_LETTER_ACTIVE_COURIER_STATES
+    );
 }
 
 /** One step of the courier pipeline plus due deliveries. Called every service tick. */
@@ -594,11 +722,21 @@ function chimLetterCourierTick(NpcMaster $npcMaster): void
 
     $timeout = chimLetterCourierTimeout();
     $now = time();
+    $active = chimLetterActiveCourier();
 
-    // Only one courier is ever in the world.
-    $active = $GLOBALS['db']->fetchOne(
-        "SELECT * FROM bgl_letters WHERE courier_state IN ('spawn_requested', 'approaching', 'departing') ORDER BY id ASC LIMIT 1"
+    // Watchdog: whatever went wrong, no letter waits for a courier longer than this.
+    $watchdog = $timeout * 2 + 120;
+    $stale = $GLOBALS['db']->fetchOne(
+        "SELECT id FROM bgl_letters WHERE status = 'awaiting_courier' AND state_changed_localts < " . ($now - $watchdog) . ' LIMIT 1'
     );
+    if ($stale) {
+        Logger::warn("[BGL_LETTERS] Letters waited over {$watchdog}s for a courier; teleporting them");
+        chimLetterCollectAll(false);
+        if ($active && in_array($active['courier_state'], ['spawn_requested', 'approaching'], true)) {
+            chimLetterDismissCourier($active);
+        }
+        $active = chimLetterActiveCourier();
+    }
 
     if ($active) {
         $state = $active['courier_state'];
@@ -608,35 +746,53 @@ function chimLetterCourierTick(NpcMaster $npcMaster): void
 
         if ($state === 'spawn_requested') {
             if (chimLetterEventSeen('status_msg', "spawned@{$name}@", $marker)) {
-                chimLetterSendCourierToPlayer($npcMaster, $active);
+                if (!chimLetterSendCourierToPlayer($npcMaster, $active) && $age > $timeout) {
+                    chimLetterTeleportAndDismiss($active, 'Courier spawned but never registered');
+                }
             } elseif ($age > $timeout) {
-                Logger::warn("[BGL_LETTERS] Courier did not spawn for letter {$active['id']}; using fallback");
-                chimLetterCollect($active, false);
-                chimLetterSetCourierState($active, 'done');
+                // It may still appear late; dismissing keeps watching for it.
+                chimLetterTeleportAndDismiss($active, 'Courier did not spawn in time');
             }
         } elseif ($state === 'approaching') {
             $arrived = chimLetterEventSeen('status_msg', "reached_destination_player@{$name}", $marker)
                 || chimLetterEventSeen('infonpc_close', $name, $marker);
             if ($arrived) {
+                $waiting = $GLOBALS['db']->fetchAll(
+                    "SELECT npc_name, fee FROM bgl_letters WHERE direction = 'to_npc' AND status = 'awaiting_courier'"
+                ) ?: [];
+                $count = max(1, count($waiting));
+                $fee = array_sum(array_map(fn($l) => (int)($l['fee'] ?? 0), $waiting));
                 $player = chimLetterWireSafe(chimLetterPlayerName());
-                $fee = (int)$active['fee'];
+                $what = $count === 1 ? 'the sealed letter' : "the {$count} sealed letters";
                 $feeText = $fee > 0 ? " and the {$fee} gold fee" : '';
+                $recipients = chimLetterJoinNames(array_values(array_unique(array_column($waiting, 'npc_name'))));
                 chimLetterQueueCommand(
-                    "rolecommand|Instruction@{$name}@Greet {$player} briefly, take the sealed letter for "
-                    . chimLetterWireSafe($active['npc_name']) . "{$feeText}, promise it will be delivered, then say farewell.@0"
+                    "rolecommand|Instruction@{$name}@Greet {$player} briefly, take {$what} for {$recipients}{$feeText}, promise delivery, then say farewell.@0"
                 );
-                chimLetterCollect($active, true);
+                chimLetterCollectAll(true);
                 chimLetterSetCourierState($active, 'departing');
             } elseif ($age > $timeout) {
-                Logger::warn("[BGL_LETTERS] Courier never reached the player for letter {$active['id']}; using fallback");
-                chimLetterCollect($active, false);
+                chimLetterTeleportAndDismiss($active, 'Courier never reached the player');
+            }
+        } elseif ($state === 'departing') {
+            // Leave time for the farewell line before the courier vanishes.
+            if ($age > 40) {
                 chimLetterDismissCourier($active);
+            }
+        } elseif ($state === 'dismissing') {
+            $attempts = (int)($active['courier_attempts'] ?? 1);
+            if (chimLetterCourierSighted($name, $marker)) {
+                if ($age >= 20) {
+                    if ($attempts < 3) {
+                        chimLetterDismissCourier($active);
+                    } else {
+                        Logger::warn("[BGL_LETTERS] Courier {$name} still seen after {$attempts} despawn attempts; giving up");
+                        chimLetterSetCourierState($active, 'done');
+                    }
+                }
+            } elseif ($age >= 30) {
                 chimLetterSetCourierState($active, 'done');
             }
-        } elseif ($state === 'departing' && $age > 40) {
-            // Leave time for the farewell line before the courier vanishes.
-            chimLetterDismissCourier($active);
-            chimLetterSetCourierState($active, 'done');
         }
     } else {
         $next = $GLOBALS['db']->fetchOne(
@@ -647,17 +803,19 @@ function chimLetterCourierTick(NpcMaster $npcMaster): void
         }
     }
 
-    // Deliveries whose travel time has passed.
+    // Deliveries whose travel time has passed. A failed delivery is retried; after three failures
+    // the letter still reaches the NPC's memory, only without the physical note.
     $nowGamets = chimLetterNowGamets();
     $due = $GLOBALS['db']->fetchAll(
         "SELECT * FROM bgl_letters WHERE direction = 'to_npc' AND status = 'in_transit' AND deliver_gamets <= {$nowGamets} ORDER BY id ASC LIMIT 5"
     ) ?: [];
     foreach ($due as $letter) {
+        $attempts = (int)($letter['delivery_attempts'] ?? 0);
         try {
-            chimLetterDeliver($npcMaster, $letter);
+            chimLetterDeliver($npcMaster, $letter, $attempts < 3);
         } catch (Throwable $e) {
-            Logger::error("[BGL_LETTERS] Delivery failed for letter {$letter['id']}: " . $e->getMessage());
-            chimLetterUpdate((int)$letter['id'], ['status' => 'failed']);
+            Logger::error('[BGL_LETTERS] Delivery attempt ' . ($attempts + 1) . " failed for letter {$letter['id']}: " . $e->getMessage());
+            chimLetterUpdate((int)$letter['id'], ['delivery_attempts' => $attempts + 1]);
         }
     }
 }
