@@ -8,6 +8,7 @@ require_once dirname(__DIR__, 2) . '/lib/oghma_parity.php';
 require_once dirname(__DIR__, 2) . '/lib/oghma_retrieval.php';
 require_once dirname(__DIR__, 2) . '/lib/oghma_catalog.php';
 require_once dirname(__DIR__, 2) . '/lib/oghma_forced_context.php';
+require_once dirname(__DIR__, 2) . '/lib/oghma_multilingual.php';
 
 final class OghmaParityTest extends TestCase
 {
@@ -23,7 +24,7 @@ final class OghmaParityTest extends TestCase
     protected function setUp(): void
     {
         foreach (['OGHMA_INFINIUM','OGHMA_AMOUNT','OGHMA_RESULT_LIMIT','OGHMA_EXTRACTOR_FALLBACK',
-            'OGHMA_EXTRACTOR_TIMEOUT_MS','OGHMA_CUSTOM','CORE_CONNECTOR_OGHMA_CUSTOM',
+            'OGHMA_EXTRACTOR_TIMEOUT_MS','OGHMA_MULTILINGUAL_ROUTING','OGHMA_CUSTOM','CORE_CONNECTOR_OGHMA_CUSTOM',
             'RACIAL_OGHMA','LOCATION_OGHMA','CHIM_CORE_CURRENT_PROFILE_DATA','CHIM_CORE_CURRENT_NPC_DATA',
             'OGHMA_PARITY_RESULT','OGHMA_HINT','OGHMA_INJECTED_TOPICS','OGHMA_INJECTED_PAYLOADS'] as $key) {
             $this->savedGlobals[$key] = ['exists' => array_key_exists($key, $GLOBALS), 'value' => $GLOBALS[$key] ?? null];
@@ -322,6 +323,113 @@ final class OghmaParityTest extends TestCase
         }
     }
 
+
+    public function testMultilingualRoutingPreservesNativeResultsOnAbstentionAndFailure(): void
+    {
+        $db = $this->catalogDatabase();
+        $settings = chimOghmaEffectiveSettings();
+        $settings['values']['enabled'] = true;
+        $settings['values']['multilingual_routing_enabled'] = true;
+        $settings['values']['connector_id'] = '42';
+        foreach ([false, 'NONE', 'Not a real catalog topic', str_repeat('x', 161)] as $answer) {
+            $result = chimOghmaNewResult('grounded', $settings, true);
+            $result['topics'] = ['whiterun'];
+            $result['matches'] = [['topic' => 'whiterun', 'source' => 'compact alias']];
+            chimOghmaRouteMultilingual($db, $result, 'Čo vieš o Vaermine?', '', static fn() => $answer);
+            $this->assertTrue($result['fallback']['attempted']);
+            $this->assertSame(['whiterun'], $result['topics']);
+            $this->assertSame('grounded', $result['status']);
+        }
+        chimOghmaRouteMultilingual($db, $result, 'Čo vieš o Vaermine?', '', static function () {
+            throw new RuntimeException('provider failed');
+        });
+        $this->assertSame(['whiterun'], $result['topics']);
+        $this->assertSame('fallback_failed', $result['fallback']['status']);
+    }
+
+    public function testMultilingualRoutingSkipsStrongDisabledAndUnconfiguredRequests(): void
+    {
+        $settings = chimOghmaEffectiveSettings();
+        $settings['values']['enabled'] = true;
+        $settings['values']['multilingual_routing_enabled'] = true;
+        $settings['values']['connector_id'] = '42';
+        foreach (['strong', 'mixed', 'disabled', 'oghma_disabled', 'ineligible', 'unconfigured', 'empty'] as $case) {
+            $result = chimOghmaNewResult('no_match', $settings, $case !== 'ineligible');
+            if (in_array($case, ['strong', 'mixed'], true)) {
+                $result['topics'] = ['whiterun'];
+                $result['matches'] = [['topic' => 'whiterun', 'source' => 'canonical']];
+                if ($case === 'mixed') $result['matches'][] = ['topic' => 'other', 'source' => 'phonetic'];
+            }
+            if ($case === 'disabled') $result['settings']['values']['multilingual_routing_enabled'] = false;
+            if ($case === 'oghma_disabled') $result['settings']['values']['enabled'] = false;
+            if ($case === 'unconfigured') $result['settings']['values']['connector_id'] = '';
+            $calls = 0;
+            chimOghmaRouteMultilingual($this->catalogDatabase(), $result, $case === 'empty' ? '' : 'Thanks.', '',
+                static function () use (&$calls) { $calls++; return 'NONE'; });
+            $this->assertSame(0, $calls, $case);
+            $this->assertFalse($result['fallback']['attempted'], $case);
+        }
+    }
+
+    public function testSemanticReplacementPrecedesArticleLimitsAccessAndAudit(): void
+    {
+        $row = ['topic' => 'Psijic Order', 'aliases' => '', 'tags' => 'Ancient Way',
+            'knowledge_class' => 'mage', 'topic_desc' => 'Restricted lore',
+            'knowledge_class_basic' => 'esoteric', 'topic_desc_basic' => 'Basic lore'];
+        $db = new class($row) {
+            public array $audit = [];
+            public function __construct(private array $row) {}
+            public function fetchAll(string $query): array { return [$this->row]; }
+            public function fetchOne(string $query): array { return $this->row; }
+            public function escape(string $value): string { return $value; }
+            public function insert(string $table, array $row): void { $this->audit = $row; }
+        };
+        $settings = chimOghmaEffectiveSettings();
+        $settings['values'] = array_replace($settings['values'], [
+            'enabled' => true, 'multilingual_routing_enabled' => true, 'connector_id' => '42', 'result_limit' => 1,
+        ]);
+        foreach ([[], ['mage']] as $tags) {
+            $result = chimOghmaNewResult('grounded', $settings, true);
+            $result['topics'] = ['Anu'];
+            $result['matches'] = [['topic' => 'Anu', 'source' => 'compact alias']];
+            $calls = 0;
+            chimOghmaRouteMultilingual($db, $result, 'Povedz mi viac o Psijikoch.', '',
+                static function (array $messages) use (&$calls) {
+                    $calls++;
+                    return 'Psijic Order';
+                });
+            $this->assertSame(1, $calls);
+            $this->assertSame(['Psijic Order'], $result['topics']);
+            $GLOBALS['OGHMA_PARITY_RESULT'] =& $result;
+            $this->assertTrue(chimOghmaAddPromptArticle($row, $tags, 'conversation', true));
+            $this->assertFalse(chimOghmaAddPromptArticle(['topic' => 'location'], $tags, 'location', true));
+            $this->assertCount(1, $result['articles']);
+            $this->assertSame($tags === [] ? 'denied' : 'advanced', $result['articles'][0]['access']);
+            $xml = chimOghmaRenderKnowledgeFragment($result['articles'], $result['status']);
+            if ($tags === []) $this->assertStringNotContainsString('Restricted lore', $xml);
+            $result['prompt_sha256'] = hash('sha256', $xml);
+            chimOghmaRecordAudit($db, $result);
+            $this->assertSame(['Psijic Order'], json_decode($db->audit['grounded'], true)['topics']);
+            $this->assertSame('multilingual', json_decode($db->audit['fallback'], true)['mode']);
+            $this->assertSame(hash('sha256', $xml), $db->audit['prompt_sha256']);
+            unset($GLOBALS['OGHMA_PARITY_RESULT']);
+        }
+    }
+
+    public function testSemanticTagsRequireUniquenessAcrossTheWholeCatalog(): void
+    {
+        $rows = [];
+        for ($i = 0; $i < 10; $i++) $rows[] = ['topic' => 'Topic ' . $i, 'tags' => 'Other ' . $i];
+        $rows[0]['tags'] = 'Shared Event, Unique Event';
+        $rows[9]['tags'] = 'Shared Event';
+        $db = new class($rows) {
+            public function __construct(private array $rows) {}
+            public function fetchAll(string $query): array { return $this->rows; }
+        };
+        $this->assertNull(chimOghmaResolveSemanticTopic($db, 'Shared Event'));
+        $this->assertSame('Topic 0', chimOghmaResolveSemanticTopic($db, 'Unique Event'));
+        $this->assertNull(chimOghmaResolveSemanticTopic($db, "Topic 0\nTopic 1"));
+    }
 
     private function catalogDatabase(): object
     {

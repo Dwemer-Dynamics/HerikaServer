@@ -143,6 +143,7 @@ function chimOghmaEntityLexicon($db): array
     $phrases = [];
     $retrievalPhrases = [];
     $tagPhrases = [];
+    $exactTagOwners = [];
     $topicCategories = [];
     foreach ($rows as $row) {
         $topic = strval($row['topic'] ?? '');
@@ -170,6 +171,7 @@ function chimOghmaEntityLexicon($db): array
         }
         foreach (chimOghmaSplitAliasValues(strval($row['tags'] ?? '')) as $tag) {
             $phrase = chimOghmaStrictEntityPhrase($tag);
+            if ($phrase !== '') $exactTagOwners[$phrase][$topic] = true;
             $canonicalPhrase = chimOghmaCanonicalizeReviewedPhrase($phrase);
             if ($phrase !== '' && $canonicalPhrase !== '') {
                 $tagPhrases[$canonicalPhrase]['owners'][$topic] = true;
@@ -272,6 +274,7 @@ function chimOghmaEntityLexicon($db): array
         'retrieval_phrase_entries' => $retrievalPhraseEntries,
         'maximum_retrieval_phrase_tokens' => $maximumRetrievalPhraseTokens,
         'tag_phrase_entries' => $tagPhraseEntries,
+        'exact_tag_owners' => $exactTagOwners,
         'maximum_tag_tokens' => $maximumTagTokens,
     ];
     if (is_object($db)) {

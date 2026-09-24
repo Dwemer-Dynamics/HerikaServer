@@ -101,6 +101,7 @@ function chimPortableGlobalFields(): array
         'SCENE_CLASSIFIER_ENABLED' => 'boolean',
         'OGHMA_CUSTOM' => 'boolean',
         'OGHMA_EXTRACTOR_FALLBACK' => 'boolean',
+        'OGHMA_MULTILINGUAL_ROUTING' => 'boolean',
         'OGHMA_EXTRACTOR_TIMEOUT_MS' => 'integer',
         'OGHMA_RESULT_LIMIT' => 'integer',
     ];

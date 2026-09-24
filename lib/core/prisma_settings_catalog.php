@@ -34,6 +34,7 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'LOCATION_OGHMA', 'type' => 'boolean'],
             ['name' => 'CORE_CONNECTOR_OGHMA_CUSTOM', 'type' => 'foreign:core_llm_connector:id:label'],
             ['name' => 'OGHMA_EXTRACTOR_FALLBACK', 'type' => 'boolean'],
+            ['name' => 'OGHMA_MULTILINGUAL_ROUTING', 'type' => 'boolean'],
             ['name' => 'OGHMA_EXTRACTOR_TIMEOUT_MS', 'type' => 'integer', 'min' => 250, 'max' => 3000],
         ],
         'Memory' => [
