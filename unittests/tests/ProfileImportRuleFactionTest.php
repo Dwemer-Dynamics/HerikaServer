@@ -37,11 +37,10 @@ final class ProfileImportRuleFactionTest extends TestCase
         $this->assertStringContainsString('FROM unnest($factionsArray) AS npc_faction(name)', $runtime);
         $this->assertStringContainsString('npc_faction.name ~ r.match_faction', $runtime);
         $this->assertStringContainsString('ORDER BY r.priority ASC, r.id ASC', $runtime);
-        $npcDataBlock = substr($runtime, strpos($runtime, '$currentNpcData["base"]'));
-        $this->assertLessThan(
-            strpos($npcDataBlock, 'if (sizeof($splitNameBase)>1)'),
-            strpos($npcDataBlock, '$factionList = [];'),
-            'Faction matching must default to an empty list for reduced addnpc payloads.'
+        $this->assertStringContainsString(
+            '$factionList = $extended[\'factions\'] ?? [];',
+            $runtime,
+            'Reduced addnpc payloads must retain known factions for profile-rule matching.'
         );
     }
 

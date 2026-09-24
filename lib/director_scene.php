@@ -94,13 +94,26 @@ function chimRequestDirectorScene($connection, array $prompt, array $actors, arr
         $connection->open($prompt, ['response_format' => $format, 'MAX_TOKENS' => 4000]);
         do { $connection->process(); } while (!$connection->isDone());
         $raw = $connection->close('director_scene');
+        $raw = trim($raw);
+        // Accept one complete Markdown JSON fence, but keep surrounding prose invalid.
+        if (preg_match('/\A```(?:json)?[ \t]*\R(.*)\R```[ \t]*\z/is', $raw, $match)) {
+            $raw = trim($match[1]);
+        }
         try {
             $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
         } catch (JsonException $error) {
-            throw new RuntimeException('Director did not return JSON: ' . $error->getMessage(), 0, $error);
+            $message = 'Director did not return JSON: ' . $error->getMessage();
+            dwemerDirectorLogError($message, $error);
+            throw new RuntimeException($message, 0, $error);
         }
-        if (!is_array($decoded)) throw new RuntimeException('Director did not return a scene object');
+        if (!is_array($decoded)) {
+            dwemerDirectorLogError('Director did not return a scene object');
+            throw new RuntimeException('Director did not return a scene object');
+        }
         return dwemerValidateDirectorScene($decoded, $actors, $catalog, $player);
+    } catch (Throwable $error) {
+        dwemerDirectorLogError('Director request failed', $error);
+        throw $error;
     } finally {
         foreach ($keys as $key) {
             if (array_key_exists($key, $saved)) $GLOBALS[$key] = $saved[$key];
@@ -116,6 +129,7 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
     require_once __DIR__ . '/core/tts_connector.class.php';
     require_once __DIR__ . '/../functions/functions.php';
     $directorConnector = $GLOBALS['CHIM_CORE_CURRENT_CONNECTOR_DATA'];
+    $CACHE_ENGINE_ROOT=$GLOBALS['ENGINE_ROOT'];
     $master = new NpcMaster();
     $profiles = new CoreProfile();
     $player = (string)$GLOBALS['PLAYER_NAME'];
@@ -147,7 +161,10 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         $bio['past_events'] = array_slice($bio['past_events'], -2);
         $context[] = $bio;
     }
-    if (!$actors) throw new RuntimeException('No eligible Director actors');
+    if (!$actors) {
+        dwemerDirectorLogError('No eligible Director actors');
+        throw new RuntimeException('No eligible Director actors');
+    }
     $actionActors = $actors;
     $narrator = (new Narrator())->getNarratorData();
     if ($narrator) $actionActors['The Narrator'] = $narrator;
@@ -167,19 +184,26 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         return split_sentences_stream(cleanResponse($line['text']));
     });
     $scene['schema'] = 'chim.director_scene.v2';
+    $scene['id'] =  bin2hex(random_bytes(16));
     $scene['generation'] = (int)($GLOBALS['argv'][5] ?? 0);
     foreach ($scene['lines'] as $index => &$line) {
         chimDirectorActorGlobals($actors[$line['speaker']]);
         $line['actor_refid'] = $actors[$line['speaker']]['refid'] ?? '';
         $line['utterance_id'] = 'director-' . $scene['id'] . '-' . $index;
         $line['tts_cache_key'] = md5($line['utterance_id']);
-        $audio = $GLOBALS['ENGINE_ROOT'] . '/soundcache/' . $line['tts_cache_key'] . '.wav';
+        $audio = $CACHE_ENGINE_ROOT . '/soundcache/' . $line['tts_cache_key'] . '.wav';
         if (!is_file($audio) || filesize($audio) <= 44) callNpcTtsWithFallback($line['text'], 'default', $line['utterance_id']);
-        if (!is_file($audio) || filesize($audio) <= 44) throw new RuntimeException('Director audio generation failed');
+        if (!is_file($audio) || filesize($audio) <= 44) {
+            dwemerDirectorLogError('Director audio generation failed');
+            throw new RuntimeException('Director audio generation failed');
+        }
     }
     unset($line);
     $db = $GLOBALS['db'];
-    if ($db->query('BEGIN') === false) throw new RuntimeException('Director publication failed');
+    if ($db->query('BEGIN') === false) {
+        dwemerDirectorLogError('Director publication failed');
+        throw new RuntimeException('Director publication failed');
+    }
     try {
         foreach ($scene['lines'] as $index => $line) {
             if (!$db->insertReturningId('eventlog', ['type' => 'chat', 'ts' => time() + $index,
@@ -188,6 +212,7 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
                 'people' => '|' . $line['speaker'] . '|' . $line['listener'] . '|',
                 'location' => $GLOBALS['CACHE_LOCATION'] ?? '', 'party' => $GLOBALS['CACHE_PARTY'] ?? '',
                 'utterance_id' => $line['utterance_id'], 'delivery_state' => 'pending'], 'rowid')) {
+                dwemerDirectorLogError('Director pending history failed');
                 throw new RuntimeException('Director pending history failed');
             }
         }
@@ -195,11 +220,16 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         if (!$db->insertReturningId('rolemaster', ['localts' => time(), 'ttl' => 600, 'type' => 'director_scene', 'data' => $json], 'rowid')
             || !$db->insertReturningId('responselog', ['localts' => time(), 'sent' => 0, 'actor' => 'rolemaster',
                 'text' => '', 'action' => 'rolecommand|DirectorScene@' . base64_encode($json), 'tag' => 'director_scene:' . $scene['id']], 'rowid')) {
+            dwemerDirectorLogError('Director scene queue failed');
             throw new RuntimeException('Director scene queue failed');
         }
-        if ($db->query('COMMIT') === false) throw new RuntimeException('Director commit failed');
+        if ($db->query('COMMIT') === false) {
+            dwemerDirectorLogError('Director commit failed');
+            throw new RuntimeException('Director commit failed');
+        }
     } catch (Throwable $error) {
         $db->query('ROLLBACK');
+        dwemerDirectorLogError('Director publication transaction rolled back', $error);
         throw $error;
     }
     Logger::info('[DIRECTOR] Authored scene queued: ' . $scene['id'] . ' lines=' . count($scene['lines']));

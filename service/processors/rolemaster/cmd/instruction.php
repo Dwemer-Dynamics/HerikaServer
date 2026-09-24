@@ -151,7 +151,7 @@ if (!$isBoredInstruction) {
             $commonprompt = (!empty($promptData['custom_prompt'])) ? $promptData['custom_prompt'] : $promptData['default_prompt'];
         }
     } catch (Exception $e) {
-        Logger::warn("Failed to load director_examples_prompt from database, using hardcoded fallback: " . $e->getMessage());
+        Logger::warn("[DIRECTOR] Failed to load director_examples_prompt from database, using hardcoded fallback: " . $e->getMessage());
     }
 
     // Hardcoded fallback if database query failed
@@ -213,7 +213,7 @@ user request: actor \"a\" leaves the place
                 $directorSystemPrompt = (!empty($promptData['custom_prompt'])) ? $promptData['custom_prompt'] : $promptData['default_prompt'];
             }
         } catch (Exception $e) {
-            Logger::warn("Failed to load {$directorSystemPromptKey} from database, using hardcoded fallback: " . $e->getMessage());
+            Logger::warn("[DIRECTOR] Failed to load {$directorSystemPromptKey} from database, using hardcoded fallback: " . $e->getMessage());
         }
         
         if (!$directorSystemPrompt) {
@@ -240,7 +240,7 @@ user request: actor \"a\" leaves the place
                 }
             } catch (Exception $e) {
                 Logger::warn(
-                    "Failed to load director_bored_event_rules from database, using hardcoded fallback: "
+                    "[DIRECTOR] Failed to load director_bored_event_rules from database, using hardcoded fallback: "
                     . $e->getMessage()
                 );
             }
@@ -259,7 +259,7 @@ user request: actor \"a\" leaves the place
                     $directorInstructionRules = (!empty($promptData['custom_prompt'])) ? $promptData['custom_prompt'] : $promptData['default_prompt'];
                 }
             } catch (Exception $e) {
-                Logger::warn("Failed to load director_instruction_rules from database, using hardcoded fallback: " . $e->getMessage());
+                Logger::warn("[DIRECTOR] Failed to load director_instruction_rules from database, using hardcoded fallback: " . $e->getMessage());
             }
 
             if (!$directorInstructionRules) {
@@ -339,7 +339,7 @@ user request: actor \"a\" leaves the place
                     $GLOBALS["ROLEMASTER_BORED_ALLOWED_ACTORS"] ?? []
                 );
                 Logger::info(
-                    "Queued bored rolemaster instruction for '{$characterName}'"
+                    "[DIRECTOR] Queued bored rolemaster instruction for '{$characterName}'"
                     . ($canonicalListener === null ? " without a valid listener" : " with listener '{$canonicalListener}'")
                 );
             }
@@ -415,11 +415,11 @@ user request: actor \"a\" leaves the place
                     $boredSeedActor
                 );
                 if (empty($response["instructions"])) {
-                    Logger::warn("Discarded bored rolemaster response because it omitted the selected actor or used no eligible nearby actors");
+                    Logger::warn("[DIRECTOR] Discarded bored rolemaster response because it omitted the selected actor or used no eligible nearby actors");
                 } elseif (count($response["instructions"]) !== $originalInstructionCount) {
                     $discardedCount = $originalInstructionCount - count($response["instructions"]);
                     Logger::info(
-                        "Discarded {$discardedCount} secondary or invalid bored rolemaster instruction(s); "
+                        "[DIRECTOR] Discarded {$discardedCount} secondary or invalid bored rolemaster instruction(s); "
                         . "the listener will respond through normal dialogue routing"
                     );
                 }
@@ -469,5 +469,5 @@ user request: actor \"a\" leaves the place
     }
 
 
-    Logger::info("Successfully logged instruction command to responselog");
+    Logger::info("[DIRECTOR] Successfully logged instruction command to responselog");
 ?>

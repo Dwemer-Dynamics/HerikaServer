@@ -1463,16 +1463,17 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
     }
 
     if ($currentNpcData) {
-        $currentNpcData["base"] = $splitNameBase[1] ?? "";
-        $factionList = [];
+        $meta = $npcMaster->getMetadata($currentNpcData);
+        $extended = $npcMaster->getExtendedData($currentNpcData);
+        $factionList = $extended['factions'] ?? [];
+        // Save loading sends only Name@Base. Missing identity data must not erase the profile.
+        foreach ([1 => 'base', 2 => 'gender', 3 => 'race', 4 => 'refid'] as $index => $field) {
+            if (isset($splitNameBase[$index]) && trim($splitNameBase[$index]) !== '') {
+                $currentNpcData[$field] = $splitNameBase[$index];
+            }
+        }
         if (sizeof($splitNameBase) > 1) {
 
-            $currentNpcData["gender"] = $splitNameBase[2] ?? "";
-            $currentNpcData["race"] = $splitNameBase[3] ?? "";
-            $currentNpcData["refid"] = $splitNameBase[4] ?? "";
-
-
-            $meta = $npcMaster->getMetadata($currentNpcData);
             if ($incomingDisplayName !== "" && strcasecmp((string) $currentNpcData["npc_name"], $incomingDisplayName) !== 0) {
                 $meta["current_display_name"] = $incomingDisplayName;
                 if (!isset($meta["display_name_aliases"]) || !is_array($meta["display_name_aliases"])) {
@@ -1505,7 +1506,9 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 22 => "enchanting",
             ];
             foreach ($skillFields as $index => $skillName) {
-                $meta["skills"][$skillName] = $splitNameBase[$index] ?? "";
+                if (isset($splitNameBase[$index])) {
+                    $meta["skills"][$skillName] = $splitNameBase[$index];
+                }
             }
 
             // NPC equipment (10 slots from Skyrim) - format: name^baseid
@@ -1523,7 +1526,11 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             ];
 
             foreach ($equipmentSlots as $index => $slotName) {
-                $slotData = isset($splitNameBase[$index]) ? $splitNameBase[$index] : '';
+                // An omitted slot is unchanged; an explicitly empty slot means unequipped.
+                if (!isset($splitNameBase[$index])) {
+                    continue;
+                }
+                $slotData = $splitNameBase[$index];
                 if (!empty($slotData)) {
                     $parts = explode("^", $slotData);
                     $meta["equipment"][$slotName] = isset($parts[0]) ? $parts[0] : '';
@@ -1535,21 +1542,28 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             }
 
             // NPC stats (core attributes)
-            $meta["stats"]["level"] = isset($splitNameBase[33]) ? intval($splitNameBase[33]) : 1;
-            $meta["stats"]["health"] = isset($splitNameBase[34]) ? floatval($splitNameBase[34]) : 0;
-            $meta["stats"]["health_max"] = isset($splitNameBase[35]) ? floatval($splitNameBase[35]) : 0;
-            $meta["stats"]["magicka"] = isset($splitNameBase[36]) ? floatval($splitNameBase[36]) : 0;
-            $meta["stats"]["magicka_max"] = isset($splitNameBase[37]) ? floatval($splitNameBase[37]) : 0;
-            $meta["stats"]["stamina"] = isset($splitNameBase[38]) ? floatval($splitNameBase[38]) : 0;
-            $meta["stats"]["stamina_max"] = isset($splitNameBase[39]) ? floatval($splitNameBase[39]) : 0;
-            $meta["stats"]["scale"] = isset($splitNameBase[40]) ? floatval($splitNameBase[40]) : 1.0;
+            $statFields = [
+                33 => 'level', 34 => 'health', 35 => 'health_max', 36 => 'magicka',
+                37 => 'magicka_max', 38 => 'stamina', 39 => 'stamina_max', 40 => 'scale',
+            ];
+            foreach ($statFields as $index => $statName) {
+                if (isset($splitNameBase[$index])) {
+                    $meta["stats"][$statName] = $index === 33
+                        ? intval($splitNameBase[$index]) : floatval($splitNameBase[$index]);
+                }
+            }
 
-            $meta["mods"] = isset($splitNameBase[41]) ? explode("#", $splitNameBase[41]) : null;
+            if (isset($splitNameBase[41])) {
+                $meta["mods"] = explode("#", $splitNameBase[41]);
+            }
 
             // NPC factions - format: formID1:rank1[:PluginName.esp|LocalFormId]#formID2:rank2[:...]
             // You cannot use | as separator, because it's already used as primary request separator.
 
             $factionString = isset($splitNameBase[42]) ? $splitNameBase[42] : '';
+            if (isset($splitNameBase[42])) {
+                $factionList = [];
+            }
             $formIds = [];
             error_log("*TRACE: [ADDNPC] Processing factions for $localName: {$factionString}");
             if (!empty($factionString)) {
@@ -1595,8 +1609,10 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 $mapFormIdNames[($factionInfo['formid'])] = $factionInfo['name'];
             }
             // Finally, fill the faction names in the factionList
-            foreach ($factionList as &$faction) {
-                $faction["name"] = $mapFormIdNames[$faction["formid"]] ?? 'Unknown Faction';
+            if (isset($splitNameBase[42])) {
+                foreach ($factionList as &$faction) {
+                    $faction["name"] = $mapFormIdNames[$faction["formid"]] ?? 'Unknown Faction';
+                }
             }
 
         }
@@ -1605,7 +1621,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         $npcRace = $GLOBALS["db"]->escape($currentNpcData["race"]);
         $npcGender = $GLOBALS["db"]->escape($currentNpcData["gender"]);
         $npcBase = $GLOBALS["db"]->escape($currentNpcData["base"]);
-        $npcMods = $meta["mods"];
+        $npcMods = $meta["mods"] ?? null;
         $npcFactionNames = array_values(array_unique(array_filter(array_map(
             static function ($faction) {
                 return trim((string) ($faction["name"] ?? ""));
@@ -1680,7 +1696,9 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
         // Store factions in extended_data
         $extended = $npcMaster->getExtendedData($currentNpcData);
-        $extended['factions'] = $factionList;
+        if (isset($splitNameBase[42])) {
+            $extended['factions'] = $factionList;
+        }
 
         // NPC class - format: className:formID:trainSkill:trainLevel
         $classString = isset($splitNameBase[43]) ? $splitNameBase[43] : '';
@@ -1699,7 +1717,9 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 }
             }
         }
-        $extended['class'] = $classData;
+        if (isset($splitNameBase[43])) {
+            $extended['class'] = $classData;
+        }
 
         $currentNpcData = $npcMaster->setExtendedData($currentNpcData, $extended);
 
