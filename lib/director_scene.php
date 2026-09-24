@@ -94,6 +94,11 @@ function chimRequestDirectorScene($connection, array $prompt, array $actors, arr
         $connection->open($prompt, ['response_format' => $format, 'MAX_TOKENS' => 4000]);
         do { $connection->process(); } while (!$connection->isDone());
         $raw = $connection->close('director_scene');
+        $raw = trim($raw);
+        // Accept one complete Markdown JSON fence, but keep surrounding prose invalid.
+        if (preg_match('/\A```(?:json)?[ \t]*\R(.*)\R```[ \t]*\z/is', $raw, $match)) {
+            $raw = trim($match[1]);
+        }
         try {
             $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
         } catch (JsonException $error) {
