@@ -47,6 +47,19 @@ $npc['fields'] = [
     'occupation'
 ];
 
+// Notify the player before the profile-generation requests begin.
+$GLOBALS["db"]->insert(
+    'responselog',
+    array(
+        'localts' => time(),
+        'sent' => 0,
+        'actor' => "rolemaster",
+        'text' => '',
+        'action' => 'rolecommand|DebugNotification@Hypnosis started for ' . $GLOBALS['argv'][4] . '.',
+        'tag' => ""
+    )
+);
+
 $newvalue = [];
 $generationFailed = false;
 foreach ($npc['fields'] as $field) {
