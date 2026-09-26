@@ -2575,6 +2575,20 @@ $latestDiaryContext = function_exists('chimBuildLatestDiaryContextBlock')
             : []
     )
     : "";
+
+// Letters exchanged by courier that this NPC has not yet talked through with the player in person.
+$letterCorrespondence = "";
+try {
+    require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "bgl_letters.php");
+    $letterCorrespondence = chimLetterBuildCorrespondenceBlock(
+        strval($GLOBALS["HERIKA_NAME"] ?? ''),
+        in_array($gameRequest[0], ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s"], true)
+    );
+} catch (Throwable $e) {
+    Logger::warn("[BGL_LETTERS] Could not build letter context: " . $e->getMessage());
+    $letterCorrespondence = "";
+}
+
 $promptBottomInjections = function_exists('chimRenderPromptInjections')
     ? chimRenderPromptInjections("prompt_bottom", $promptInjectionContext)
     : "";
@@ -2594,7 +2608,7 @@ if (!empty($GLOBALS["OGHMA_HINT"])) {
 
 $systemPromptRaw = "<roleplay_instructions>\n" . $GLOBALS["PROMPT_HEAD"] .
     "\n</roleplay_instructions>" . $worldPrompt .
-    "\n\n<character>\n" . $GLOBALS["HERIKA_PERS"] . $dynamicBiography . $latestDiaryContext . $characterBottomInjections .
+    "\n\n<character>\n" . $GLOBALS["HERIKA_PERS"] . $dynamicBiography . $latestDiaryContext . $letterCorrespondence . $characterBottomInjections .
     "\n</character>" . $knowledgeSection .
     "\n\n<general_instructions>\n" . $GLOBALS["COMMAND_PROMPT"] .
     "\n</general_instructions>" . $actionsList . $nearbySections . $promptBottomInjections . $paralinguisticTagsPrompt .
@@ -2604,7 +2618,7 @@ $systemPromptRaw = "<roleplay_instructions>\n" . $GLOBALS["PROMPT_HEAD"] .
 $promptCompositionSections = [
     'roleplay_instructions' => $GLOBALS["PROMPT_HEAD"] ?? '',
     'world' => $worldPrompt ?? '',
-    'character' => ($GLOBALS["HERIKA_PERS"] ?? '') . ($dynamicBiography ?? '') . ($latestDiaryContext ?? '') . ($characterBottomInjections ?? ''),
+    'character' => ($GLOBALS["HERIKA_PERS"] ?? '') . ($dynamicBiography ?? '') . ($latestDiaryContext ?? '') . ($letterCorrespondence ?? '') . ($characterBottomInjections ?? ''),
     'knowledge' => $knowledgeSection ?? '',
     'general_instructions' => $GLOBALS["COMMAND_PROMPT"] ?? '',
     'actions' => $actionsList ?? '',
