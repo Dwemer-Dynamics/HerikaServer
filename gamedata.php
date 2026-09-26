@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . "/lib/playthrough_guard.php";
+pgr_http_preflight("gamedata");
 /**
  * Game Data Endpoint
  * 
@@ -76,6 +78,9 @@ $responseBody = "OK";
 $responseIsJson = false;
 
 try {
+    if (($data['actor_type'] ?? '') === 'player') {
+        chimMaybeSyncPlayerName($data['actor_name'] ?? null, true);
+    }
     switch ($data['type']) {
         case 'equipment':
             handleEquipmentUpdate($data, $npcMaster);

@@ -49,7 +49,7 @@ include("tmpl/navbar.php");
         </div>
         <br />
         <input class="btn btn-primary" type="button" name="save" value="Save" onclick='document.forms[0].target="";document.forms[0].action="conf_editor.php";document.forms[0].submit()' />
-        <input class="btn btn-secondary" type="button" value="Back" onclick="location.href='index.php'" />
+        <input class="btn btn-secondary" type="button" value="Back" onclick="location.href='home.php'" />
         <input class="btn btn-info" type="button" name="check" value="Check" onclick='document.forms[0].target="checker";document.forms[0].action="conf_checker.php";document.forms[0].submit()' />
     </form>
     <br />

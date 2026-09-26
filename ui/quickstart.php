@@ -415,10 +415,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['qs_action'])) {
             require_once($rootPath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "stt_connector.class.php");
             require_once($rootPath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_connector.class.php");
 
-            if (isset($_POST['PLAYER_NAME']) && trim(strval($_POST['PLAYER_NAME'])) !== '') {
-                $player = new Player();
-                $player->set('player_name', trim(strval($_POST['PLAYER_NAME'])));
-            }
+            // Player name is synced from the game, not from setup form submissions.
 
             $ttsConnector = new TTSConnector();
             $selectedTtsDriver = herikaQuickstartNormalizeTtsDriver($ttsConnector, $_POST['TTSFUNCTION'] ?? ($GLOBALS["TTSFUNCTION"] ?? 'none'));
@@ -552,7 +549,7 @@ echo '<section class="qs-section qs-header-card">
       </section>';
 
 // PLAYER_NAME at top
-$playerNameVal = 'Prisoner'; // Default value
+$playerNameVal = '';
 // Try to get from core_player table first
 try {
     require_once($rootPath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "player.class.php");
@@ -567,12 +564,14 @@ try {
         $playerNameVal = (string)$currentConf['PLAYER_NAME']['currentValue'];
     }
 }
+$playerNameVal = chimNormalizeDetectedPlayerName($playerNameVal) ?? '';
+$playerNameHint = $playerNameVal !== '' ? 'Synced from your Skyrim character.' : 'Load your game to detect your character’s name.';
 echo '<section class="qs-section">
         <h2 class="qs-section-title">Player</h2>
         <div class="form-group qs-field">
             <label for="PLAYER_NAME">Player Name</label>
-            <input type="text" class="form-control" id="PLAYER_NAME" name="PLAYER_NAME" value="' . htmlspecialchars($playerNameVal) . '">
-            <small class="form-text">Your in-game character name. Defaults to "Prisoner" and is automatically updated when you load a save. You can also manage player settings in <a href="' . $webRoot . '/ui/core/config_hub.php?tab=player" target="_blank" style="color:#4a8ab6;">Player Management</a>.</small>
+            <input type="text" class="form-control" id="PLAYER_NAME" value="' . htmlspecialchars($playerNameVal) . '" placeholder="Waiting for game" readonly aria-describedby="player-name-hint">
+            <small class="form-text" id="player-name-hint">' . $playerNameHint . ' You can manage your character in <a href="' . $webRoot . '/ui/core/config_hub.php?tab=player" target="_blank" style="color:#4a8ab6;">Player Management</a>.</small>
         </div>
       </section>';
 

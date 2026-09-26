@@ -41,8 +41,8 @@ final class AsteriskParsingTest extends TestCase
     public function testChatModeShortcutsAreParsedServerSide(): void
     {
         $cases = [
-            '| Keep this quiet' => ['WHISPER', 'Keep this quiet'],
-            '|| Only you should hear this' => ['CLOSE', 'Only you should hear this'],
+            '% Keep this quiet' => ['WHISPER', 'Keep this quiet'],
+            '%% Only you should hear this' => ['CLOSE', 'Only you should hear this'],
             '!! Everyone, run!' => ['SHOUT', 'Everyone, run!'],
             '@ Describe the room' => ['NARRATOR', 'Describe the room'],
             '> Have Lydia inspect the doorway' => ['DIRECTOR', 'Have Lydia inspect the doorway'],
@@ -64,13 +64,19 @@ final class AsteriskParsingTest extends TestCase
     public function testChatModeShortcutParserPreservesPlainAndSymbolOnlyInput(): void
     {
         $plain = chimParseChatModeShortcut('Hello there');
-        $symbolOnly = chimParseChatModeShortcut('||   ');
+        $symbolOnly = chimParseChatModeShortcut('%%   ');
 
         $this->assertFalse($plain['matched']);
         $this->assertSame('Hello there', $plain['content']);
         $this->assertTrue($symbolOnly['matched']);
         $this->assertSame('CLOSE', $symbolOnly['mode']);
         $this->assertSame('', $symbolOnly['content']);
+
+        foreach (['| Keep this quiet', '|| Only you should hear this', 'Save 50% for later'] as $input) {
+            $literal = chimParseChatModeShortcut($input);
+            $this->assertFalse($literal['matched'], $input);
+            $this->assertSame($input, $literal['content']);
+        }
     }
 
     public function testFullWrappedNarrationBlockDoesNotSplitMidReply(): void

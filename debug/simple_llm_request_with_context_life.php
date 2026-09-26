@@ -353,6 +353,8 @@ usort($combinedEvents, function ($a, $b) {
 
 print_r($combinedEvents);
 $previous = 0;
+$combinedEvents=array_slice($combinedEvents, -20); // Limit to last 20 events for context
+
 foreach ($combinedEvents as $dentry) {
     if ($dentry["type"] == "event" && $previous) {
         $hours = ($dentry["gamets"] - $previous) * 0.0000024;
@@ -428,9 +430,11 @@ The character may express the intention to travel elsewhere, but such travel sho
 
 Important note: Character {$GLOBALS["PLAYER_NAME"]} and {$GLOBALS["HERIKA_NAME"]} ARE NOT  IN THE SAME PLACE after <context_history> events.
 Write in english as if you were {$GLOBALS["HERIKA_NAME"]}, soliloquy, speaking to yourself in first person.
+
+IMPORTANT: Keep this inner thought short and concise - aim for 2-3 brief paragraphs maximum.
 ";
 
-//IMPORTANT: Keep this inner thought short and concise - aim for 2-3 brief paragraphs maximum.
+//
 //";
 
 $metadata = json_decode($currentNpcData["metadata"], true);

@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . '/lib/chim_interaction.php';
+chimInteractionRequire();
 
 $GLOBALS["ENGINE_ROOT"] = __DIR__ . DIRECTORY_SEPARATOR;
 $GLOBALS["ENGINE_PATH"] = $GLOBALS["ENGINE_ROOT"];

@@ -1,5 +1,26 @@
 <?php
 
+/**
+ * Extract the not-yet-emitted suffix from a cumulatively parsed message.
+ * Replacing the previous text by value is unsafe because the same text may
+ * legitimately occur again later in the message.
+ */
+function __jpd_extract_incremental_message($previousMessage, $currentMessage) {
+    $previousMessage = (string)$previousMessage;
+    $currentMessage = (string)$currentMessage;
+
+    if ($previousMessage === '') {
+        return $currentMessage;
+    }
+
+    $previousLength = strlen($previousMessage);
+    if (strncmp($currentMessage, $previousMessage, $previousLength) !== 0) {
+        return '';
+    }
+
+    return substr($currentMessage, $previousLength);
+}
+
 function lazyEmpty($string) {
  
     if (empty(trim($string)))

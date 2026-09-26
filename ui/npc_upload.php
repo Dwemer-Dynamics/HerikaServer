@@ -6,6 +6,9 @@ if ($webRoot == '/') $webRoot = '';
 $webRoot = rtrim($webRoot, '/');
 
 require_once(__DIR__.DIRECTORY_SEPARATOR."profile_loader.php");
+require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."oghma_parity.php");
+
+require_once dirname(__DIR__) . '/lib/core/tts_filter_presets.php';
 
 $TITLE = "ðŸ“CHIM - NPC Biography";
 
@@ -78,10 +81,10 @@ if (!function_exists('chimNormalizeBiographyRelationshipSeed')) {
 //   INDIVIDUAL UPLOAD
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_individual'])) {
-    $npc_name   = strtolower(trim($_POST['npc_name'] ?? ''));
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['submit_individual']) || ($_POST['action'] ?? '') === 'update_single')) {
+    $npc_name   = strtolower(trim(($_POST['action'] ?? '') === 'update_single' ? ($_POST['npc_name_original'] ?? '') : ($_POST['npc_name'] ?? '')));
     $core       = $_POST['npc_pers'] ?? '';
-    $oghma_knowledge_tags = (isset($_POST['npc_misc']) && trim($_POST['npc_misc']) !== '') ? trim($_POST['npc_misc']) : '';
+    $oghma_knowledge_tags = chimOghmaNpcKnowledgeTags($_POST['npc_misc'] ?? '');
     $voiceid    = (!empty($_POST['voiceid'])) ? trim($_POST['voiceid']) : null;
     $gender     = (!empty($_POST['gender'])) ? trim($_POST['gender']) : null;
     $race       = (!empty($_POST['race'])) ? trim($_POST['race']) : null;
@@ -93,20 +96,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_individual']))
     $appearance       = (!empty($_POST['npc_appearance']))    ? trim($_POST['npc_appearance'])    : null;
     $relationshipError = '';
     $relationships    = chimNormalizeBiographyRelationshipSeed($_POST['npc_relationships'] ?? null, $relationshipError);
+    try { $biographyFilter = chimBiographyVoiceFilter($_POST['tts_filter_preset'] ?? null); }
+    catch (InvalidArgumentException $e) { $relationships = false; $relationshipError = $e->getMessage(); }
     $occupation       = (!empty($_POST['npc_occupation']))    ? trim($_POST['npc_occupation'])    : null;
     $skills           = (!empty($_POST['npc_skills']))        ? trim($_POST['npc_skills'])        : null;
     $speechstyle      = (!empty($_POST['npc_speechstyle']))   ? trim($_POST['npc_speechstyle'])   : null;
     $goals            = (!empty($_POST['npc_goals']))         ? trim($_POST['npc_goals'])         : null;
 
     if ($relationships === false) {
-        $message .= "<p style='color:#ff6464;'>Relationships must be a valid JSON object seed. "
+        $message .= "<p style='color:#ff6464;'>Invalid biography fields. "
             . htmlspecialchars($relationshipError, ENT_QUOTES, 'UTF-8')
             . ".</p>";
     } elseif (!empty($npc_name) && !empty($core)) {
         $query = "
             INSERT INTO {$schema}.bio_templates_custom
-                (npc_name, core, oghma_knowledge_tags, npc_static_bio, personality, appearance, relationships, occupation, skills, speechstyle, goals, voiceid, gender, race, refid)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                (npc_name, core, oghma_knowledge_tags, npc_static_bio, personality, appearance, relationships, occupation, skills, speechstyle, goals, voiceid, gender, race, refid, tts_filter_preset)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, COALESCE($16, (SELECT tts_filter_preset FROM {$schema}.combined_bio_templates WHERE npc_name=$1)))
             ON CONFLICT (npc_name)
             DO UPDATE SET
                 core = EXCLUDED.core,
@@ -122,7 +127,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_individual']))
                 voiceid = EXCLUDED.voiceid,
                 gender = EXCLUDED.gender,
                 race = EXCLUDED.race,
-                refid = EXCLUDED.refid
+                refid = EXCLUDED.refid,
+                tts_filter_preset = COALESCE(EXCLUDED.tts_filter_preset, bio_templates_custom.tts_filter_preset)
         ";
 
         $params = [
@@ -140,7 +146,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_individual']))
             $voiceid,
             $gender,
             $race,
-            $refid
+            $refid,
+            $biographyFilter
         ];
 
         $result = pg_query_params($conn, $query, $params);
@@ -285,7 +292,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_csv'])) {
                                 return null;
                             };
                             
-                            $oghma_knowledge_tags = $getValue(2) ?? '';
+                            $oghma_knowledge_tags = chimOghmaNpcKnowledgeTags($getValue(2) ?? '');
                             $npc_static_bio = $getValue(3);
                             $personality = $getValue(4);
                             $appearance = $getValue(5);
@@ -298,6 +305,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_csv'])) {
                             $gender = $getValue(12);
                             $race = $getValue(13);
                             $refid = $getValue(14);
+                            try { $biographyFilter = chimBiographyVoiceFilter(array_key_exists(15, $data) ? (string)$data[15] : null); }
+                            catch (InvalidArgumentException $e) { $errors[] = $e->getMessage(); $errorCount++; continue; }
 
                             $relationshipError = '';
                             $relationships = chimNormalizeBiographyRelationshipSeed($relationships, $relationshipError);
@@ -311,8 +320,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_csv'])) {
                         $query = "
                             INSERT INTO $schema.bio_templates_custom 
                                     (npc_name, core, oghma_knowledge_tags, npc_static_bio, personality, appearance, 
-                                     relationships, occupation, skills, speechstyle, goals, voiceid, gender, race, refid)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                                     relationships, occupation, skills, speechstyle, goals, voiceid, gender, race, refid, tts_filter_preset)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, COALESCE($16, (SELECT tts_filter_preset FROM {$schema}.combined_bio_templates WHERE npc_name=$1)))
                             ON CONFLICT (npc_name)
                             DO UPDATE SET
                                 core = EXCLUDED.core,
@@ -328,7 +337,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_csv'])) {
                                 voiceid = EXCLUDED.voiceid,
                                 gender = EXCLUDED.gender,
                                 race = EXCLUDED.race,
-                                refid = EXCLUDED.refid
+                                refid = EXCLUDED.refid,
+                tts_filter_preset = COALESCE(EXCLUDED.tts_filter_preset, bio_templates_custom.tts_filter_preset)
                         ";
 
                         $params = [
@@ -346,7 +356,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_csv'])) {
                             $voiceid,
                             $gender,
                             $race,
-                            $refid
+                            $refid,
+            $biographyFilter
                         ];
 
                         $result = pg_query_params($conn, $query, $params);
@@ -454,7 +465,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_custom_npcs') {
             npc_name, core, oghma_knowledge_tags, 
             npc_static_bio, personality, appearance, 
             relationships, occupation, skills, 
-            speechstyle, goals, voiceid, gender, race, refid
+            speechstyle, goals, voiceid, gender, race, refid, tts_filter_preset
         FROM {$schema}.bio_templates_custom 
         ORDER BY npc_name ASC
     ";
@@ -482,7 +493,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_custom_npcs') {
             'npc_name', 'core', 'oghma_knowledge_tags',
             'npc_static_bio', 'personality', 'appearance',
             'relationships', 'occupation', 'skills',
-            'speechstyle', 'goals', 'voiceid', 'gender', 'race', 'refid'
+            'speechstyle', 'goals', 'voiceid', 'gender', 'race', 'refid', 'tts_filter_preset'
         ];
         fputcsv($output, $csv_headers);
         
@@ -503,7 +514,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_custom_npcs') {
                 $row['voiceid'] ?? '',
                 $row['gender'] ?? '',
                 $row['race'] ?? '',
-                $row['refid'] ?? ''
+                $row['refid'] ?? '',
+                $row['tts_filter_preset'] ?? ''
             ];
             fputcsv($output, $csv_row);
         }
@@ -516,83 +528,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_custom_npcs') {
 }
 
 // 1. Update the edit modal form to match the Oghma styling:
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_single') {
-    $npc_name_original = $_POST['npc_name_original'] ?? '';
-    $npc_name = strtolower(trim($_POST['npc_name'] ?? ''));
-    $npc_pers = $_POST['npc_pers'] ?? '';
-    $npc_dynamic = (isset($_POST['npc_dynamic']) && trim($_POST['npc_dynamic']) !== '') 
-        ? trim($_POST['npc_dynamic']) 
-        : null;
-    $npc_misc = (isset($_POST['npc_misc']) && trim($_POST['npc_misc']) !== '') 
-        ? trim($_POST['npc_misc']) 
-        : '';
-    $melotts_voiceid = (!empty($_POST['melotts_voiceid'])) ? trim($_POST['melotts_voiceid']) : null;
-    $xtts_voiceid = (!empty($_POST['xtts_voiceid'])) ? trim($_POST['xtts_voiceid']) : null;
-    $xvasynth_voiceid = (!empty($_POST['xvasynth_voiceid'])) ? trim($_POST['xvasynth_voiceid']) : null;
-    
-    // New extended profile fields
-    $npc_background    = (!empty($_POST['npc_background']))    ? trim($_POST['npc_background'])    : null;
-    $npc_personality   = (!empty($_POST['npc_personality']))   ? trim($_POST['npc_personality'])   : null;
-    $npc_appearance    = (!empty($_POST['npc_appearance']))    ? trim($_POST['npc_appearance'])    : null;
-    $npc_relationships = (!empty($_POST['npc_relationships'])) ? trim($_POST['npc_relationships']) : null;
-    $npc_occupation    = (!empty($_POST['npc_occupation']))    ? trim($_POST['npc_occupation'])    : null;
-    $npc_skills        = (!empty($_POST['npc_skills']))        ? trim($_POST['npc_skills'])        : null;
-    $npc_speechstyle   = (!empty($_POST['npc_speechstyle']))   ? trim($_POST['npc_speechstyle'])   : null;
-    $npc_goals         = (!empty($_POST['npc_goals']))         ? trim($_POST['npc_goals'])         : null;
-
-    if (!empty($npc_name) && !empty($npc_pers)) {
-        $query = "
-            UPDATE {$schema}.npc_templates_custom 
-            SET 
-                npc_name = $1,
-                npc_pers = $2,
-                npc_dynamic = $3,
-                npc_misc = $4,
-                melotts_voiceid = $5,
-                xtts_voiceid = $6,
-                xvasynth_voiceid = $7,
-                npc_background = $8,
-                npc_personality = $9,
-                npc_appearance = $10,
-                npc_relationships = $11,
-                npc_occupation = $12,
-                npc_skills = $13,
-                npc_speechstyle = $14,
-                npc_goals = $15
-            WHERE npc_name = $16
-        ";
-
-        $params = [
-            $npc_name,
-            $npc_pers,
-            $npc_dynamic,
-            $npc_misc,
-            $melotts_voiceid,
-            $xtts_voiceid,
-            $xvasynth_voiceid,
-            $npc_background,
-            $npc_personality,
-            $npc_appearance,
-            $npc_relationships,
-            $npc_occupation,
-            $npc_skills,
-            $npc_speechstyle,
-            $npc_goals,
-            $npc_name_original
-        ];
-
-        $result = pg_query_params($conn, $query, $params);
-
-        if ($result) {
-            $message .= "<p>NPC data updated successfully!</p>";
-        } else {
-            $message .= "<p>Error updating NPC data: " . pg_last_error($conn) . "</p>";
-        }
-    } else {
-        $message .= "<p>Please fill in all required fields: NPC Name and NPC Static Bio.</p>";
-    }
-}
-
 // 1. Update the edit modal form action to include the current letter:
 $currentLetter = isset($_GET['letter']) ? htmlspecialchars($_GET['letter']) : '';
 $formAction = $currentLetter ? "?letter={$currentLetter}#table" : "?#table";
@@ -1150,7 +1085,8 @@ $formAction = $currentLetter ? "?letter={$currentLetter}#table" : "?#table";
                 'VoiceID' => $row['voiceid'] ?? '',
                 'Gender' => $row['gender'] ?? '',
                 'Race' => $row['race'] ?? '',
-                'RefID' => $row['refid'] ?? ''
+                'RefID' => $row['refid'] ?? '',
+                'Voice Filter' => $row['tts_filter_preset'] ?? 'none'
             ];
             echo '  <td style="font-size: 0.85em; line-height: 1.4;">';
             foreach ($voiceFields as $type => $voice) {
@@ -1184,6 +1120,7 @@ $formAction = $currentLetter ? "?letter={$currentLetter}#table" : "?#table";
                 'npc_dynamic' => '',
                 'npc_misc' => $row['oghma_knowledge_tags'] ?? '',
                 'voiceid' => $row['voiceid'] ?? '',
+                'tts_filter_preset' => $row['tts_filter_preset'] ?? 'none',
                 'gender' => $row['gender'] ?? '',
                 'race' => $row['race'] ?? '',
                 'refid' => $row['refid'] ?? '',
@@ -1290,6 +1227,13 @@ $formAction = $currentLetter ? "?letter={$currentLetter}#table" : "?#table";
                 <label for="edit_voiceid">Voice ID:</label>
                 <small>Optional: Unified voice identifier.</small>
                 <input type="text" name="voiceid" id="edit_voiceid">
+                <label for="edit_tts_filter_preset">Voice Filter:</label>
+                <small>Applies to new NPCs. Existing NPC choices stay unchanged.</small>
+                <select name="tts_filter_preset" id="edit_tts_filter_preset">
+                <?php foreach (ttsFilterPresetOptions() as $presetId => $preset): ?>
+                <option value="<?= htmlspecialchars($presetId, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($preset['label'], ENT_QUOTES, 'UTF-8') ?></option>
+                <?php endforeach; ?>
+                </select>
 
                 <label for="edit_gender">Gender:</label>
                 <small>Optional: Gender for reference.</small>
@@ -1378,6 +1322,13 @@ $formAction = $currentLetter ? "?letter={$currentLetter}#table" : "?#table";
                 <label for="new_voiceid">Voice ID:</label>
                 <small>Optional: Unified voice identifier.</small>
                 <input type="text" name="voiceid" id="new_voiceid">
+                <label for="new_tts_filter_preset">Voice Filter:</label>
+                <small>Applies to new NPCs. Existing NPC choices stay unchanged.</small>
+                <select name="tts_filter_preset" id="new_tts_filter_preset">
+                <?php foreach (ttsFilterPresetOptions() as $presetId => $preset): ?>
+                <option value="<?= htmlspecialchars($presetId, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($preset['label'], ENT_QUOTES, 'UTF-8') ?></option>
+                <?php endforeach; ?>
+                </select>
 
                 <label for="new_gender">Gender:</label>
                 <small>Optional: Gender for reference.</small>
@@ -1573,6 +1524,7 @@ function openEditModal(data) {
         document.getElementById("edit_npc_goals").value = decodeHTML(data.npc_goals || '');
         
         // Voice & Meta
+        document.getElementById("edit_tts_filter_preset").value = data.tts_filter_preset || "none";
         const vEl = document.getElementById("edit_voiceid"); if (vEl) vEl.value = decodeHTML(data.voiceid || '');
         const gEl = document.getElementById("edit_gender"); if (gEl) gEl.value = decodeHTML(data.gender || '');
         const rEl = document.getElementById("edit_race"); if (rEl) rEl.value = decodeHTML(data.race || '');
@@ -1763,14 +1715,14 @@ function populateKnowledgeTable(knowledge) {
                 
                 // Category
                 if (item.category) {
-                    extraInfo += `<span style="background: rgba(242, 124, 17, 0.15); color: rgb(242, 124, 17); padding: 2px 6px; border-radius: 3px; margin-right: 5px; font-size: 1.5em;">ðŸ“ ${item.category}</span>`;
+                    extraInfo += `<span style="background: rgba(242, 124, 17, 0.15); color: rgb(242, 124, 17); padding: 2px 6px; border-radius: 3px; margin-right: 5px; font-size: 1.5em;"><span aria-hidden="true">&#128193;</span> ${item.category}</span>`;
                 }
                 
                 // Knowledge Class (Advanced) - Orange tags
                 if (item.knowledge_class) {
                     const knowledgeClasses = item.knowledge_class.split(',').map(tag => tag.trim()).filter(tag => tag);
                     knowledgeClasses.forEach(knowledgeClass => {
-                        extraInfo += `<span style="background: rgba(242, 124, 17, 0.2); color: rgb(242, 124, 17); padding: 2px 6px; border-radius: 3px; margin-right: 3px; font-size: 1.5em; font-weight: 500;">ðŸ”¸ ${knowledgeClass}</span>`;
+                        extraInfo += `<span style="background: rgba(242, 124, 17, 0.2); color: rgb(242, 124, 17); padding: 2px 6px; border-radius: 3px; margin-right: 3px; font-size: 1.5em; font-weight: 500;"><span aria-hidden="true">&#128312;</span> ${knowledgeClass}</span>`;
                     });
                 }
                 
@@ -1778,7 +1730,7 @@ function populateKnowledgeTable(knowledge) {
                 if (item.knowledge_class_basic) {
                     const basicClasses = item.knowledge_class_basic.split(',').map(tag => tag.trim()).filter(tag => tag);
                     basicClasses.forEach(basicClass => {
-                        extraInfo += `<span style="background: rgba(242, 124, 17, 0.15); color: rgb(242, 124, 17); padding: 2px 6px; border-radius: 3px; margin-right: 3px; font-size: 1.5em;">ðŸ”¹ ${basicClass}</span>`;
+                        extraInfo += `<span style="background: rgba(242, 124, 17, 0.15); color: rgb(242, 124, 17); padding: 2px 6px; border-radius: 3px; margin-right: 3px; font-size: 1.5em;"><span aria-hidden="true">&#128313;</span> ${basicClass}</span>`;
                     });
                 }
                 
@@ -1786,7 +1738,7 @@ function populateKnowledgeTable(knowledge) {
                 if (item.tags) {
                     const tags = item.tags.split(',').map(tag => tag.trim()).filter(tag => tag);
                     tags.forEach(tag => {
-                        extraInfo += `<span style="background: rgba(74, 158, 255, 0.15); color: #4a9eff; padding: 2px 6px; border-radius: 3px; margin-right: 3px; font-size: 0.75em;">ðŸ·ï¸ ${tag}</span>`;
+                        extraInfo += `<span style="background: rgba(74, 158, 255, 0.15); color: #4a9eff; padding: 2px 6px; border-radius: 3px; margin-right: 3px; font-size: 0.75em;"><span aria-hidden="true">&#127991;&#65039;</span> ${tag}</span>`;
                     });
                 }
                 

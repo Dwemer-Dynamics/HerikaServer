@@ -1,10 +1,13 @@
 <?php
+require_once dirname(__DIR__) . "/lib/core/tts_filter_presets.php";
 /**
  * Safe Biography CSV Import Handler
  * Handles CSV data from game plugin or web upload
  * Supports UTF-8 (with/without BOM), UTF-16LE/BE, Windows-1252
  * Auto-detects delimiters: comma, semicolon, tab
  */
+
+require_once dirname(__DIR__) . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'oghma_parity.php';
 
 Logger::info("Processing biography CSV data upload");
 
@@ -197,7 +200,9 @@ try {
         }
         
         // Extract optional fields (support both new and legacy headers)
-        $oghma_knowledge_tags = $getValue('oghma_knowledge_tags') ?? $getValue('npc_misc') ?? '';
+        $oghma_knowledge_tags = chimOghmaNpcKnowledgeTags(
+            $getValue('oghma_knowledge_tags') ?? $getValue('npc_misc') ?? ''
+        );
         $voiceid = $getValue('voiceid');
         $gender = $getValue('gender');
         $race = $getValue('race');
@@ -242,7 +247,10 @@ try {
                     'voiceid' => $voiceid,
                     'gender' => $gender,
                     'race' => $race,
-                    'refid' => $refid
+                    'refid' => $refid,
+                    'tts_filter_preset' => array_key_exists('tts_filter_preset', $headerMap)
+                        ? chimBiographyVoiceFilter($getValue('tts_filter_preset') ?? '')
+                        : ($db->fetchOne("SELECT tts_filter_preset FROM combined_bio_templates WHERE npc_name='" . $db->escape($npc_name) . "'")['tts_filter_preset'] ?? null)
                 ),
                 'npc_name'
             );

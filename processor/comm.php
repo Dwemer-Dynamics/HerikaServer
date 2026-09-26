@@ -1,7 +1,9 @@
 <?php
+require_once $GLOBALS['ENGINE_PATH'] . '/lib/chim_interaction.php';
+if (chimInteractionIsTrigger($gameRequest[0] ?? '')) chimInteractionRequire();
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/dynamic_update_util.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/utils_game_timestamp.php");
-require_once($GLOBALS["ENGINE_PATH"] . "/lib/playthrough_snapshot.php");
+require_once($GLOBALS["ENGINE_PATH"] . "/lib/playthrough_autosave.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/core/game_plugins.php");
 
 $MUST_END = false;
@@ -93,6 +95,7 @@ if (!function_exists("emitPlayerMenuScriptQueueLine")) {
             return;
         }
 
+        chimInteractionRequire();
         echo "Player|ScriptQueue|{$subtitle}//__player_menu_tts///1.0\r\n";
         if (ob_get_level()) {
             @ob_flush();
@@ -112,17 +115,18 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
     $now = time();
 
     error_log("[INIT] Should delete everthing after {$gameRequest[2]}");
-    // Dragon Break autosnapshot: detect large rollback and snapshot before pruning
+    // Dragon Break automatic playthrough save: detect a large rollback and save before pruning.
     try {
         $prevGamets = DataLastKnownGameTS();
         $incomingGamets = intval($gameRequest[2]);
-        $snapshotId = dragon_break_snapshot_if_needed($prevGamets, $incomingGamets);
-        if ($snapshotId > 0) {
-            Logger::info("DragonBreak: Created snapshot id {$snapshotId} prior to rollback prune");
+        $playthroughId = dragon_break_playthrough_if_needed($prevGamets, $incomingGamets);
+        if ($playthroughId > 0) {
+            Logger::info("DragonBreak: Created playthrough id {$playthroughId} prior to rollback prune");
         }
     } catch (Exception $e) {
-        Logger::warn("DragonBreak: Snapshot attempt failed: " . $e->getMessage());
+        Logger::warn("DragonBreak: Playthrough attempt failed: " . $e->getMessage());
     }
+    if (!empty($GLOBALS['pgr_skip_rollback'])) { $MUST_END = true; return; }
     $db->delete("eventlog", "gamets>={$gameRequest[2]}  ");
     $db->delete("eventlog", "localts>$now ");
     //$db->delete("eventlog", "type='playerinfo'");
@@ -233,6 +237,8 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
 
     require_once $GLOBALS["ENGINE_PATH"] . "/service/processors/snqe/lib/snqe.class.php";
     SNQEQuestManager::load_quests($gameRequest[2]);
+
+    pgr_complete();
 
     // Narrator Welcome Message on Load
     try {
@@ -1225,18 +1231,19 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 } elseif ($gameRequest[0] == "playerdied") {
 
 
-    // Dragon Break autosnapshot: detect large rollback and snapshot before pruning
+    // Dragon Break automatic playthrough save: detect a large rollback and save before pruning.
     try {
         $prevGamets = DataLastKnownGameTS();
         $incomingGamets = intval($gameRequest[2]);
-        $snapshotId = dragon_break_snapshot_if_needed($prevGamets, $incomingGamets);
-        if ($snapshotId > 0) {
-            Logger::info("DragonBreak: Created snapshot id {$snapshotId} prior to death rollback prune");
+        $playthroughId = dragon_break_playthrough_if_needed($prevGamets, $incomingGamets);
+        if ($playthroughId > 0) {
+            Logger::info("DragonBreak: Created playthrough id {$playthroughId} prior to death rollback prune");
         }
     } catch (Exception $e) {
-        Logger::warn("DragonBreak: Snapshot attempt (playerdied) failed: " . $e->getMessage());
+        Logger::warn("DragonBreak: Playthrough attempt (playerdied) failed: " . $e->getMessage());
     }
 
+    if (!empty($GLOBALS['pgr_skip_rollback'])) { $MUST_END = true; return; }
     $lastSaveHistory = $db->fetchAll("select gamets from eventlog where type='infosave' order by ts desc limit 1 offset 0");
     if (isset($lastSaveHistory[0]["ts"])) {
         $lastSave = $lastSaveHistory[0]["ts"];
@@ -1277,6 +1284,8 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
 
     $MUST_END = true;
+
+    pgr_complete();
 
 } elseif ($gameRequest[0] == "setconf") {
 
@@ -1454,16 +1463,17 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
     }
 
     if ($currentNpcData) {
-        $currentNpcData["base"] = $splitNameBase[1] ?? "";
-        $factionList = [];
+        $meta = $npcMaster->getMetadata($currentNpcData);
+        $extended = $npcMaster->getExtendedData($currentNpcData);
+        $factionList = $extended['factions'] ?? [];
+        // Save loading sends only Name@Base. Missing identity data must not erase the profile.
+        foreach ([1 => 'base', 2 => 'gender', 3 => 'race', 4 => 'refid'] as $index => $field) {
+            if (isset($splitNameBase[$index]) && trim($splitNameBase[$index]) !== '') {
+                $currentNpcData[$field] = $splitNameBase[$index];
+            }
+        }
         if (sizeof($splitNameBase) > 1) {
 
-            $currentNpcData["gender"] = $splitNameBase[2] ?? "";
-            $currentNpcData["race"] = $splitNameBase[3] ?? "";
-            $currentNpcData["refid"] = $splitNameBase[4] ?? "";
-
-
-            $meta = $npcMaster->getMetadata($currentNpcData);
             if ($incomingDisplayName !== "" && strcasecmp((string) $currentNpcData["npc_name"], $incomingDisplayName) !== 0) {
                 $meta["current_display_name"] = $incomingDisplayName;
                 if (!isset($meta["display_name_aliases"]) || !is_array($meta["display_name_aliases"])) {
@@ -1496,7 +1506,9 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 22 => "enchanting",
             ];
             foreach ($skillFields as $index => $skillName) {
-                $meta["skills"][$skillName] = $splitNameBase[$index] ?? "";
+                if (isset($splitNameBase[$index])) {
+                    $meta["skills"][$skillName] = $splitNameBase[$index];
+                }
             }
 
             // NPC equipment (10 slots from Skyrim) - format: name^baseid
@@ -1514,7 +1526,11 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             ];
 
             foreach ($equipmentSlots as $index => $slotName) {
-                $slotData = isset($splitNameBase[$index]) ? $splitNameBase[$index] : '';
+                // An omitted slot is unchanged; an explicitly empty slot means unequipped.
+                if (!isset($splitNameBase[$index])) {
+                    continue;
+                }
+                $slotData = $splitNameBase[$index];
                 if (!empty($slotData)) {
                     $parts = explode("^", $slotData);
                     $meta["equipment"][$slotName] = isset($parts[0]) ? $parts[0] : '';
@@ -1526,21 +1542,28 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             }
 
             // NPC stats (core attributes)
-            $meta["stats"]["level"] = isset($splitNameBase[33]) ? intval($splitNameBase[33]) : 1;
-            $meta["stats"]["health"] = isset($splitNameBase[34]) ? floatval($splitNameBase[34]) : 0;
-            $meta["stats"]["health_max"] = isset($splitNameBase[35]) ? floatval($splitNameBase[35]) : 0;
-            $meta["stats"]["magicka"] = isset($splitNameBase[36]) ? floatval($splitNameBase[36]) : 0;
-            $meta["stats"]["magicka_max"] = isset($splitNameBase[37]) ? floatval($splitNameBase[37]) : 0;
-            $meta["stats"]["stamina"] = isset($splitNameBase[38]) ? floatval($splitNameBase[38]) : 0;
-            $meta["stats"]["stamina_max"] = isset($splitNameBase[39]) ? floatval($splitNameBase[39]) : 0;
-            $meta["stats"]["scale"] = isset($splitNameBase[40]) ? floatval($splitNameBase[40]) : 1.0;
+            $statFields = [
+                33 => 'level', 34 => 'health', 35 => 'health_max', 36 => 'magicka',
+                37 => 'magicka_max', 38 => 'stamina', 39 => 'stamina_max', 40 => 'scale',
+            ];
+            foreach ($statFields as $index => $statName) {
+                if (isset($splitNameBase[$index])) {
+                    $meta["stats"][$statName] = $index === 33
+                        ? intval($splitNameBase[$index]) : floatval($splitNameBase[$index]);
+                }
+            }
 
-            $meta["mods"] = isset($splitNameBase[41]) ? explode("#", $splitNameBase[41]) : null;
+            if (isset($splitNameBase[41])) {
+                $meta["mods"] = explode("#", $splitNameBase[41]);
+            }
 
             // NPC factions - format: formID1:rank1[:PluginName.esp|LocalFormId]#formID2:rank2[:...]
             // You cannot use | as separator, because it's already used as primary request separator.
 
             $factionString = isset($splitNameBase[42]) ? $splitNameBase[42] : '';
+            if (isset($splitNameBase[42])) {
+                $factionList = [];
+            }
             $formIds = [];
             error_log("*TRACE: [ADDNPC] Processing factions for $localName: {$factionString}");
             if (!empty($factionString)) {
@@ -1586,8 +1609,10 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 $mapFormIdNames[($factionInfo['formid'])] = $factionInfo['name'];
             }
             // Finally, fill the faction names in the factionList
-            foreach ($factionList as &$faction) {
-                $faction["name"] = $mapFormIdNames[$faction["formid"]] ?? 'Unknown Faction';
+            if (isset($splitNameBase[42])) {
+                foreach ($factionList as &$faction) {
+                    $faction["name"] = $mapFormIdNames[$faction["formid"]] ?? 'Unknown Faction';
+                }
             }
 
         }
@@ -1596,7 +1621,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         $npcRace = $GLOBALS["db"]->escape($currentNpcData["race"]);
         $npcGender = $GLOBALS["db"]->escape($currentNpcData["gender"]);
         $npcBase = $GLOBALS["db"]->escape($currentNpcData["base"]);
-        $npcMods = $meta["mods"];
+        $npcMods = $meta["mods"] ?? null;
         $npcFactionNames = array_values(array_unique(array_filter(array_map(
             static function ($faction) {
                 return trim((string) ($faction["name"] ?? ""));
@@ -1671,7 +1696,9 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
         // Store factions in extended_data
         $extended = $npcMaster->getExtendedData($currentNpcData);
-        $extended['factions'] = $factionList;
+        if (isset($splitNameBase[42])) {
+            $extended['factions'] = $factionList;
+        }
 
         // NPC class - format: className:formID:trainSkill:trainLevel
         $classString = isset($splitNameBase[43]) ? $splitNameBase[43] : '';
@@ -1690,7 +1717,9 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 }
             }
         }
-        $extended['class'] = $classData;
+        if (isset($splitNameBase[43])) {
+            $extended['class'] = $classData;
+        }
 
         $currentNpcData = $npcMaster->setExtendedData($currentNpcData, $extended);
 
@@ -2088,7 +2117,10 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
 } elseif (strpos($gameRequest[0], "updateprofiles_batch_async") === 0) {
 
-    // Async batch processing for timer-based dynamic profile updates
+    // Automatic scheduling belongs to the server; only explicit manual batches queue work.
+    if ($gameRequest[0] !== 'updateprofiles_batch_async_manual') terminate();
+
+    // Explicit manual profile updates
     // Format: updateprofiles_batch_async|timestamp|gamestamp|NPC1,NPC2,NPC3,NPC4
 
     if (!isset($gameRequest[3]) || empty($gameRequest[3])) {
@@ -2099,7 +2131,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
     $npcList = explode(',', $gameRequest[3]);
     $enabledNPCs = [];
 
-    Logger::info("updateprofiles_batch_async: Checking " . count($npcList) . ",{$gameRequest[3]} NPCs for enabled dynamic profiles");
+    Logger::info("updateprofiles_batch_async_manual: Checking " . count($npcList) . ",{$gameRequest[3]} NPCs for enabled dynamic profiles");
 
     // First pass: quickly check which NPCs have DYNAMIC_PROFILE enabled
     foreach ($npcList as $npcName) {
@@ -2115,7 +2147,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             // Check if narrator has dynamic profile enabled
             if ($narrator->getBool('dynamic_profile', false)) {
                 $enabledNPCs[] = $npcName;
-                Logger::debug("updateprofiles_batch_async: The Narrator has dynamic profile enabled");
+                Logger::debug("updateprofiles_batch_async_manual: The Narrator has dynamic profile enabled");
             }
             continue;
         }
@@ -2154,13 +2186,13 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         try {
             $queueId = queueDynamicProfileBatch($enabledNPCs, $gameRequest);
             echo "The Narrator|rolecommand|DebugNotification@Updating $enabledCount dynamic profile" . ($enabledCount == 1 ? "" : "s") . "..." . PHP_EOL;
-            Logger::info("updateprofiles_batch_async: Queued $enabledCount profiles as $queueId: " . implode(', ', $enabledNPCs));
+            Logger::info("updateprofiles_batch_async_manual: Queued $enabledCount profiles as $queueId: " . implode(', ', $enabledNPCs));
         } catch (Throwable $e) {
-            Logger::error("updateprofiles_batch_async: Failed to queue profiles: " . $e->getMessage());
+            Logger::error("updateprofiles_batch_async_manual: Failed to queue profiles: " . $e->getMessage());
             echo "The Narrator|rolecommand|DebugNotification@Unable to queue dynamic profile updates." . PHP_EOL;
         }
     } else {
-        Logger::info("updateprofiles_batch_async: No profiles to update - none had DYNAMIC_PROFILE enabled");
+        Logger::info("updateprofiles_batch_async_manual: No profiles to update - none had DYNAMIC_PROFILE enabled");
     }
 
     terminate();
