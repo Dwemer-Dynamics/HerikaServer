@@ -464,6 +464,17 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
         ]
     );
 
+    $db->insert('actions_issued', [
+        'action' => 'SendLetter',
+        'fullcall' => "SendLetter:{$GLOBALS["PLAYER_NAME"]}",
+        'actorname' => $GLOBALS["HERIKA_NAME"]  ,
+        'ts' => $last_ts,
+        'gamets' => $last_gamets,
+        'localts' => time(),
+        'original' => 'backgroundaction',
+    ]);
+
+
     $db->insert(
         'diarylog',
         [
