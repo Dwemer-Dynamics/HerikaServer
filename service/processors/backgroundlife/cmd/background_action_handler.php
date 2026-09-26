@@ -442,7 +442,7 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
             'ts' => $last_ts,
             'gamets' => $last_gamets + 1,
             'type' => "innerchat",
-            'data' => "The Narrator:{$GLOBALS["HERIKA_NAME"]} sent this letter to {$GLOBALS["PLAYER_NAME"]} " . "\n<letter_content>\n{$letterContent}\n</letter_content>",
+            'data' => "The Narrator:{$GLOBALS["HERIKA_NAME"]} sent this letter to {$GLOBALS["PLAYER_NAME"]} " . "\n<letter_content>\n{$dialogueBuffer}\n</letter_content>",
             'sess' => $momentum,
             'localts' => time(),
             'people' => $GLOBALS["HERIKA_NAME"],
@@ -464,13 +464,24 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
         ]
     );
 
+    $db->insert('actions_issued', [
+        'action' => 'SendLetter',
+        'fullcall' => "SendLetter:{$GLOBALS["PLAYER_NAME"]}",
+        'actorname' => $GLOBALS["HERIKA_NAME"]  ,
+        'ts' => $last_ts,
+        'gamets' => $last_gamets,
+        'localts' => time(),
+        'original' => 'backgroundaction',
+    ]);
+
+
     $db->insert(
         'diarylog',
         [
             'ts' => $last_ts,
             'gamets' => $last_gamets + 5,
             'topic' => "Sent Letter",
-            'content' => $letterContent,
+            'content' => $dialogueBuffer,
             'tags' => "backgroundlife",
             'people' => $GLOBALS["HERIKA_NAME"],
             'location' => $lastLocation,

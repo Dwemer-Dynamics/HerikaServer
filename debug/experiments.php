@@ -64,7 +64,7 @@ if ($argv[1] == "0x") {
             'sent' => 0,
             'actor' => "rolemaster",
             'text' => "",
-            'action' => "rolecommand|BackgroundCmd@0xFF0010D8@MoveToPlayer",
+            'action' => "rolecommand|BackgroundCmd@0x0003614F@MoveToPlayer",
             'tag' => __FILE__ . ":" . __LINE__,
         ]
     );
@@ -853,15 +853,15 @@ if ($argv[1] == '13') {
 
 if ($argv[1] == '14') {
     $npcMaster = new NpcMaster();
-    $npc = $npcMaster->getByName("Violet");
+    $npc = $npcMaster->getByName("Morgan");
     $skyrimCmd = new SkyrimCommandBuilder();
-    $json = $skyrimCmd->Actor->RemoveFromAllFactions("0x{$npc["refid"]}", "0xFF00127C");
+    $json = $skyrimCmd->Actor->RemoveFromAllFactions("0x{$npc["refid"]}");
     $skyrimCmd->send(cmd: $json);
     $json = $skyrimCmd->Actor->SetRelationshipRank("0x{$npc["refid"]}", "0x14", 1);
     $skyrimCmd->send(cmd: $json);
     //$json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x08365D75");
     //$skyrimCmd->send(cmd: $json);
-    print_r(resolveTravelLocation("Elysium Estate (Interior)", $npc, $GLOBALS["db"]));
+    //print_r(resolveTravelLocation("Elysium Estate (Interior)", $npc, $GLOBALS["db"]));
 
 }
 
@@ -1543,58 +1543,27 @@ if ($argv[1] == '51') {
             'tag' => '',
         ]
     );
-   
+
 }
 
 if ($argv[1] == '52') {
-   print_r(DataLastDataExpandedForNPC("Grosta",-50));
-   
+    print_r(DataLastDataExpandedForNPC("Grosta", -50));
+
 }
 
 if ($argv[1] == '53') {
-   require_once __DIR__ . "/../lib/director_scene.php";
-    $json_data = <<< EOT
-{
-  "actions": [],
-  "lines": [
-    {
-      "listener": "Varek",
-      "speaker": "Lydia",
-      "text": "Do you remember the first time we ventured together, my Thane? You were barely out of Whiterun, and I swore an oath that day to stand at your side. I think Garvilda laughed herself hoarse when you tripped over that root and nearly skewered yourself with your own sword."
-    },
-    {
-      "listener": "Lydia",
-      "speaker": "Jaryra",
-      "text": "Ha! I remember it well. He came charging into Cragslane Cavern like a man possessed, and I was kneeling in the dirt with nothing but chains and despair. He cut my bonds, looked me dead in the eyes, and said… what was it? Something perfectly heroic, I'm sure."
-    },
-    {
-      "listener": "Jaryra",
-      "speaker": "Lydia",
-      "text": "Oh, it was grand. He said, 'You're safe now.' Three words. All that armor, all that steel, and the man had three words in him. I wept. Not from relief, mind you, from laughing so hard I thought my ribs would crack."
-    },
-    {
-      "listener": "Lydia",
-      "speaker": "Jaryra",
-      "text": "Sister, don't tease him too harshly. He's come a long way from that fumbling Thane who couldn't tell a draugr from a door handle. Now he clears barrows, learns Words of Power, and somehow still manages to trip over the same kinds of roots."
-    },
-    {
-      "listener": "Varek",
-      "speaker": "Lydia",
-      "text": "By the gods, we've been through a lot together, haven't we, my Thane? A fumbling warrior, a sworn shield, and a freed slave, walking into crypts that would send most folk running for the hills. And yet here we are, sitting in a dead king's tomb, laughing like we're home. I wouldn't trade a single stumble for all the gold in Belethor's coffers."
-    }
-  ]
-}
+    require_once __DIR__ . "/../lib/director_scene.php";
+    $json_data = <<<EOT
+{"actions":[],"lines":[{"listener":"Varek","speaker":"Alva","text":"Drinks! Finally, something we can all agree on without twenty minutes of debate. Come, sisters — the cellar's been thirsting for company."},{"listener":"Alva","speaker":"Medresi Dran","text":"Pour generously, Alva. If we're toasting a new sister, we do it properly. To Arielle — may her fangs find the right throats."},{"listener":"Medresi Dran","speaker":"Arielle Eardwulf","text":"My gratitude for the... welcome. I will drink, and I will remember who poured."},{"listener":"Alva","speaker":"Arielle Eardwulf","text":"Oh, she learns fast. Mhoria, Aniette — don't let the vampire outdrink you both. That would be embarrassing."},{"listener":"Varek","speaker":"Mhoria","text":"The Dragonborn calls for celebration, and so we celebrate. Raise your cups — to the Clan, and to the blood that binds us. Drink deep, every one of you."}]}
 EOT;
-    $fakeScene=json_decode($json_data, true);
+    $fakeScene = json_decode($json_data, true);
     print_r($fakeScene);
+    $GLOBALS['gameRequest'][2] = intval(DataLastKnownGameTS());
     $master = new NpcMaster();
-    $npc1 = $master->getByName("Lydia");
-    $npc2 = $master->getByName("Jaryra");
 
-    $actors = [
-        "Lydia" => $npc1,
-        "Jaryra" => $npc2,
-    ];
+    foreach ($fakeScene['lines'] as $line) {
+        $actors[$line['speaker']] = $master->getByName($line['speaker']);
+    }
 
     $scene = dwemerSplitDirectorScene($fakeScene, static function (array $line) use ($actors): array {
         chimDirectorActorGlobals($actors[$line['speaker']]);
@@ -1604,23 +1573,93 @@ EOT;
     print_r($scene);
 
     $scene['schema'] = 'chim.director_scene.v2';
-    $scene['generation'] = (int)($GLOBALS['argv'][5] ?? 0);
+    $scene['id'] = bin2hex(random_bytes(16));
+    $scene['generation'] = 2;
     foreach ($scene['lines'] as $index => &$line) {
         chimDirectorActorGlobals($actors[$line['speaker']]);
         $GLOBALS['ENGINE_ROOT'] = $enginePath;
         $line['actor_refid'] = $actors[$line['speaker']]['refid'] ?? '';
         $line['utterance_id'] = 'director-' . $scene['id'] . '-' . $index;
-        
+
         $line['tts_cache_key'] = md5($line['utterance_id']);
         $audio = $GLOBALS['ENGINE_ROOT'] . '/soundcache/' . $line['tts_cache_key'] . '.wav';
 
-        error_log($line['utterance_id']. " " . $audio);
+        error_log($line['utterance_id'] . " " . $audio);
 
-        if (!is_file($audio) || filesize($audio) <= 44) callNpcTtsWithFallback($line['text'], 'default', $line['utterance_id']);
+        if (!is_file($audio) || filesize($audio) <= 44)
+            callNpcTtsWithFallback($line['text'], 'default', $line['utterance_id']);
         if (!is_file($audio) || filesize($audio) <= 44) {
             dwemerDirectorLogError('Director audio generation failed');
             throw new RuntimeException('Director audio generation failed');
         }
     }
+    unset($line);
+    $db = $GLOBALS['db'];
+    if ($db->query('BEGIN') === false) {
+        dwemerDirectorLogError('Director publication failed');
+        throw new RuntimeException('Director publication failed');
+    }
+    try {
+        foreach ($scene['lines'] as $index => $line) {
+            if (
+                !$db->insertReturningId('eventlog', [
+                    'type' => 'chat',
+                    'ts' => time() + $index,
+                    'gamets' => (int) ($GLOBALS['gameRequest'][2] ?? 0),
+                    'localts' => time(),
+                    'sess' => 'pending',
+                    'data' => $line['speaker'] . ': ' . $line['text'] . ' ' . buildDialogueTargetSuffix($line['listener']),
+                    'people' => '|' . $line['speaker'] . '|' . $line['listener'] . '|',
+                    'location' => $GLOBALS['CACHE_LOCATION'] ?? '',
+                    'party' => $GLOBALS['CACHE_PARTY'] ?? '',
+                    'utterance_id' => $line['utterance_id'],
+                    'delivery_state' => 'pending'
+                ], 'rowid')
+            ) {
+                dwemerDirectorLogError('Director pending history failed');
+                throw new RuntimeException('Director pending history failed');
+            }
+        }
+        $json = json_encode($scene, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        if (
+            !$db->insertReturningId('rolemaster', ['localts' => time(), 'ttl' => 600, 'type' => 'director_scene', 'data' => $json], 'rowid')
+            || !$db->insertReturningId('responselog', [
+                'localts' => time(),
+                'sent' => 0,
+                'actor' => 'rolemaster',
+                'text' => '',
+                'action' => 'rolecommand|DirectorScene@' . base64_encode($json),
+                'tag' => 'director_scene:' . $scene['id']
+            ], 'rowid')
+        ) {
+            dwemerDirectorLogError('Director scene queue failed');
+            throw new RuntimeException('Director scene queue failed');
+        }
+        if ($db->query('COMMIT') === false) {
+            dwemerDirectorLogError('Director commit failed');
+            throw new RuntimeException('Director commit failed');
+        }
+    } catch (Throwable $error) {
+        $db->query('ROLLBACK');
+        dwemerDirectorLogError('Director publication transaction rolled back', $error);
+        throw $error;
+    }
+    Logger::info('[DIRECTOR] Authored scene queued: ' . $scene['id'] . ' lines=' . count($scene['lines']));
 }
 
+if ($argv[1] == '54') {
+    // Telport all npcs belonging to the 'dark followers' profile to player
+    $npcCtl = new NpcMaster();
+    $prfCtl = new CoreProfile();
+    $darkfFollowers = $prfCtl->getByLabel('dark followers');
+    $npcs = $GLOBALS['db']->fetchAll("select refid from core_npc_master where profile_id=" . $darkfFollowers['id']);
+    $skyrimCmd = new SkyrimCommandBuilder();
+    foreach ($npcs as $npc) {
+
+
+        $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x14", 0, 0, 155);
+        $skyrimCmd->send(cmd: $json);
+    }
+
+
+}
