@@ -1,4 +1,5 @@
-<?php 
+<?php
+require_once dirname(__DIR__) . '/lib/speech_trace.php';
 
 
 $GLOBALS["TTS_IN_USE"] = function($textString, $mood, $stringforhash) {
@@ -33,7 +34,7 @@ $GLOBALS["TTS_IN_USE"] = function($textString, $mood, $stringforhash) {
     if (!isset($GLOBALS["AVOID_TTS_CACHE"])) {
         if (file_exists($wavName)) {
             Logger::info("TTS cache hit for hash: " . $hash);
-            return "soundcache/" . $hash . ".wav";
+            return chimTraceCachedTts("soundcache/" . $hash . ".wav", 'deepgram');
         } else {
             Logger::info("TTS cache miss for hash: " . $hash);
         }

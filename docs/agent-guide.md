@@ -33,6 +33,8 @@ An HTTP success does not prove that an actor spoke or an action completed. Corre
 
 HerikaServer, StobeServer, DialecticServer and LorkhanServer are independent products. Shared ancestry does not make their schemas, hooks or request formats interchangeable. Inspect each requested product before porting code.
 
+For correlated synthesis, cache, filtering, queue and playback records, see [speech trace diagnostics](speech-tracing.md).
+
 ## Configuration, logs and user state
 
 `conf/conf.sample.php` documents configuration defaults; installed `conf/conf.php` and generated profile configuration may contain secrets. Runtime settings also live in the database and must be changed through their owning APIs/tools. Do not replace live configuration with the sample or publish its values.

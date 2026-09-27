@@ -604,6 +604,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 if ($utteranceId === "") {
                     continue;
                 }
+                chimSpeechTrace('client_aborted', [], $utteranceId);
                 $utteranceIds[$utteranceId] = $db->escape($utteranceId);
             }
         }
@@ -639,6 +640,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         $speechSpeaker = isset($speech["speaker"]) ? trim((string) $speech["speaker"]) : "";
         $speechListener = isset($speech["listener"]) ? trim((string) $speech["listener"]) : "";
         $speechUtteranceId = isset($speech["utterance_id"]) ? trim((string) $speech["utterance_id"]) : "";
+        chimSpeechTrace('client_acknowledged', [], $speechUtteranceId);
         $audiblePeople = [];
         if (isset($speech["companions"]) && is_array($speech["companions"])) {
             foreach ($speech["companions"] as $companionName) {
