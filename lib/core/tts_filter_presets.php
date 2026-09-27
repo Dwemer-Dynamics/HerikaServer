@@ -1,6 +1,6 @@
 <?php
 
-const CHIM_TTS_FILTER_PRESET_VERSION = 2;
+const CHIM_TTS_FILTER_PRESET_VERSION = 3;
 
 /**
  * Return the server-owned NPC voice-filter catalog.
@@ -243,6 +243,76 @@ function ttsFilterPresetCatalog()
                 'aresample=24000',
             ],
         ],
+        'werewolf' => [
+            'id' => 'werewolf',
+            'label' => 'Werewolf',
+            'description' => 'Lowers pitch with a rough, growling texture while preserving speaking speed.',
+            'exposed' => true,
+            'filters' => [
+                'aresample=24000',
+                'asetrate=17280',
+                'aresample=24000',
+                'atempo=1.388889',
+                'highpass=f=55',
+                'lowpass=f=6500',
+                'equalizer=f=160:t=q:w=0.9:g=4',
+                'tremolo=f=32:d=0.25',
+                'asoftclip=type=tanh:threshold=0.35:output=0.8',
+                'loudnorm=I=-16:TP=-2:LRA=7',
+                'aresample=24000',
+                'alimiter=limit=0.89:level=false',
+            ],
+        ],
+        'vampire_lord' => [
+            'id' => 'vampire_lord',
+            'label' => 'Vampire Lord',
+            'description' => 'Lowers pitch and adds a spectral double voice with a short echo.',
+            'exposed' => true,
+            'filters' => [
+                'aresample=24000',
+                'asetrate=20160',
+                'aresample=24000',
+                'atempo=1.190476',
+                'highpass=f=70',
+                'lowpass=f=8500',
+                'chorus=0.6:0.8:45:0.35:0.4:2',
+                'aecho=0.8:0.8:95:0.25',
+                'loudnorm=I=-17:TP=-2:LRA=7',
+                'aresample=24000',
+                'alimiter=limit=0.89:level=false',
+            ],
+        ],
+        'combat' => [
+            'id' => 'combat',
+            'label' => 'Combat',
+            'description' => 'Faster, brighter and more forceful speech with tightly controlled peaks.',
+            'exposed' => true,
+            'filters' => [
+                'highpass=f=110',
+                'equalizer=f=2400:t=q:w=1:g=5',
+                'acompressor=threshold=-26dB:ratio=6:attack=2:release=65:makeup=3',
+                'atempo=1.08',
+                'loudnorm=I=-13:TP=-2:LRA=5',
+                'aresample=24000',
+                'alimiter=limit=0.89:level=false',
+            ],
+        ],
+        'sneaking' => [
+            'id' => 'sneaking',
+            'label' => 'Sneaking',
+            'description' => 'Noticeably quieter, darker and slightly slower speech. Softens delivery rather than synthesizing a true whisper.',
+            'exposed' => true,
+            'filters' => [
+                'highpass=f=160',
+                'lowpass=f=2800',
+                'equalizer=f=900:t=q:w=1:g=-3',
+                'acompressor=threshold=-28dB:ratio=3:attack=12:release=130:makeup=1',
+                'atempo=0.96',
+                'loudnorm=I=-27:TP=-8:LRA=5',
+                'aresample=24000',
+                'alimiter=limit=0.4:level=false',
+            ],
+        ],
         'book_reading' => [
             'id' => 'book_reading',
             'label' => 'Book reading',
@@ -306,20 +376,20 @@ function resolveActorTtsFilterPreset(array $metadata, bool $enabled, bool $detec
         }
         if ($kind === 'transformation' && $detectTransformations) {
             if (($state['state'] ?? '') === 'werewolf') {
-                return 'deep';
+                return 'werewolf';
             }
             if (($state['state'] ?? '') === 'vampire_lord') {
-                return 'sinister';
+                return 'vampire_lord';
             }
         } elseif ($kind === 'activity') {
             if (!empty($state['is_dead']) || !empty($state['is_unconscious']) || !empty($state['is_sleeping'])) {
                 return $saved;
             }
             if (!empty($state['is_in_combat']) || !empty($state['is_attacking'])) {
-                return 'commanding';
+                return 'combat';
             }
             if (!empty($state['is_sneaking'])) {
-                return 'soft_spoken';
+                return 'sneaking';
             }
         }
     }
