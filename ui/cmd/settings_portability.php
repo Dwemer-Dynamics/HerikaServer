@@ -70,6 +70,7 @@ function chimPortableGlobalFields(): array
         'HIDE_AMBIENT_COMBAT' => 'boolean',
         'DISABLE_REANIMATION_TRACKING' => 'boolean',
         'TRANSFORMATION_DETECTION' => 'boolean',
+        'AUTOMATIC_ACTOR_VOICE_EFFECTS' => 'boolean',
         'POWER_AWARENESS_ENABLED' => 'boolean',
         'CHIM_ITEM_PICKUP_EVENTLOG_MIN_VALUE' => 'integer',
         'PROMPT_TIMESTAMP' => 'boolean',
