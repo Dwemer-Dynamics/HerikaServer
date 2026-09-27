@@ -2119,7 +2119,7 @@ function qsLocalLlmRefreshWarnings(){
   const urlEl = qsEl("qs_local_llm_url");
   const loopbackWarning = qsEl("qs_local_llm_loopback_warning");
   if (loopbackWarning) {
-    loopbackWarning.hidden = !(urlEl && qsLocalLlmIsLoopback(urlEl.value));
+    loopbackWarning.hidden = qsEl("qs_local_llm_server_type").value === "dwemerdistro" || !(urlEl && qsLocalLlmIsLoopback(urlEl.value));
   }
   const player2Warning = qsEl("qs_local_llm_player2_warning");
   if (player2Warning) {
@@ -2471,3 +2471,5 @@ document.addEventListener("DOMContentLoaded", function(){
 </script>';
 
 ?>
+
+<script defer data-distro-llm data-status-url="api/dwemerdistro_llm.php" src="js/dwemerdistro_llm.js"></script>
