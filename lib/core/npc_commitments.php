@@ -148,7 +148,7 @@ if (!function_exists('chimCommitmentPrepareCreatePayload')) {
             if ($dueHours === null && preg_match('/\btomorrow\b/i', $requestText)) {
                 $dueHours = 24;
             }
-            if ($dueHours === null && is_numeric($payload['repeat_every_hours'] ?? null)) {
+            if ($dueHours === null && is_numeric($payload['repeat_every_hours'] ?? null) && (float)$payload['repeat_every_hours'] > 0) {
                 $dueHours = (float)$payload['repeat_every_hours'];
             }
             $payload['due_in_hours'] = $dueHours ?? 24;
