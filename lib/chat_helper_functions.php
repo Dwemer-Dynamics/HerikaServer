@@ -134,9 +134,11 @@ function callConfiguredTts($textString, $mood, $stringforhash)
     }
 
     $activePresetId = getActiveTtsFilterPresetId();
+    $filteredCache = is_file(dirname(__DIR__) . '/soundcache/' . md5(trim($stringforhash)) . '.wav.ttsfilter');
+    $requiresFreshAudio = $activePresetId !== 'none' || $filteredCache;
     $hadAvoidTtsCache = array_key_exists('AVOID_TTS_CACHE', $GLOBALS);
     $previousAvoidTtsCache = $GLOBALS['AVOID_TTS_CACHE'] ?? null;
-    if ($activePresetId !== 'none') {
+    if ($requiresFreshAudio) {
         // Connector cache keys are text-only, so a filtered NPC must not reuse another voice or preset.
         $GLOBALS['AVOID_TTS_CACHE'] = true;
     }
@@ -152,7 +154,7 @@ function callConfiguredTts($textString, $mood, $stringforhash)
         chimSpeechTrace('tts_failed', ['reason' => 'exception', 'connector' => $ttsFunction]);
         throw $e;
     } finally {
-        if ($activePresetId !== 'none') {
+        if ($requiresFreshAudio) {
             if ($hadAvoidTtsCache) {
                 $GLOBALS['AVOID_TTS_CACHE'] = $previousAvoidTtsCache;
             } else {
@@ -1653,9 +1655,11 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                 if (!$ttsOutput) {
                     if (isset($GLOBALS["TTS_FALLBACK_FNCT"])) {
                         $activePresetId = getActiveTtsFilterPresetId();
+                        $filteredCache = is_file(dirname(__DIR__) . '/soundcache/' . md5(trim($responseForSubtitles)) . '.wav.ttsfilter');
+                        $requiresFreshAudio = $activePresetId !== 'none' || $filteredCache;
                         $hadAvoidTtsCache = array_key_exists('AVOID_TTS_CACHE', $GLOBALS);
                         $previousAvoidTtsCache = $GLOBALS['AVOID_TTS_CACHE'] ?? null;
-                        if ($activePresetId !== 'none') {
+                        if ($requiresFreshAudio) {
                             $GLOBALS['AVOID_TTS_CACHE'] = true;
                         }
 
@@ -1664,7 +1668,7 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                             $ttsOutput = $GLOBALS["TTS_FALLBACK_FNCT"]($responseForSpeech, $mood, $responseForSubtitles);
                             chimSpeechTrace($ttsOutput ? 'tts_completed' : 'tts_failed', ['connector' => 'legacy_fallback']);
                         } finally {
-                            if ($activePresetId !== 'none') {
+                            if ($requiresFreshAudio) {
                                 if ($hadAvoidTtsCache) {
                                     $GLOBALS['AVOID_TTS_CACHE'] = $previousAvoidTtsCache;
                                 } else {

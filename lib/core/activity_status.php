@@ -199,6 +199,8 @@ function chimClearActivityStatusMetadata(array $metadata): array
 function chimBuildActivityStatusMetadataUpdates(array $payload): array
 {
     $status = chimSanitizeActivityStatusPayload($payload);
+    // Client timestamps may be monotonic nanoseconds, not Unix milliseconds.
+    $status['received_at_ms'] = chimActivityStatusNowMs();
 
     $setValues = [
         'activity_status' => $status,
