@@ -218,26 +218,6 @@ function herikaActionGroupsGetSpecs()
                 'additionalProperties' => false,
             ],
         ],
-        'GroupedGesture' => [
-            'action_name' => 'Perform_Gesture',
-            'description' => 'Perform a visual drinking or toast gesture by selecting drink_gesture or toast with mode. This does not consume an inventory item.',
-            'selector' => 'mode',
-            'variants' => [
-                'drink_gesture' => 'Drink',
-                'toast' => 'Toast',
-            ],
-            'parameters' => [
-                'type' => 'object',
-                'required' => ['mode'],
-                'properties' => [
-                    'mode' => [
-                        'type' => 'string',
-                        'description' => 'Visual gesture to perform.',
-                    ],
-                ],
-                'additionalProperties' => false,
-            ],
-        ],
     ];
 
     return $specs;
@@ -545,15 +525,7 @@ function herikaActionGroupsResolveExecution($groupCode, $parameter)
         if ($selectedCode === '') {
             $missing[] = 'mode';
         }
-    } elseif ($groupCode === 'GroupedGesture') {
-        $gesture = herikaActionGroupsNormalizeChoice($payload['mode'] ?? ($payload['gesture'] ?? ($payload['target'] ?? '')));
-        if ($gesture === 'drink') {
-            $gesture = 'drink_gesture';
-        }
-        $selectedCode = strval($variants[$gesture] ?? '');
-        if ($selectedCode === '') {
-            $missing[] = 'gesture';
-        }
+
     }
 
     $missing = array_values(array_unique($missing));

@@ -43,7 +43,6 @@ $ENABLED_FUNCTIONS_LOCAL = [
     'UseSoulGaze',
     'MakeFollower',
     'Toast',
-    'Drink',
     'Consume',
     'StartRitualCeremony',
     'EndRitualCeremony',

@@ -284,15 +284,11 @@ final class ActionCatalogTest extends TestCase
         );
 
         $this->assertArrayNotHasKey('AttackHunt', $rows);
+        $this->assertArrayNotHasKey('Drink', $rows);
         $this->assertTrue($rows['MoveTo']['available_to_npc']);
         $this->assertFalse($rows['MoveTo']['available_to_followers']);
         $this->assertFalse($rows['MoveTo']['available_to_narrator']);
         $this->assertTrue($rows['MoveTo']['is_activated']);
-
-        $this->assertTrue($rows['Drink']['available_to_npc']);
-        $this->assertTrue($rows['Drink']['available_to_followers']);
-        $this->assertFalse($rows['Drink']['available_to_narrator']);
-        $this->assertTrue($rows['Drink']['is_activated']);
 
         $this->assertFalse($rows['TeleportNPC']['available_to_npc']);
         $this->assertFalse($rows['TeleportNPC']['available_to_followers']);
@@ -433,11 +429,6 @@ final class ActionCatalogTest extends TestCase
         $this->assertSame('plugin_command', $rows['MoveTo']['metadata']['dispatch']);
         $this->assertTrue($rows['MoveTo']['game_function']);
         $this->assertNull($rows['MoveTo']['script_proxy_program']);
-
-        $this->assertSame('script_proxy', $rows['Drink']['metadata']['dispatch']);
-        $this->assertTrue($rows['Drink']['game_function']);
-        $this->assertIsArray($rows['Drink']['script_proxy_program']);
-        $this->assertNotEmpty($rows['Drink']['script_proxy_program']['cases']);
 
         $this->assertSame('rolecommand', $rows['TeleportNPC']['metadata']['dispatch']);
         $this->assertTrue($rows['TeleportNPC']['game_function']);
@@ -843,7 +834,7 @@ final class ActionCatalogTest extends TestCase
             'IncreaseWalkSpeed', 'DecreaseWalkSpeed',
             'GiveItemTo', 'GiveGoldTo',
             'OpenInventory', 'OpenInventory2',
-            'Drink', 'Toast',
+            'Toast',
             'Inspect', 'InspectSurroundings', 'CheckInventory', 'TakeASeat', 'GoToSleep', 'TravelTo', 'ReturnBackHome',
         ];
         $GLOBALS['FUNCTIONS'] = [];
@@ -864,7 +855,7 @@ final class ActionCatalogTest extends TestCase
         $GLOBALS['HERIKA_ACTION_GROUP_CUSTOM_CODE_SET'] = [];
 
         try {
-            $this->assertSame(10, herikaActionGroupsApplyToRuntime());
+            $this->assertSame(9, herikaActionGroupsApplyToRuntime());
             $this->assertCount(11, $GLOBALS['FUNCTIONS']);
             $this->assertContains('KeepAction', array_column($GLOBALS['FUNCTIONS'], 'name'));
             $this->assertContains('Handle_Crime', array_column($GLOBALS['FUNCTIONS'], 'name'));
@@ -873,7 +864,9 @@ final class ActionCatalogTest extends TestCase
             $this->assertContains('Set_Pace', array_column($GLOBALS['FUNCTIONS'], 'name'));
             $this->assertContains('Give', array_column($GLOBALS['FUNCTIONS'], 'name'));
             $this->assertContains('Exchange', array_column($GLOBALS['FUNCTIONS'], 'name'));
-            $this->assertContains('Perform_Gesture', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertNotContains('Perform_Gesture', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertContains('Toast', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertArrayNotHasKey('GroupedGesture', herikaActionGroupsGetSpecs());
             $this->assertNotContains('Attack', array_column($GLOBALS['FUNCTIONS'], 'name'));
             $this->assertNotContains('GiveGoldTo', $GLOBALS['ENABLED_FUNCTIONS']);
             $this->assertContains('GroupedGive', $GLOBALS['ENABLED_FUNCTIONS']);
@@ -900,17 +893,17 @@ final class ActionCatalogTest extends TestCase
     public function testCustomizedVanillaActionsRemainIndividual(): void
     {
         $GLOBALS['FUNCTIONS'] = [
-            ['name' => 'Drink', 'description' => '', 'parameters' => []],
-            ['name' => 'Toast', 'description' => '', 'parameters' => []],
+            ['name' => 'IncreaseWalkSpeed', 'description' => '', 'parameters' => []],
+            ['name' => 'DecreaseWalkSpeed', 'description' => '', 'parameters' => []],
         ];
-        $GLOBALS['ENABLED_FUNCTIONS'] = ['Drink', 'Toast'];
-        $GLOBALS['TEST_FUNCTION_CODE_MAP'] = ['Drink' => 'Drink', 'Toast' => 'Toast'];
-        $GLOBALS['HERIKA_ACTION_GROUP_CUSTOM_CODE_SET'] = ['Toast' => true];
+        $GLOBALS['ENABLED_FUNCTIONS'] = ['IncreaseWalkSpeed', 'DecreaseWalkSpeed'];
+        $GLOBALS['TEST_FUNCTION_CODE_MAP'] = ['IncreaseWalkSpeed' => 'IncreaseWalkSpeed', 'DecreaseWalkSpeed' => 'DecreaseWalkSpeed'];
+        $GLOBALS['HERIKA_ACTION_GROUP_CUSTOM_CODE_SET'] = ['DecreaseWalkSpeed' => true];
 
         try {
             $this->assertSame(0, herikaActionGroupsApplyToRuntime());
-            $this->assertSame(['Drink', 'Toast'], array_column($GLOBALS['FUNCTIONS'], 'name'));
-            $this->assertSame(['Drink', 'Toast'], $GLOBALS['ENABLED_FUNCTIONS']);
+            $this->assertSame(['IncreaseWalkSpeed', 'DecreaseWalkSpeed'], array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertSame(['IncreaseWalkSpeed', 'DecreaseWalkSpeed'], $GLOBALS['ENABLED_FUNCTIONS']);
         } finally {
             unset(
                 $GLOBALS['FUNCTIONS'],
@@ -979,8 +972,9 @@ final class ActionCatalogTest extends TestCase
             $this->assertSame('', $pace['parameter_value']);
 
             $gesture = herikaActionGroupsResolveExecution('GroupedGesture', ['mode' => 'toast']);
-            $this->assertTrue($gesture['valid']);
-            $this->assertSame('Toast', $gesture['code_name']);
+            $this->assertNull($gesture);
+            $this->assertContains('Drink', herikaGetRetiredActionCodes());
+            $this->assertFalse(herikaActionCatalogRowIsAvailableInCurrentMode(['code_name'=>'Drink','available_to_npc'=>true,'is_activated'=>true]));
 
             $legacyFollow = herikaActionGroupsResolveExecution('GroupedFollow', ['target' => 'Lydia']);
             $this->assertTrue($legacyFollow['valid']);

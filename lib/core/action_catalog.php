@@ -9,6 +9,7 @@ function herikaGetRetiredActionCodes()
 {
     return [
         'Relax',
+        'Drink',
         'AttackHunt',
         'LookAt',
         'GetDateTime',

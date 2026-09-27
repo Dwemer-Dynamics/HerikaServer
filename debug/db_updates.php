@@ -8336,4 +8336,20 @@ if ($checkVersion('core_action_retire_relax') < 20260927001) {
     }
 }
 
+// Retire Drink from existing catalogs as well as fresh seeds.
+if ($checkVersion('core_action_retire_drink') < 20260927001) {
+    $db->execQuery('BEGIN');
+    try {
+        if ($db->execQuery("DELETE FROM public.core_action_custom WHERE code_name='Drink'") === false
+            || $db->execQuery("DELETE FROM public.core_action WHERE code_name='Drink'") === false) {
+            throw new RuntimeException('Could not retire Drink');
+        }
+        $updateVersion('core_action_retire_drink', 20260927001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Drink retirement failed: ' . $e->getMessage());
+    }
+}
+
 ?>
