@@ -298,6 +298,8 @@ if (!function_exists('chimCommitmentSetStatus')) {
             return ['ok' => false, 'error' => 'task_not_found_or_not_owned'];
         }
 
+        $expectedDue = (int)$active['due_gamets'];
+        $expectedCount = (int)$active['occurrence_count'];
         $repeatIntervalGamets = (int)($active['repeat_interval_gamets'] ?? 0);
         $isRepeating = $repeatIntervalGamets > 0 && $status !== 'cancelled';
         if ($isRepeating) {
@@ -318,6 +320,7 @@ if (!function_exists('chimCommitmentSetStatus')) {
                  WHERE id = {$commitmentId}
                    AND lower(actor_name) = lower('{$actorSql}')
                    AND status IN ('scheduled', 'due')
+                   AND due_gamets = {$expectedDue} AND occurrence_count = {$expectedCount}
                 RETURNING id, due_gamets, occurrence_count
             ");
 
@@ -345,6 +348,7 @@ if (!function_exists('chimCommitmentSetStatus')) {
              WHERE id = {$commitmentId}
                AND lower(actor_name) = lower('{$actorSql}')
                AND status IN ('scheduled', 'due')
+               AND due_gamets = {$expectedDue} AND occurrence_count = {$expectedCount}
             RETURNING id
         ");
 
@@ -441,7 +445,7 @@ if (!function_exists('chimCommitmentFormatContext')) {
             if ($repeatIntervalGamets > 0) {
                 $repeatHours = max(0.25, $repeatIntervalGamets * 0.0000024);
                 $details[] = 'repeats every about ' . round($repeatHours, 2) . ' in-game hour(s)';
-                $details[] = 'completed ' . (int)($row['occurrence_count'] ?? 0) . ' time(s)';
+                $details[] = 'resolved ' . (int)($row['occurrence_count'] ?? 0) . ' time(s)';
             }
             $suffix = empty($details) ? '' : ' (' . implode(', ', $details) . ')';
             $lines[] = sprintf(

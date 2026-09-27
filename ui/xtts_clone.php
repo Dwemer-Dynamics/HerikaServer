@@ -16,6 +16,7 @@ require_once($enginePath . "conf" . DIRECTORY_SEPARATOR . "conf_loader.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_connector.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_fallback.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_studio_provider_detection.php");
+require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "tts_pronunciation_preview.php");
 
 require_once(__DIR__.DIRECTORY_SEPARATOR."profile_loader.php");
 
@@ -36,6 +37,7 @@ if (!function_exists('chimTtsStudioTabToDriver')) {
             'chatterbox' => 'chatterbox',
             'pockettts' => 'pockettts',
             'omnivoice' => 'omnivoice',
+            'higgs' => 'higgs',
             default => '',
         };
     }
@@ -263,6 +265,23 @@ if (!function_exists('chimTtsStudioFetchSpeakersList')) {
         $endpoint = chimTtsStudioResolveEndpointForDriver($driver);
         if ($endpoint === '') {
             return [];
+        }
+
+        if ($driver === 'higgs') {
+            $host = strtolower(strval(parse_url($endpoint, PHP_URL_HOST)));
+            $voices = in_array($host, ['localhost', '127.0.0.1', '::1', '[::1]'], true) ? getLocalVoices() : [];
+            $metadata = chimTtsStudioResolveConnectorMetadata('higgs');
+            $model = trim(strval($metadata['model'] ?? 'higgs-v3')) ?: 'higgs-v3';
+            $probe = chimTtsStudioProbeJson(chimTtsStudioAudioCppBaseEndpoint($endpoint) . '/v1/audio/voices?model=' . rawurlencode($model));
+            if (chimTtsStudioProbeSucceeded($probe)) {
+                foreach (($probe['decoded']['voices'] ?? []) as $item) {
+                    $name = is_array($item) ? strval($item['id'] ?? $item['name'] ?? '') : strval($item);
+                    if ($name !== '') $voices[] = $name;
+                }
+            }
+            $voices = array_values(array_unique($voices));
+            sort($voices);
+            return $voices;
         }
 
         if (chimTtsStudioIsAudioCppPocketTts($driver, $endpoint) && function_exists('getLocalVoices')) {
@@ -1004,6 +1023,33 @@ if (isset($_GET['action']) && $_GET['action'] === 'test_pockettts' && isset($_GE
     exit;
 }
 
+// Preview Higgs through its native connector without changing saved engine selection.
+if (($_GET['action'] ?? '') === 'test_higgs') {
+    header('Content-Type: application/json');
+    $voice = trim(strval($_GET['voice'] ?? ''));
+    if ($voice === '' || str_contains($voice, '/') || str_contains($voice, '\\')) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Select a valid Higgs voice name.']);
+        exit;
+    }
+    if (!in_array($voice, chimTtsStudioFetchSpeakersList('higgs'), true)) {
+        http_response_code(422);
+        echo json_encode(['error' => 'The selected Higgs voice sample is unavailable. Upload it or refresh the voice list.']);
+        exit;
+    }
+    @set_time_limit(150);
+    chimTtsStudioConfigureCompatibleTestGlobals('higgs', 'higgs', $voice);
+    require($enginePath . 'tts/tts-higgs.php');
+    $file = $GLOBALS['TTS_IN_USE']('Welcome, traveler. Let us hear how this voice sounds.', 'neutral', 'higgs-studio-' . $voice);
+    if (is_string($file) && $file !== '' && is_file($enginePath . $file)) {
+        echo json_encode(['url' => $webRoot . '/' . $file . '?ts=' . time()]);
+    } else {
+        http_response_code(502);
+        echo json_encode(['error' => 'Higgs could not generate speech. Check the service, connector, and selected voice sample.']);
+    }
+    exit;
+}
+
 // OmniVoice voice test handler
 if (isset($_GET['action']) && $_GET['action'] === 'test_omnivoice' && isset($_GET['voice'])) {
     $logFile = $enginePath . 'log.txt';
@@ -1439,7 +1485,7 @@ error_reporting(E_ALL);
 
 // Tab state from URL parameter
 $activeTab = $_GET['tab'] ?? 'xtts';
-$validTabs = ['xtts', 'chatterbox', 'pockettts', 'omnivoice', 'cartesia', 'inworld', 'fallbacks'];
+$validTabs = ['higgs', 'xtts', 'chatterbox', 'pockettts', 'omnivoice', 'cartesia', 'inworld', 'fallbacks', 'pronunciations'];
 if (!in_array($activeTab, $validTabs, true)) {
     $activeTab = 'xtts';
 }
@@ -1874,6 +1920,21 @@ function chimTtsStudioProbeEndpointStatus(string $driver, string $endpoint): arr
         ];
     }
 
+    if ($driver === 'higgs') {
+        $base = chimTtsStudioAudioCppBaseEndpoint($endpoint);
+        $health = chimTtsStudioProbeJson($base . '/health');
+        $models = chimTtsStudioProbeJson($base . '/v1/models');
+        $metadata = chimTtsStudioResolveConnectorMetadata('higgs');
+        $model = trim(strval($metadata['model'] ?? 'higgs-v3')) ?: 'higgs-v3';
+        $matches = false;
+        foreach (($models['decoded']['data'] ?? []) as $item) {
+            if (($item['id'] ?? '') === $model && ($item['family'] ?? '') === 'higgs_audio_tts') $matches = true;
+        }
+        $ready = chimTtsStudioProbeSucceeded($health) && chimTtsStudioProbeSucceeded($models) && $matches;
+        return ['class' => $ready ? 'connected' : 'disconnected', 'label' => $ready ? 'Online' : 'Unavailable',
+            'title' => $endpoint . ($ready ? ' - Higgs TTS 3 is available' : ' - Start Higgs and check the connector model')];
+    }
+
     $detected = chimTtsStudioDetectEndpointProvider($endpoint);
     if (!$detected['reachable']) {
         return [
@@ -1985,6 +2046,7 @@ $xttsStudioEndpoints = [
     'xtts-fastapi' => chimTtsStudioResolveEndpointForDriver('xtts-fastapi'),
     'chatterbox' => chimTtsStudioResolveEndpointForDriver('chatterbox'),
     'pockettts' => chimTtsStudioResolveEndpointForDriver('pockettts'),
+    'higgs' => chimTtsStudioResolveEndpointForDriver('higgs'),
     'omnivoice' => chimTtsStudioResolveEndpointForDriver('omnivoice'),
 ];
 $pocketTtsRuntime = chimTtsStudioDetectPocketTtsRuntime($xttsStudioEndpoints['pockettts'] ?? '');
@@ -1994,6 +2056,7 @@ $ttsStudioProviderStatuses = [
     'xtts' => chimTtsStudioProbeEndpointStatus('xtts-fastapi', $xttsStudioEndpoints['xtts-fastapi'] ?? ''),
     'chatterbox' => chimTtsStudioProbeEndpointStatus('chatterbox', $xttsStudioEndpoints['chatterbox'] ?? ''),
     'pockettts' => chimTtsStudioProbeEndpointStatus('pockettts', $xttsStudioEndpoints['pockettts'] ?? ''),
+    'higgs' => chimTtsStudioProbeEndpointStatus('higgs', $xttsStudioEndpoints['higgs'] ?? ''),
     'omnivoice' => chimTtsStudioProbeEndpointStatus('omnivoice', $xttsStudioEndpoints['omnivoice'] ?? ''),
     'cartesia' => (function () {
         $status = getCartesiaConfigurationStatus();
@@ -2015,9 +2078,51 @@ $speakersMessage = '';
 $cartesiaMessage = '';
 $inworldMessage = '';
 $ttsFallbackManager = new TTSFallback();
+$ttsPronunciationManager = new TTSPronunciationDictionary();
 
 // Handle form submissions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $pronunciationAction = strval($_POST['action'] ?? '');
+    if ($pronunciationAction === 'save_tts_pronunciation') {
+        $pronunciationId = intval($_POST['id'] ?? 0);
+        $saved = $ttsPronunciationManager->saveCustom(
+            $pronunciationId > 0 ? $pronunciationId : null,
+            strval($_POST['source_text'] ?? ''),
+            strval($_POST['spoken_text'] ?? ''),
+            strval($_POST['npc_names'] ?? ''),
+            strval($_POST['races'] ?? ''),
+            strval($_POST['oghma_tags'] ?? ''),
+            isset($_POST['enabled'])
+        );
+        $message .= $saved
+            ? "<p style='color:#4caf50;'><strong>Pronunciation saved.</strong></p>"
+            : "<p style='color:#f44336;'><strong>Pronunciation could not be saved. Check the fields for blanks or duplicates, apply database updates, and try again.</strong></p>";
+    } elseif ($pronunciationAction === 'save_builtin_tts_pronunciation') {
+        // Built-ins expose only the spoken text and the enabled flag; the source
+        // term, scope, and built-in flag are never read from the request.
+        $savedBuiltin = $ttsPronunciationManager->saveBuiltin(
+            intval($_POST['id'] ?? 0),
+            strval($_POST['spoken_text'] ?? ''),
+            isset($_POST['enabled'])
+        );
+        $message .= $savedBuiltin
+            ? "<p style='color:#4caf50;'><strong>Built-in pronunciation saved.</strong></p>"
+            : "<p style='color:#f44336;'><strong>Built-in pronunciation could not be saved. Enter a spoken version, apply database updates, and try again.</strong></p>";
+    } elseif ($pronunciationAction === 'toggle_tts_pronunciation') {
+        $updated = $ttsPronunciationManager->setEnabled(
+            intval($_POST['id'] ?? 0),
+            chimTtsPronunciationBoolean($_POST['enabled'] ?? false)
+        );
+        $message .= $updated
+            ? "<p style='color:#4caf50;'><strong>Pronunciation status updated.</strong></p>"
+            : "<p style='color:#f44336;'><strong>Pronunciation status could not be updated.</strong></p>";
+    } elseif ($pronunciationAction === 'delete_tts_pronunciation') {
+        $deleted = $ttsPronunciationManager->deleteEntry(intval($_POST['id'] ?? 0));
+        $message .= $deleted
+            ? "<p style='color:#4caf50;'><strong>Pronunciation deleted.</strong></p>"
+            : "<p style='color:#f44336;'><strong>Pronunciation could not be deleted.</strong></p>";
+    }
+
     if (($_POST['action'] ?? '') === 'save_tts_fallbacks') {
         $submittedFallbacks = $_POST['fallbacks'] ?? [];
         if (!is_array($submittedFallbacks)) {
@@ -2565,6 +2670,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $submitProviderLabel = $activeTab === 'chatterbox'
             ? 'Chatterbox'
             : ($activeTab === 'pockettts' ? 'PocketTTS' : ($activeTab === 'omnivoice' ? 'OmniVoice' : 'XTTS'));
+        if ($submitDriver === 'higgs') $submitProviderLabel = 'Higgs TTS 3';
         $submitLanguage = $submitDriver === 'omnivoice' ? $activeOmniVoiceLanguage : '';
         if ($submitEndpoint === '') {
             $message .= "<p style='color:red;'>No endpoint configured for {$submitProviderLabel}.</p>";
@@ -2625,7 +2731,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Process uploaded files - upload to XTTS server
         $uploadedCount = 0;
-        if (chimTtsStudioIsAudioCppPocketTts($submitDriver, $submitEndpoint)) {
+        if ($submitDriver === 'higgs' || chimTtsStudioIsAudioCppPocketTts($submitDriver, $submitEndpoint)) {
             $uploadedCount = count($filesToProcess);
         } else {
         foreach (($submitEndpoint !== '' ? $filesToProcess : []) as $fileName) {
@@ -2668,7 +2774,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 chimTtsStudioFetchSpeakersList($submitDriver, $submitLanguage),
                 $submitLanguage
             );
-            $verb = chimTtsStudioIsAudioCppPocketTts($submitDriver, $submitEndpoint)
+            $verb = ($submitDriver === 'higgs' || chimTtsStudioIsAudioCppPocketTts($submitDriver, $submitEndpoint))
                 ? 'saved for'
                 : ($submitDriver === 'omnivoice' ? 'imported into' : 'uploaded and cached to');
             $message .= "<p style='color:rgb(247, 231, 16);'><strong>Successfully {$verb} {$submitProviderLabel}: {$uploadedCount} voice(s).</strong></p>";
@@ -2743,6 +2849,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $ttsFallbackDefinitions = $ttsFallbackManager->getDefinitions();
 $ttsFallbackMatrix = $ttsFallbackManager->getMatrix();
 $ttsFallbackVoiceIds = $ttsFallbackManager->getSuggestedVoiceIds();
+$ttsPronunciationTags = $ttsPronunciationManager->getAvailableTags();
+$ttsPronunciationFilter = strtolower(trim(strval($_GET['oghma_tag'] ?? '')));
+if ($ttsPronunciationFilter !== '' && !in_array($ttsPronunciationFilter, $ttsPronunciationTags, true)) {
+    $ttsPronunciationFilter = '';
+}
+$ttsPronunciationRows = $ttsPronunciationManager->getRows($ttsPronunciationFilter);
+$ttsPronunciationPreviewOptions = chimTtsPronunciationPreviewOptions($enginePath);
+$ttsPronunciationPreviewConnectors = $ttsPronunciationPreviewOptions['connectors'];
+$ttsPronunciationPreviewVoices = $ttsPronunciationPreviewOptions['voices'];
+$ttsPronunciationPreviewDefaultConnectorId = $ttsPronunciationPreviewOptions['default_connector_id'];
+$ttsPronunciationPreviewDefaultVoice = $ttsPronunciationPreviewOptions['default_voice'];
+$ttsPronunciationPreviewEndpoint = $webRoot . '/ui/api/tts_pronunciation_preview.php';
 
 // Add the JavaScript functions
 ?>
@@ -2856,6 +2974,7 @@ $ttsFallbackVoiceIds = $ttsFallbackManager->getSuggestedVoiceIds();
             else if (tabType === 'chatterbox') action = 'test_chatterbox';
             else if (tabType === 'pockettts') action = 'test_pockettts';
             else if (tabType === 'omnivoice') action = 'test_omnivoice';
+            else if (tabType === 'higgs') action = 'test_higgs';
         }
 
         console.log('Testing voice:', voiceName, 'using action:', action);
@@ -3230,6 +3349,7 @@ $ttsFallbackVoiceIds = $ttsFallbackManager->getSuggestedVoiceIds();
 
 ?>
 <link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/main.css">
+<link rel="stylesheet" href="<?php echo $webRoot; ?>/ui/css/tts-pronunciations.css">
 <style>
     /* Font Face Declaration */
     @font-face {
@@ -3700,7 +3820,6 @@ $ttsFallbackVoiceIds = $ttsFallbackManager->getSuggestedVoiceIds();
             grid-template-columns: 1fr;
         }
     }
-
     .voice-status-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -3840,7 +3959,7 @@ $ttsFallbackVoiceIds = $ttsFallbackManager->getSuggestedVoiceIds();
     <div class="page-header">
         <h1>Voice Management
         </h1>
-        <p class="page-subtitle">Manage voice samples and global NPC fallback voices across all TTS providers.</p>
+        <p class="page-subtitle">Manage voice samples, global NPC fallback voices, and pronunciations across all TTS providers.</p>
         <p class="page-note"><strong>Note:</strong> XTTS, Chatterbox, and PocketTTS share a simple voice sample flow. OmniVoice imports voices into the selected language library.</p>
     </div>
 
@@ -3855,6 +3974,9 @@ $ttsFallbackVoiceIds = $ttsFallbackManager->getSuggestedVoiceIds();
         <button class="tab-btn <?php echo $activeTab === 'pockettts' ? 'active' : ''; ?>"
                 title="<?php echo htmlspecialchars($ttsStudioProviderStatuses['pockettts']['title']); ?>"
                 onclick="switchTab('pockettts')"><span class="tab-label">PocketTTS (<?php echo htmlspecialchars($pocketTtsModeLabel); ?>)</span><span class="tab-status <?php echo htmlspecialchars($ttsStudioProviderStatuses['pockettts']['class']); ?>"><?php echo htmlspecialchars($ttsStudioProviderStatuses['pockettts']['label']); ?></span></button>
+        <button class="tab-btn <?php echo $activeTab === 'higgs' ? 'active' : ''; ?>"
+                title="<?php echo htmlspecialchars($ttsStudioProviderStatuses['higgs']['title']); ?>"
+                onclick="switchTab('higgs')"><span class="tab-label">Higgs TTS 3</span><span class="tab-status <?php echo htmlspecialchars($ttsStudioProviderStatuses['higgs']['class']); ?>"><?php echo htmlspecialchars($ttsStudioProviderStatuses['higgs']['label']); ?></span></button>
         <button class="tab-btn <?php echo $activeTab === 'omnivoice' ? 'active' : ''; ?>"
                 title="<?php echo htmlspecialchars($ttsStudioProviderStatuses['omnivoice']['title']); ?>"
                 onclick="switchTab('omnivoice')"><span class="tab-label">OmniVoice</span><span class="tab-status <?php echo htmlspecialchars($ttsStudioProviderStatuses['omnivoice']['class']); ?>"><?php echo htmlspecialchars($ttsStudioProviderStatuses['omnivoice']['label']); ?></span></button>
@@ -3867,6 +3989,9 @@ $ttsFallbackVoiceIds = $ttsFallbackManager->getSuggestedVoiceIds();
         <button class="tab-btn <?php echo $activeTab === 'fallbacks' ? 'active' : ''; ?>"
                 title="Global race and gender voice fallbacks used by every TTS connector"
                 onclick="switchTab('fallbacks')"><span class="tab-label">Fallback Voices</span><span class="tab-status configured">Global</span></button>
+        <button class="tab-btn <?php echo $activeTab === 'pronunciations' ? 'active' : ''; ?>"
+                title="Global pronunciation dictionary applied to spoken audio for every TTS connector"
+                onclick="switchTab('pronunciations')"><span class="tab-label">Pronunciations</span><span class="tab-status configured">Global</span></button>
     </div>
 
     <?php if (!empty($message)): ?>
@@ -3943,6 +4068,8 @@ $ttsFallbackVoiceIds = $ttsFallbackManager->getSuggestedVoiceIds();
             </form>
         </div>
     </div>
+    <!-- Pronunciations Tab Content -->
+    <?php include(__DIR__ . DIRECTORY_SEPARATOR . 'tmpl' . DIRECTORY_SEPARATOR . 'tts_pronunciations.php'); ?>
 
     <!-- XTTS Tab Content -->
     <div class="tab-content <?php echo $activeTab === 'xtts' ? 'active' : ''; ?>" data-tab-type="xtts">
@@ -4371,6 +4498,38 @@ $ttsFallbackVoiceIds = $ttsFallbackManager->getSuggestedVoiceIds();
                 </div>
             </form>
             <p>Advanced PocketTTS configuration: <a href="<?php echo htmlspecialchars($xttsStudioEndpoints['pockettts']); ?>/docs" style="color: yellow;" target="_blank"><?php echo htmlspecialchars($xttsStudioEndpoints['pockettts']); ?>/docs</a></p>
+        </div>
+    </div>
+
+    <!-- Higgs uses reference audio directly; there is no separate clone upload API. -->
+    <div class="tab-content <?php echo $activeTab === 'higgs' ? 'active' : ''; ?>" data-tab-type="higgs">
+        <div class="content-section full-width-section">
+            <h1>Higgs TTS 3 Voices</h1>
+            <p>Upload a WAV sample, then preview its voice. Previewing does not change your active TTS connector.</p>
+            <p>For a remote Higgs service, place samples on that host and refresh its named voices here. Local uploads stay on this mod server.</p>
+            <form action="<?php echo $webRoot; ?>/ui/xtts_clone.php?tab=higgs" method="post" enctype="multipart/form-data">
+                <label for="higgs-samples">Voice samples (.wav or .zip)</label>
+                <input type="file" name="file[]" id="higgs-samples" accept=".wav,.zip" multiple required>
+                <div class="button-group">
+                    <button type="submit" name="submit" value="1" class="action-button upload-csv">Upload Voice Sample</button>
+                </div>
+            </form>
+            <form action="<?php echo $webRoot; ?>/ui/xtts_clone.php?tab=higgs" method="post" class="button-group">
+                <button type="submit" name="get_speakers" value="1" class="action-button download-csv">Refresh Higgs Voices</button>
+            </form>
+            <?php $higgsVoices = chimTtsStudioGetCachedSpeakersList('higgs'); ?>
+            <div class="voice-status-grid">
+                <?php foreach ($higgsVoices as $voice): ?>
+                    <div class="voice-status-item">
+                        <span class="voice-name"><?php echo htmlspecialchars($voice); ?></span>
+                        <button type="button" class="play-btn" data-higgs-voice="<?php echo htmlspecialchars($voice, ENT_QUOTES); ?>"
+                                onclick="testVoice(this.dataset.higgsVoice)" aria-label="<?php echo htmlspecialchars('Preview ' . $voice, ENT_QUOTES); ?>" title="Preview voice">▶</button>
+                    </div>
+                <?php endforeach; ?>
+                <?php if (empty($higgsVoices)): ?>
+                    <p>No Higgs voice samples found. Upload a sample or check your remote voice library.</p>
+                <?php endif; ?>
+            </div>
         </div>
     </div>
 

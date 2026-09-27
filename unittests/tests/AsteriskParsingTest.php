@@ -33,15 +33,16 @@ final class AsteriskParsingTest extends TestCase
             $GLOBALS['PATCH_OVERRIDE_TTS_LANGUAGE'],
             $GLOBALS['PATCH_OVERRIDE_TTS_OPTIONS'],
             $GLOBALS['CHIM_EXECUTION_MODE'],
-            $GLOBALS['TTS']
+            $GLOBALS['TTS'],
+            $GLOBALS['db']
         );
     }
 
     public function testChatModeShortcutsAreParsedServerSide(): void
     {
         $cases = [
-            '| Keep this quiet' => ['WHISPER', 'Keep this quiet'],
-            '|| Only you should hear this' => ['CLOSE', 'Only you should hear this'],
+            '% Keep this quiet' => ['WHISPER', 'Keep this quiet'],
+            '%% Only you should hear this' => ['CLOSE', 'Only you should hear this'],
             '!! Everyone, run!' => ['SHOUT', 'Everyone, run!'],
             '@ Describe the room' => ['NARRATOR', 'Describe the room'],
             '> Have Lydia inspect the doorway' => ['DIRECTOR', 'Have Lydia inspect the doorway'],
@@ -63,13 +64,19 @@ final class AsteriskParsingTest extends TestCase
     public function testChatModeShortcutParserPreservesPlainAndSymbolOnlyInput(): void
     {
         $plain = chimParseChatModeShortcut('Hello there');
-        $symbolOnly = chimParseChatModeShortcut('||   ');
+        $symbolOnly = chimParseChatModeShortcut('%%   ');
 
         $this->assertFalse($plain['matched']);
         $this->assertSame('Hello there', $plain['content']);
         $this->assertTrue($symbolOnly['matched']);
         $this->assertSame('CLOSE', $symbolOnly['mode']);
         $this->assertSame('', $symbolOnly['content']);
+
+        foreach (['| Keep this quiet', '|| Only you should hear this', 'Save 50% for later'] as $input) {
+            $literal = chimParseChatModeShortcut($input);
+            $this->assertFalse($literal['matched'], $input);
+            $this->assertSame($input, $literal['content']);
+        }
     }
 
     public function testFullWrappedNarrationBlockDoesNotSplitMidReply(): void
@@ -566,5 +573,131 @@ final class AsteriskParsingTest extends TestCase
         $this->assertSame(9, $GLOBALS['PATCH_OVERRIDE_VOICE_ID']);
         $this->assertSame('lydia', $GLOBALS['TTS']['XTTSFASTAPI']['voiceid']);
         $this->assertSame('lydia', $GLOBALS['TTS']['PIPERTTS']['voiceid']);
+    }
+
+    public function testTtsPronunciationsApplyWholeTermsWithoutCascading(): void
+    {
+        $defaults = array_column(chimDefaultTtsPronunciationEntries(), 'spoken_text', 'source_text');
+        $this->assertSame('Yarl', $defaults['Jarl']);
+        $this->assertSame('Dohvahkeen', $defaults['Dovahkiin']);
+        $this->assertSame('Dwehmer', $defaults['Dwemer']);
+        $this->assertSame('Meerack', $defaults['Miraak']);
+        $this->assertSame('Arngeer', $defaults['Arngeir']);
+        $this->assertArrayNotHasKey('Aetherius', $defaults);
+        $this->assertArrayNotHasKey('Balgruuf', $defaults);
+        foreach ($defaults as $spoken) {
+            $this->assertStringNotContainsString('-', $spoken);
+        }
+
+        $GLOBALS['CHIM_TTS_PRONUNCIATION_BYPASS'] = true;
+        $this->assertSame(
+            'Jorrvaskr',
+            chimApplyTtsPronunciationDictionary('Jorrvaskr', [
+                ['source_text' => 'Jorrvaskr', 'spoken_text' => 'Yorvaskr', 'enabled' => true],
+            ])
+        );
+        unset($GLOBALS['CHIM_TTS_PRONUNCIATION_BYPASS']);
+
+        $rows = [
+            ['source_text' => 'Jorrvaskr', 'spoken_text' => 'Ysgramor', 'enabled' => true],
+            ['source_text' => 'Ysgramor', 'spoken_text' => 'Eesgramor', 'enabled' => true],
+            ['source_text' => 'Whiterun guard', 'spoken_text' => 'city guard', 'enabled' => true],
+        ];
+
+        $this->assertSame(
+            'Ysgramor greets Eesgramor. A city guard arrived; Whiterun guards stayed outside Jorrvaskrian lands.',
+            chimApplyTtsPronunciationDictionary(
+                'Jorrvaskr greets Ysgramor. A Whiterun guard arrived; Whiterun guards stayed outside Jorrvaskrian lands.',
+                $rows,
+                []
+            )
+        );
+    }
+
+    public function testTtsPronunciationsUseNameRaceAndOghmaFiltersWithCustomPriority(): void
+    {
+        $GLOBALS['HERIKA_NAME'] = 'Aela';
+        $scope = chimTtsPronunciationCurrentSpeakerScope([
+            'npc_name' => 'Aela',
+            'race' => 'NordRace',
+            'oghma_knowledge_tags' => 'companions, whiterun',
+        ]);
+        $this->assertSame(['companions', 'whiterun'], $scope['knowledge_tags']);
+        $this->assertSame('Aela', $scope['npc_name']);
+        $this->assertSame('NordRace', $scope['race']);
+
+        $rows = [
+            [
+                'source_text' => 'Jorrvaskr',
+                'spoken_text' => 'Yorvaskr',
+                'is_builtin' => true,
+                'enabled' => true,
+            ],
+            [
+                'source_text' => 'Jorrvaskr',
+                'spoken_text' => 'Companions Hall',
+                'npc_names' => 'Aela, Vilkas',
+                'races' => 'NordRace',
+                'oghma_tags' => 'companions, whiterun',
+                'is_builtin' => false,
+                'enabled' => true,
+            ],
+        ];
+
+        $this->assertSame('Visit Companions Hall.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['companions'], 'Aela', 'NordRace'
+        ));
+        $this->assertSame('Visit Yorvaskr.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['companions'], 'Lydia', 'NordRace'
+        ));
+        $this->assertSame('Visit Yorvaskr.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['companions'], 'Aela', 'BretonRace'
+        ));
+        $this->assertSame('Visit Yorvaskr.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['mage'], 'Aela', 'NordRace'
+        ));
+        $this->assertSame('Visit Companions Hall.', chimApplyTtsPronunciationDictionary(
+            'Visit Jorrvaskr.', $rows, ['knowall'], 'Aela', 'NordRace'
+        ));
+    }
+
+    public function testTtsPronunciationDeletionKeepsBuiltinTombstones(): void
+    {
+        $db = new class {
+            public bool $builtin = true;
+            public array $queries = [];
+
+            public function escapeLiteral($value): string
+            {
+                return "'" . str_replace("'", "''", strval($value)) . "'";
+            }
+
+            public function fetchOne(string $query): array
+            {
+                if (strpos($query, 'information_schema.tables') !== false) {
+                    return ['present' => 1];
+                }
+                return ['is_builtin' => $this->builtin];
+            }
+
+            public function execQuery(string $query): bool
+            {
+                $this->queries[] = $query;
+                return true;
+            }
+        };
+        $GLOBALS['db'] = $db;
+        $dictionary = new TTSPronunciationDictionary();
+
+        $this->assertTrue($dictionary->deleteEntry(42));
+        $builtinQuery = strval(end($db->queries));
+        $this->assertStringContainsString('SET deleted = TRUE, enabled = FALSE', $builtinQuery);
+        $this->assertStringContainsString('AND is_builtin = TRUE AND deleted = FALSE', $builtinQuery);
+
+        $db->builtin = false;
+        $this->assertTrue($dictionary->deleteEntry(43));
+        $customQuery = strval(end($db->queries));
+        $this->assertStringContainsString('DELETE FROM public.core_tts_pronunciation', $customQuery);
+        $this->assertStringContainsString('AND is_builtin = FALSE AND deleted = FALSE', $customQuery);
     }
 }

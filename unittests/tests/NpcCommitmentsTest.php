@@ -55,9 +55,10 @@ final class CommitmentFakeDb
         return true;
     }
 
-    public function insert(string $table, array $data): void
+    public function insertReturningId(string $table, array $data): int
     {
         $this->inserts[] = ['table' => $table, 'data' => $data];
+        return 1;
     }
 
     public function fetchAll(string $query): array
@@ -129,7 +130,7 @@ final class NpcCommitmentsTest extends TestCase
         $this->assertStringContainsString('#17 [message delivery, DUE NOW]', $context);
         $this->assertStringContainsString('with Balgruuf, at Dragonsreach', $context);
         $this->assertStringContainsString('repeats every about 24 in-game hour(s)', $context);
-        $this->assertStringContainsString('completed 2 time(s)', $context);
+        $this->assertStringContainsString('resolved 2 time(s)', $context);
     }
 
     public function testOnlyTheOwningActorCanResolveACommitment(): void
@@ -242,10 +243,10 @@ final class NpcCommitmentsTest extends TestCase
         );
 
         $this->assertIsString($updates);
-        $this->assertStringContainsString('$checkVersion("core_action") < 20260719002', $updates);
+        $this->assertStringContainsString('$checkVersion("npc_commitment_actions") < 20260719002', $updates);
         $this->assertStringContainsString("'CreateTasks'", $updates);
         $this->assertStringContainsString("'ResolveTask'", $updates);
         $this->assertStringContainsString("'CancelTask'", $updates);
-        $this->assertStringContainsString('$updateVersion("core_action", 20260719002)', $updates);
+        $this->assertStringContainsString('$updateVersion("npc_commitment_actions", 20260719002)', $updates);
     }
 }

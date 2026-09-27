@@ -29,12 +29,12 @@ try {
     }
 
     $actorName = trim((string)$npc['npc_name']);
+    $gametsRow = $GLOBALS['db']->fetchOne('SELECT COALESCE(MAX(gamets), 0) AS gamets FROM eventlog');
+    $currentGamets = (int)($gametsRow['gamets'] ?? 0);
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $taskId = (int)($_POST['task_id'] ?? 0);
         $operation = strtolower(trim((string)($_POST['operation'] ?? '')));
         $outcome = trim((string)($_POST['outcome'] ?? ''));
-        $gametsRow = $GLOBALS['db']->fetchOne('SELECT COALESCE(MAX(gamets), 0) AS gamets FROM eventlog');
-        $currentGamets = (int)($gametsRow['gamets'] ?? 0);
 
         if (!in_array($operation, ['completed', 'failed', 'cancelled'], true) || $taskId <= 0) {
             chimCommitmentsApiReply(['success' => false, 'error' => 'Invalid task operation'], 400);
@@ -46,6 +46,7 @@ try {
         }
     }
 
+    chimCommitmentGetActive($actorName, $currentGamets);
     $tasks = chimCommitmentGetAll($actorName);
     foreach ($tasks as &$task) {
         $task['id'] = (int)$task['id'];

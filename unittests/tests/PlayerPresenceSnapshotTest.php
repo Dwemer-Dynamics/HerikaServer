@@ -2,8 +2,49 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/../../lib/logger.php';
+Logger::setCustomLog(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'chim-player-presence-snapshot-test.log');
 require_once __DIR__ . '/../../lib/chat_helper_functions.php';
+require_once __DIR__ . '/../../lib/core/npc_master.class.php';
 require_once __DIR__ . '/../../lib/player_mood_prompts.php';
+
+// Minimal database facade for rechat audience and profile lookups.
+final class RechatActiveAgentTestDb
+{
+    public function fetchAll(string $query): array
+    {
+        if (!str_contains($query, 'FROM eventlog')) {
+            return [];
+        }
+
+        return [[
+            'rowid' => 1,
+            'type' => 'chat',
+            'data' => 'Roster Speaker: What do you think? (talking to Inactive Bystander)',
+            'people' => '|Roster Speaker|Roster Player|Inactive Bystander|Active Bystander|',
+        ]];
+    }
+
+    public function fetchOne(string $query): array
+    {
+        if (str_contains($query, "WHERE type='infonpc'")) {
+            return [];
+        }
+
+        foreach (['Roster Speaker', 'Inactive Bystander', 'Active Bystander'] as $profileName) {
+            if (str_contains($query, "npc_name = '{$profileName}'")) {
+                return ['npc_name' => $profileName];
+            }
+        }
+
+        return [];
+    }
+
+    public function escape($value): string
+    {
+        return str_replace("'", "''", (string)$value);
+    }
+}
 
 final class PlayerPresenceSnapshotTest extends TestCase
 {
@@ -22,6 +63,69 @@ final class PlayerPresenceSnapshotTest extends TestCase
         $this->assertFalse(chimExecutionModeAllowsRechatEvent('WHISPER', 'narration'));
         $this->assertTrue(chimExecutionModeAllowsRechatEvent('STANDARD', 'rechat'));
         $this->assertTrue(chimExecutionModeAllowsRechatEvent('STANDARD', 'narration'));
+    }
+
+    public function testRechatOnlySelectsActorsInTheClientActiveRoster(): void
+    {
+        $hadDb = array_key_exists('db', $GLOBALS);
+        $previousDb = $GLOBALS['db'] ?? null;
+        $hadPlayerName = array_key_exists('PLAYER_NAME', $GLOBALS);
+        $previousPlayerName = $GLOBALS['PLAYER_NAME'] ?? null;
+        $hadRechatMode = array_key_exists('RECHAT_MODE', $GLOBALS);
+        $previousRechatMode = $GLOBALS['RECHAT_MODE'] ?? null;
+
+        try {
+            $GLOBALS['db'] = new RechatActiveAgentTestDb();
+            $GLOBALS['PLAYER_NAME'] = 'Roster Player';
+            $GLOBALS['RECHAT_MODE'] = 'conversational';
+
+            $payload = chimParseServerSideRechatPayload(json_encode([
+                'speaker' => 'Roster Speaker',
+                'listener_hint' => 'Inactive Bystander',
+                'rechat_target_hint' => 'Inactive Bystander',
+                'origin_line' => 'What do you think?',
+                'chain_id' => 'active-agent-roster',
+                'active_agents' => ['Roster Speaker', 'Active Bystander', ''],
+            ], JSON_THROW_ON_ERROR));
+            $activeRosterResult = chimResolveServerSideRechatTarget($payload);
+            $speakerOnlyResult = chimResolveServerSideRechatTarget(array_merge(
+                $payload,
+                ['active_agents' => ['Roster Speaker']]
+            ));
+            $inactiveSpeakerResult = chimResolveServerSideRechatTarget(array_merge(
+                $payload,
+                ['active_agents' => ['Active Bystander']]
+            ));
+            $legacyResult = chimResolveServerSideRechatTarget([
+                'speaker' => 'Roster Speaker',
+                'listener_hint' => 'Inactive Bystander',
+                'rechat_target_hint' => 'Inactive Bystander',
+                'origin_line' => 'What do you think?',
+                'chain_id' => 'legacy-client',
+            ]);
+
+            $this->assertSame(['Roster Speaker', 'Active Bystander'], $payload['active_agents']);
+            $this->assertSame('Active Bystander', $activeRosterResult['selected']);
+            $this->assertSame('', $speakerOnlyResult['selected']);
+            $this->assertSame('', $inactiveSpeakerResult['selected']);
+            $this->assertSame('Inactive Bystander', $legacyResult['selected']);
+        } finally {
+            if ($hadDb) {
+                $GLOBALS['db'] = $previousDb;
+            } else {
+                unset($GLOBALS['db']);
+            }
+            if ($hadPlayerName) {
+                $GLOBALS['PLAYER_NAME'] = $previousPlayerName;
+            } else {
+                unset($GLOBALS['PLAYER_NAME']);
+            }
+            if ($hadRechatMode) {
+                $GLOBALS['RECHAT_MODE'] = $previousRechatMode;
+            } else {
+                unset($GLOBALS['RECHAT_MODE']);
+            }
+        }
     }
 
     public function testCloseGroupSnapshotSurvivesDirectedReplies(): void
@@ -126,6 +230,41 @@ final class PlayerPresenceSnapshotTest extends TestCase
 
         $this->assertTrue($snapshot['chat_shortcut_routed']);
         $this->assertSame('', $snapshot['audience']);
+    }
+
+    public function testExecutionModeIsValidatedIndependentlyOfSavedMood(): void
+    {
+        foreach (['DIRECTOR', 'STANDARD', 'HYPNOSIS'] as $mode) {
+            foreach (['', 'happy', 'custom'] as $mood) {
+                $payload = ['source' => 'plugin_player_routing_v2', 'execution_mode' => $mode, 'player_mood' => $mood];
+                $this->assertSame($mode, chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode($payload)))['execution_mode']);
+            }
+        }
+        foreach ([['source' => 'legacy', 'execution_mode' => 'DIRECTOR'],
+            ['source' => 'plugin_player_routing_v2', 'execution_mode' => 'INVALID'],
+            ['source' => 'plugin_player_routing_v2', 'execution_mode' => ['DIRECTOR']], []] as $payload) {
+            $this->assertSame('', chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode($payload)))['execution_mode']);
+        }
+    }
+
+    public function testHypnosisTargetSnapshotRejectsMalformedListenerMetadata(): void
+    {
+        foreach (['plugin_player_routing_v2', 'plugin_spatial_input_v1'] as $source) {
+            $snapshot = chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode([
+                'source' => $source, 'listener' => ' Lydia ', 'target_mode' => 'direct',
+            ])));
+            $this->assertSame('Lydia', $snapshot['listener']);
+            $this->assertSame('direct', $snapshot['target_mode']);
+        }
+        foreach ([['Lydia'], "Lydia\n", 'Lydia|Faendal', str_repeat('x', 257)] as $listener) {
+            $snapshot = chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode([
+                'source' => 'plugin_player_routing_v2', 'listener' => $listener, 'target_mode' => ['everyone'],
+            ])));
+            $this->assertSame('', $snapshot['listener']);
+            $this->assertSame('', $snapshot['target_mode']);
+        }
+        $snapshot = chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode(['listener' => 'Lydia'])));
+        $this->assertSame('', $snapshot['listener']);
     }
 
     public function testPlayerMoodIsDecodedOnlyFromThePluginRoutingSnapshot(): void
@@ -322,7 +461,7 @@ final class PlayerPresenceSnapshotTest extends TestCase
         $this->assertSame(0, $db->queryCount);
     }
 
-    public function testRequestExecutionModeIsIgnored(): void
+    public function testUnmarkedRequestExecutionModeIsIgnored(): void
     {
         $encoded = base64_encode((string)json_encode([
             'execution_mode' => 'whisper',
@@ -330,7 +469,7 @@ final class PlayerPresenceSnapshotTest extends TestCase
 
         $snapshot = chimDecodePlayerRoutingSnapshotField($encoded);
 
-        $this->assertArrayNotHasKey('execution_mode', $snapshot);
+        $this->assertSame('', $snapshot['execution_mode']);
     }
 
     public function testDirectivePeopleIncludeSelectedSpeakerAndExplicitListener(): void

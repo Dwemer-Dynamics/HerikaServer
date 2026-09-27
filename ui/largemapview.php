@@ -34,7 +34,7 @@ require_once $enginePath . 'lib/core/core_profiles.class.php';
 require_once $enginePath . 'lib/core/llm_connector.class.php';
 require_once $enginePath . 'lib/core/tts_connector.class.php';
 require_once $enginePath . 'lib/lazy_xml.php';
-require_once $enginePath . 'debug/background_action_handler.php';
+require_once $enginePath . 'service/processors/backgroundlife/cmd/background_action_handler.php';
 
 require_once $enginePath . "lib/scriptproxy_papyrus.php";
 require_once $enginePath . "lib/core/activity_status.php";
@@ -710,9 +710,9 @@ function handleRequestAction()
     $npcData = $npcMaster->getByName($npcName);
     $extendedData = $npcMaster->getExtendedData($npcData);
     if (!isset($extendedData['background_life_commands']) || $extendedData['background_life_commands'] === false) {
-        `php $enginePath/debug/simple_llm_request_with_context_life.php "$npcName" full forceaction`;
+        `php $enginePath/service/processors/backgroundlife/cmd/main_lw.php "$npcName" full forceaction`;
     } else {
-        `php $enginePath/debug/simple_llm_request_with_context_life_v2.php "$npcName" full forceaction`;
+        `php $enginePath/service/processors/backgroundlife/cmd/main.php "$npcName" full forceaction`;
     }
 
     // Add your handler code here
@@ -733,7 +733,7 @@ function handleRequestReporting()
 
     // Add your handler code here
     // Add your handler code here
-    `php $enginePath/debug/simple_llm_request_with_context_life.php "$npcName" forceletter`;
+    `php $enginePath/service/processors/backgroundlife/cmd/main_lw.php "$npcName" forceletter`;
     echo json_encode(['ok' => true, 'message' => "Reporting request processed for $npcName"]);
 }
 
@@ -748,7 +748,7 @@ function handleUpdateCoords()
     }
 
     // Add your handler code here
-    `php $enginePath/debug/simple_llm_request_with_context_life_command.php "$npcName" Track`;
+    `php $enginePath/service/processors/backgroundlife/cmd/simple_command.php "$npcName" Track`;
     echo json_encode(['ok' => true, 'message' => "Coords update processed for $npcName"]);
 }
 
@@ -757,7 +757,7 @@ function handleUpdateAllCoords()
     global $enginePath;
 
     // Update coordinates for all NPCs
-    `php $enginePath/debug/simple_llm_request_with_context_life_command.php "The Narrator" TrackAll`;
+    `php $enginePath/service/processors/backgroundlife/cmd/simple_command.php "The Narrator" TrackAll`;
     echo json_encode(['ok' => true, 'message' => 'All NPC coords update processed']);
 }
 
@@ -2490,7 +2490,7 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl/head.html");
                                         <li><strong>Last Position Timestamp:</strong>
                                             (<?php echo $marker['last_pos_ts']; ?>)</li>
                                         <li><strong>Last Reported:</strong>
-                                            <span title="<?php echo htmlentities($marker['last_letter']); ?>">
+                                            <span title="<?php echo htmlentities($marker['last_letter']??''); ?>">
                                                 (<?php echo $marker['last_report']; ?>)
                                                 <?php if (isset($marker['last_letter']))
                                                     echo "<span style='cursor:help'>📜</span>"; ?>
@@ -2621,14 +2621,14 @@ include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl/head.html");
                         echo '</div>';
                         echo '<div class="location-marker-label">';
                         echo '<div class="location-name">' . htmlspecialchars($location['name']) . '</div>';
-                        echo '<div class="location-desc">' . htmlspecialchars($location['description']) . '</div>';
-                        echo '<div class="location-tags">' . htmlspecialchars($location['tags']) . '</div>';
+                        echo '<div class="location-desc">' . htmlspecialchars($location['description']??'') . '</div>';
+                        echo '<div class="location-tags">' . htmlspecialchars($location['tags']??'') . '</div>';
                         echo '<div class="location-coords">';
-                        echo 'Type: ' . htmlspecialchars($location['type']) . '<br/>';
-                        echo 'Coords: ' . $location['ingame_x'] . ', ' . $location['ingame_y'] . '<br/>';
-                        echo 'FormID: ' . htmlspecialchars($location['formID']) . '<br/>';
-                        echo 'Tags: ' . htmlspecialchars($location['tags']) . '<br/>';
-                        echo '' . htmlspecialchars($location['symbol']) . '<br/>';
+                        echo 'Type: ' . htmlspecialchars($location['type']??'') . '<br/>';
+                        echo 'Coords: ' . ($location['ingame_x']??'') . ', ' . ($location['ingame_y']??'') . '<br/>';
+                        echo 'FormID: ' . htmlspecialchars($location['formID']??'') . '<br/>';
+                        echo 'Tags: ' . htmlspecialchars($location['tags']??'') . '<br/>';
+                        echo '' . htmlspecialchars($location['symbol']??'') . '<br/>';
                         echo '</div>';
                         echo '</div>';
                         echo '</div>' . PHP_EOL;

@@ -50,16 +50,16 @@ if (!function_exists('chimCommitmentNotificationText')) {
 }
 
 if (!function_exists('chimCommitmentQueueCreatedNotification')) {
-    function chimCommitmentQueueCreatedNotification(string $actorName, string $subject): void
+    function chimCommitmentQueueCreatedNotification(string $actorName, string $subject): bool
     {
-        $GLOBALS['db']->insert('responselog', [
+        return $GLOBALS['db']->insertReturningId('responselog', [
             'localts' => time(),
             'sent' => 0,
             'actor' => 'rolemaster',
             'text' => '',
             'action' => 'rolecommand|DebugNotification@' . chimCommitmentNotificationText($actorName, $subject),
             'tag' => '',
-        ]);
+        ]) !== false;
     }
 }
 
@@ -166,21 +166,30 @@ if (!function_exists('chimCommitmentProcessQueue')) {
                     $partial,
                     (string)($job['request_text'] ?? '')
                 );
-                $createResult = chimCommitmentCreate(
-                    (string)$job['actor_name'],
-                    $payload,
-                    (int)($job['current_gamets'] ?? 0)
-                );
-                if (!empty($createResult['ok'])) {
-                    $db->delete('conf_opts', "id = '" . $db->escape((string)$row['id']) . "'");
-                    chimCommitmentQueueCreatedNotification(
-                        (string)$job['actor_name'],
-                        (string)($payload['subject'] ?? '')
+                // Claim and persist together: a retry cannot create a second task.
+                $db->execQuery('BEGIN');
+                try {
+                    $queueIdSql = $db->escape((string)$row['id']);
+                    $claimed = $db->fetchOne("DELETE FROM conf_opts WHERE id = '{$queueIdSql}' RETURNING id");
+                    if (empty($claimed['id'])) {
+                        $db->execQuery('ROLLBACK');
+                        continue;
+                    }
+                    $createResult = chimCommitmentCreate(
+                        (string)$job['actor_name'], $payload, (int)($job['current_gamets'] ?? 0)
                     );
-                    Logger::info('[NPC TASKS] Created task #' . $createResult['id'] . ' for ' . $job['actor_name']);
+                    if (empty($createResult['ok'])) {
+                        throw new RuntimeException($createResult['error'] ?? 'Task insert failed');
+                    }
+                    if (!chimCommitmentQueueCreatedNotification((string)$job['actor_name'], (string)$payload['subject'])) {
+                        throw new RuntimeException('Task notification failed');
+                    }
+                    if (!$db->execQuery('COMMIT')) throw new RuntimeException('Task commit failed');
                     $result['created']++;
-                } else {
-                    Logger::error('[NPC TASKS] Could not create queued task for ' . $job['actor_name'] . ': ' . ($createResult['error'] ?? 'unknown'));
+                    Logger::info('[NPC TASKS] Created task #' . $createResult['id'] . ' for ' . $job['actor_name']);
+                } catch (Throwable $e) {
+                    $db->execQuery('ROLLBACK');
+                    Logger::error('[NPC TASKS] Could not persist queued task: ' . $e->getMessage());
                     $result['failed']++;
                 }
             }

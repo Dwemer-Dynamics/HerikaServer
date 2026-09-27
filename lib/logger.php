@@ -131,8 +131,11 @@ class Logger {
     // write uncaught errors to the CHIM log in addition to the apache log
     public static function errorHandler(int $errno, string $errstr, string $errfile, int $errline): bool
     {
+        // Bootstrap may replace the preflight handler; keep suppressed SQL failures blocking.
+        if (!empty($GLOBALS['pgr_operation']) && str_contains($errstr, 'pg_')) $GLOBALS['pgr_sql_failed'] = true;
         
-        if (error_reporting() === 0) {// when error reporting is suppressed
+        // PHP 8 keeps fatal-error bits set under @; check this error's bit instead.
+        if ((error_reporting() & $errno) === 0) {
             return false;
         }
 

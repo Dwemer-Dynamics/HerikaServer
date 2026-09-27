@@ -18,7 +18,7 @@ $GLOBALS["TTS_IN_USE"] = function($textString, $mood, $stringforhash) {
     if (isset($GLOBALS["PATCH_OVERRIDE_VOICE"]) && !empty($GLOBALS["PATCH_OVERRIDE_VOICE"])) {
         $voiceModel = $GLOBALS["PATCH_OVERRIDE_VOICE"];
     }
-    $bitRate = isset($GLOBALS["TTS"]["deepgram"]["bitrate"]) ? $GLOBALS["TTS"]["deepgram"]["bitrate"] : 24000;
+    $bitRate = isset($GLOBALS["TTS"]["deepgram"]["bitrate"]) ? $GLOBALS["TTS"]["deepgram"]["bitrate"] : 32000;
     $encoding = "linear16";
 
     $startTimeFull = microtime(true);
@@ -40,6 +40,13 @@ $GLOBALS["TTS_IN_USE"] = function($textString, $mood, $stringforhash) {
     } else {
         Logger::info("TTS cache avoidance enabled.");
     }
+
+    $GLOBALS["TTS_FFMPEG_FILTERS"]["default"] = 'loudnorm=I=-16:TP=-1.5:LRA=11';
+    
+    if (is_array($GLOBALS["TTS_FFMPEG_FILTERS"])) {
+		$FFMPEG_FILTER='-af "'.implode(",",$GLOBALS["TTS_FFMPEG_FILTERS"]).'"';
+			
+	}
 
     $url = "https://api.deepgram.com/v1/speak?model=$voiceModel&encoding=$encoding&sample_rate=$bitRate";
     $headers = [
@@ -67,7 +74,8 @@ $GLOBALS["TTS_IN_USE"] = function($textString, $mood, $stringforhash) {
 
         // Convert to WAV and normalize
         $startTimeTrans = microtime(true);
-        $command = "ffmpeg -y -i $mp3Name -filter:a \"speechnorm=e=6:r=0.0001:l=1\" $wavName 2>/dev/null >/dev/null";
+        $command = "ffmpeg -y -i $mp3Name  $FFMPEG_FILTER $wavName 2>/dev/null >/dev/null";
+        error_log("Executing FFMPEG command: " . $command);
         shell_exec($command);
         $endTimeTrans = microtime(true) - $startTimeTrans;
         $endTimeFull = microtime(true) - $startTimeFull;

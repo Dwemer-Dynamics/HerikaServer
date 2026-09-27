@@ -176,9 +176,8 @@ $PROMPTS=array(
         "cue"=>["Por favor escribe un breve resumen de los últimos diálogos y eventos de {$GLOBALS["PLAYER_NAME"]} y {$GLOBALS["HERIKA_NAME"]} escritos arriba en el diario de {$GLOBALS["HERIKA_NAME"]}. ESCRIBE COMO SI FUERAS {$GLOBALS["HERIKA_NAME"]}."],
         "extra"=>["force_tokens_max"=>0]
     ],
-    "vision"=>[ 
-        "cue"=>["{$GLOBALS["ITT"][$GLOBALS["ITTFUNCTION"]]["AI_PROMPT"]}. "],
-        "player_request"=>["El Narrador: {$GLOBALS["HERIKA_NAME"]} mira el ESCENARIO ACTUAL, y ve esto: '{$gameRequest[3]}'"],
+    "vision"=>[
+        "cue"=>[$soulgazeCue],
         "extra"=>["force_tokens_max"=>512]
     ],
     "chatsimfollow"=>[ 

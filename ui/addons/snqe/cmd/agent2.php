@@ -8,9 +8,10 @@ chimRuntimeBootstrap($enginePath, [
     'load_narrator' => true,
 ]);
 
-if (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_MEDIUMTERM')) {
+if (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_QUEST_ENGINE')) {
     http_response_code(409);
-    echo json_encode(['error' => 'Background & Memory Tasks are turned off in Global Settings.']);
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'Quest Engine Connector is turned off in Global Settings.']);
     exit;
 }
 
@@ -30,14 +31,20 @@ require_once $enginePath . "lib/core/llm_connector.class.php";
 require_once $enginePath . "service/processors/snqe/lib/snqe.class.php";
 
 $connector = new LLMConnector();
-$currentConnectorData = $connector->getById($GLOBALS["CORE_CONNECTOR_MEDIUMTERM"]);
+$connectorId = (int) ($GLOBALS["CORE_CONNECTOR_QUEST_ENGINE"] ?? 0);
+$currentConnectorData = $connectorId > 0 ? $connector->getById($connectorId) : null;
+if (!$currentConnectorData) {
+    http_response_code(409);
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'Select a valid Quest Engine Connector in Global Settings.']);
+    exit;
+}
 $connector->setOldGlobals($currentConnectorData);
 
 $method = $_SERVER['REQUEST_METHOD'];
 
 $formInput = json_decode(file_get_contents("php://input"), true);
 
-$MODEL = "google/gemini-3-flash-preview";
 $questType = $formInput["questType"] ?? "miniquest";
 
 $spawnedItemArray = $formInput["spawneditemslist"];
@@ -110,7 +117,7 @@ $contextData = $prompt;
 $connectionHandler = $connector->getConnector($currentConnectorData);
 $buffer = $connectionHandler->fast_request(
     $contextData,
-    ["MAX_TOKENS" => 4096, "model" => $MODEL, "temperature" => 0.3],
+    ["MAX_TOKENS" => 4096, "temperature" => 0.3],
     "questcoder"
 );
 
@@ -156,7 +163,7 @@ $contextData[]=['role' => 'user', 'content' => "Please confirm the quest code is
 If there are any errors, fix them. Return the full corrected PHP code inside a single markdown code block with php syntax."];
 
 $buffer            = $connectionHandler->fast_request($contextData,
-    ["MAX_TOKENS" => 4096, "model" => $MODEL,"temperature"=>0.3],
+    ["MAX_TOKENS" => 4096,"temperature"=>0.3],
     "questcoder_fixer");
 
 // Extract PHP code from markdown code block

@@ -1,4 +1,10 @@
-﻿<?php
+<?php
+// Send bare UI links to Home while preserving table views and submitted actions.
+if (in_array($_SERVER['REQUEST_METHOD'] ?? 'GET', ['GET', 'HEAD'], true) && empty($_GET)) {
+    header('Location: home.php');
+    exit;
+}
+
 error_reporting(E_ERROR);
 session_start();
 
@@ -187,7 +193,7 @@ if (isset($_GET["clean"])) {
 }
 if (isset($_GET["reset"])) {
     $db->delete("eventlog", "true");
-    header("Location: index.php");
+    header("Location: home.php");
 }
 
 if (isset($_GET["sendclean"])) {
@@ -202,7 +208,7 @@ if (isset($_GET["togglemodel"])) {
     require_once(__DIR__ .DIRECTORY_SEPARATOR."..".DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."model_dynmodel.php");
     $newModel=DMtoggleModel();
     while (@ob_end_clean());
-    header("Location: index.php");
+    header("Location: home.php");
     die();
 }
 

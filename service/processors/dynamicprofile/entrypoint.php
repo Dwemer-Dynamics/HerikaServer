@@ -17,6 +17,7 @@ $GLOBALS['TASKS']['dynamicprofile']['fn'] = function () {
     require_once $enginePath . 'lib/core/core_profiles.class.php';
     require_once $enginePath . 'lib/core/llm_connector.class.php';
 
-    triggerImmediateProfileProcessing();
+    require_once $enginePath . 'lib/dynamic_profile_scheduler.php';
+    dps_run();
 };
 

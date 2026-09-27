@@ -5,7 +5,7 @@ ini_set('display_errors', 1);
 
 $enginePath = dirname(__FILE__) . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR;
 $GLOBALS['ENGINE_PATH'] = $enginePath;
-
+$GLOBALS['ENGINE_ROOT'] = $enginePath;
 // ─── Includes ─────────────────────────────────────────────────────────────────
 
 require_once $enginePath . 'lib/runtime_bootstrap.php';
@@ -64,7 +64,7 @@ if ($argv[1] == "0x") {
             'sent' => 0,
             'actor' => "rolemaster",
             'text' => "",
-            'action' => "rolecommand|BackgroundCmd@0xFF0010D8@MoveToPlayer",
+            'action' => "rolecommand|BackgroundCmd@0x0003614F@MoveToPlayer",
             'tag' => __FILE__ . ":" . __LINE__,
         ]
     );
@@ -436,15 +436,15 @@ The character's primary goal is to make a living by mining ores and selling them
 - Can't work all the time, use 8H rule: 8h working,8h resting,8h socializing. If hungry or thirsty, must first address survival needs before working.
 
 2. Selling Iron Ore
-- The character sells Iron Ore to Thorgar, who is located at \"Whistling Mine (Interior)\".
+- The character sells Iron Ore to Jaryra, who is located at \"Elysium Estate (interior)\".
 - Before leaving the mine or changing activities, check the inventory:
-  - If the character has enough Iron Ore to sell, trade with Thorgar (Iron Ore aprox value is 7 gold coins each one).
+  - If the character has enough Iron Ore to sell, travel and look for Jaryra (Iron Ore aprox value is 7 gold coins each one).
   - If there is no ore available, continue mining.
 
 3. Selling Gold Ore
-- Gold Ore is more valuable and should eventually be sold to Jorl Stoneman in Whiterun.
-- Jorl is the preferred buyer because he pays a high price (100 gold per Gold Ore).
-- Traveling to Whiterun is a long journey, so only make the trip when it is worthwhile (for example, when carrying a meaningful amount of Gold Ore).
+- Gold Ore is more valuable and should eventually be sold to Jaryra  at \"Elysium Estate (interior)\".
+- Jaryra is the preferred buyer because she pays a high price (100 gold per Gold Ore).
+- Traveling to \"Elysium Estate (interior)\" is a long journey, so only make the trip when it is worthwhile (for example, when carrying a meaningful amount of Gold Ore).
 
 4. Social Activities
 - On some evenings, the character should travel to Winterhold.
@@ -467,7 +467,7 @@ When working at the mine, the character produces resources over time:
 
 - Gold Ore (Item RefID: 0x0005acde)
   - Production rate: 0.3 units per hour.
-  - Gold Ore is rare and should be preserved for selling to Jorl Stoneman.
+  - Gold Ore is rare and should be preserved for selling to Jaryra
 ",
     ];
 
@@ -638,9 +638,9 @@ Must sell fish to merchants,(e.g at Candlehearth Hall), innkeepers and citizens 
 if ($argv[1] == '9a') {
 
     $npcMaster = new NpcMaster();
-    $npcname = "Jaryra";
+    $npcname = "Gularzob";
     $npc = $npcMaster->getByName($npcname);
-    
+
     $GLOBALS["db"]->insert(
         'responselog',
         [
@@ -653,7 +653,7 @@ if ($argv[1] == '9a') {
         ]
     );
     sleep(1);
-    
+
     $meta = $npcMaster->getMetaData($npc);
     print_r($meta["last_coords"]);
 
@@ -853,13 +853,15 @@ if ($argv[1] == '13') {
 
 if ($argv[1] == '14') {
     $npcMaster = new NpcMaster();
-    $npc = $npcMaster->getByName("Orianne Marius");
+    $npc = $npcMaster->getByName("Morgan");
     $skyrimCmd = new SkyrimCommandBuilder();
-    //$json = $skyrimCmd->Actor->RemoveFromAllFactions("0x{$npc["refid"]}", "0xFF00127C");
-    //$skyrimCmd->send(cmd: $json);
+    $json = $skyrimCmd->Actor->RemoveFromAllFactions("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+    $json = $skyrimCmd->Actor->SetRelationshipRank("0x{$npc["refid"]}", "0x14", 1);
+    $skyrimCmd->send(cmd: $json);
     //$json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x08365D75");
     //$skyrimCmd->send(cmd: $json);
-    print_r(resolveTravelLocation("Elysium Estate (Interior)", $npc, $GLOBALS["db"]));
+    //print_r(resolveTravelLocation("Elysium Estate (Interior)", $npc, $GLOBALS["db"]));
 
 }
 
@@ -1053,7 +1055,7 @@ if ($argv[1] == '25') {
         )
     );*/
 
-     $db->insert(
+    $db->insert(
         'responselog',
         [
             'localts' => time(),
@@ -1066,9 +1068,9 @@ if ($argv[1] == '25') {
     );
 }
 
-if ($argv[1]=='26') {
-    
-    print_r(buildHistoricContext("Lydia",-1,"and type<>'prechat'"));
+if ($argv[1] == '26') {
+
+    print_r(buildHistoricContext("Lydia", -1, "and type<>'prechat'"));
 
 }
 
@@ -1091,19 +1093,19 @@ if ($argv[1] == '27') {
     $npcMaster = new NpcMaster();
     $npc1 = $npcMaster->getByName($name);
     $npc2 = $npcMaster->getByName($name2);
-    
+
     $skyrimCmd = new SkyrimCommandBuilder();
 
-    $json = $skyrimCmd->Actor->SetRelationShipRank( "0x{$npc1["refid"]}", "0x{$npc2["refid"]}", 1);
+    $json = $skyrimCmd->Actor->SetRelationShipRank("0x{$npc1["refid"]}", "0x{$npc2["refid"]}", 1);
     $skyrimCmd->send(cmd: $json);
 
-    $json = $skyrimCmd->Actor->SetRelationShipRank( "0x{$npc2["refid"]}", "0x{$npc1["refid"]}", 1);
+    $json = $skyrimCmd->Actor->SetRelationShipRank("0x{$npc2["refid"]}", "0x{$npc1["refid"]}", 1);
     $skyrimCmd->send(cmd: $json);
 
 }
 
 if ($argv[1] == '28') {
-    $GLOBALS['REMOVE_ASTERISKS_FROM_NPC_OUTPUT']=true;
+    $GLOBALS['REMOVE_ASTERISKS_FROM_NPC_OUTPUT'] = true;
     echo unmoodSentence("*She stirs from her sleep, blinking groggily as she hears his voice. She sits up, rubbing her eyes, a soft smile forming on her lips.* Yes, my love?");
     echo PHP_EOL;
     echo unmoodSentence("Yes, my love? *She stirs from her sleep, blinking groggily as she hears his voice. She sits up, rubbing her eyes, a soft smile forming on her lips.* ");
@@ -1127,35 +1129,537 @@ if ($argv[1] == '30') {
                     WHERE people LIKE CONCAT('%', '$oldName', '%')
                 ");
 
-        // speech.speaker and speech.listener
-        $GLOBALS["db"]->execQuery("
+    // speech.speaker and speech.listener
+    $GLOBALS["db"]->execQuery("
                     UPDATE speech
                     SET speaker = '$newName'
                     WHERE speaker = '$oldName'
                 ");
-        $GLOBALS["db"]->execQuery("
+    $GLOBALS["db"]->execQuery("
                     UPDATE speech
                     SET listener = '$newName'
                     WHERE listener = '$oldName'
                 ");
 
-        // memory.speaker and memory.listener
-        $GLOBALS["db"]->execQuery("
+    // memory.speaker and memory.listener
+    $GLOBALS["db"]->execQuery("
                     UPDATE memory
                     SET speaker = '$newName'
                     WHERE speaker = '$oldName'
                 ");
-        $GLOBALS["db"]->execQuery("
+    $GLOBALS["db"]->execQuery("
                     UPDATE memory
                     SET listener = '$newName'
                     WHERE listener = '$oldName'
                 ");
 
-        // memory_summary.companions (pipe-separated list)
-        $GLOBALS["db"]->execQuery("
+    // memory_summary.companions (pipe-separated list)
+    $GLOBALS["db"]->execQuery("
                     UPDATE memory_summary
                     SET companions = REPLACE(companions, '$oldName', '$newName')
                     WHERE companions LIKE CONCAT('%', '$oldName', '%')
                 ");
-    
+
+}
+
+if ($argv[1] == '31') {
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Alva");
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+
+    $json = $skyrimCmd->Actor->SetNoBleedoutRecovery("0x{$npc["refid"]}", false);
+    $skyrimCmd->send(cmd: $json);
+
+}
+
+if ($argv[1] == '32') {
+    // Patrol and guard test.
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Ursine");
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+
+    // Player is Linked ref.
+    $json = $skyrimCmd->ActorUtil->SetLinkedRef("0x{$npc["refid"]}", "0x000FDB0D", true);
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->SetAlert("0x{$npc["refid"]}", true);
+    $skyrimCmd->send(cmd: $json);
+    sleep(10);
+    // Add package override.
+    $localPckgFormID = "031ab1";
+    $loadOrderESP = $skyrimCmd->getLoadOrderESP();
+    $PckgFormID = "0x{$loadOrderESP}$localPckgFormID";
+
+
+
+    $json = $skyrimCmd->ActorUtil->AddPackageOverride("", "0x{$npc["refid"]}", $PckgFormID, 100);
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+
+}
+
+if ($argv[1] == '33') {
+
+    print_r(extractFirstEmoteMood("amused"));
+
+}
+
+if ($argv[1] == '34a' || $argv[1] == '34b') {
+
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Lydia");
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+
+    //Stop reading animation
+    if ($argv[1] == '34b') {
+        $json = $skyrimCmd->Actor->PlayIdle("0x{$npc["refid"]}", "0x000e4242");
+        $skyrimCmd->send(cmd: $json);
+
+        $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+        $skyrimCmd->send(cmd: $json);
+    }
+
+    //Start reading animation
+    if ($argv[1] == '34a') {
+        $json = $skyrimCmd->Actor->PlayIdle("0x{$npc["refid"]}", "0x000bb053");
+        $skyrimCmd->send(cmd: $json);
+
+        $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+        $skyrimCmd->send(cmd: $json);
+    }
+
+    if (false) {
+        $GLOBALS["db"]->insert(
+            'responselog',
+            array(
+                'localts' => time(),
+                'sent' => 0,
+                'text' => "CommandAnimation@IdleBook_Reading",
+                'actor' => "Jaryra",
+                'action' => 'command'
+            )
+        );
+    }
+
+}
+
+if ($argv[1] == '35') {
+
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Jaryra");
+
+
+    $GLOBALS["db"]->insert(
+        'responselog',
+        array(
+            'localts' => time(),
+            'sent' => 0,
+            'text' => "CommandAnimation@IdleBookSitting_Reading",
+            'actor' => "Jaryra",
+            'action' => 'command'
+        )
+    );
+
+
+}
+
+if ($argv[1] == '36') {
+    $GLOBALS["db"]->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => "rolemaster",
+            'text' => "",
+            'action' => "rolecommand|Instruction@The Narrator@Should say something smart@0",
+            'tag' => "",
+        ]
+    );
+}
+
+if ($argv[1] == '37') {
+
+    $firstPass = moveDialogueTargetSuffixToEnd("Sleep during the day... such a haunting detail, my love. (talking to Varek) It is as if this Movarth is wandering into a trap while thinking himself the hunter. (talking to Lydia) It makes me wonder about the things we invite into our lives under the guise of curiosity. (talking to Lydia) Do you think his weariness is a sign of a soul already starting to fray, or merely the weight of the secrets he carries? (talking to Lydia) Shall I continue, or should we pause to let the embers settle? (talking to Lydia)");
+    echo $firstPass . PHP_EOL;
+    echo print_r(extractDialogueTarget($firstPass), true) . PHP_EOL;
+    echo removeTalkingToOccurrences("Sleep during the day... such a haunting detail, my love. (talking to Varek) It is as if this Movarth is wandering into a trap while thinking himself the hunter. (talking to Lydia) It makes me wonder about the things we invite into our lives under the guise of curiosity. (talking to Lydia) Do you think his weariness is a sign of a soul already starting to fray, or merely the weight of the secrets he carries? (talking to Lydia) Shall I continue, or should we pause to let the embers settle? (talking to Lydia)");
+}
+
+if ($argv[1] == '38') {
+    $GLOBALS["db"]->insert(
+        'responselog',
+        array(
+            'localts' => time(),
+            'sent' => 0,
+            'text' => "Consume@{\"item\":\"\",\"target\":\"0xFF000FC6:Potion of Restore Magicka\"}",
+            'actor' => "Aranea Ienith",
+            'action' => 'command'
+        )
+    );
+}
+
+
+// GSPOSES
+if ($argv[1] == '39') {
+
+    if ($argv[3] == '0') {
+
+        $GLOBALS["db"]->insert(
+            'responselog',
+            array(
+                'localts' => time(),
+                'sent' => 0,
+                'text' => "CommandAnimation@IdleForceDefaultState",
+                'actor' => "{$argv[2]}",
+                'action' => 'command'
+            )
+        );
+    } else {
+        $GLOBALS["db"]->insert(
+            'responselog',
+            array(
+                'localts' => time(),
+                'sent' => 0,
+                'text' => "CommandAnimation@{$argv[3]}",
+                'actor' => "{$argv[2]}",
+                'action' => 'command'
+            )
+        );
+
+        $npcMaster = new NpcMaster();
+        $npc = $npcMaster->getByName($argv[2]);
+
+        $skyrimCmd = new SkyrimCommandBuilder();
+
+        //Stop reading animation
+
+        $json = $skyrimCmd->Actor->SetHeadTracking("0x{$npc["refid"]}", false);
+        $skyrimCmd->send(cmd: $json);
+
+        $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+        $skyrimCmd->send(cmd: $json);
+
+
+    }
+}
+
+if ($argv[1] == '40') {
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Dorys Bruc [Vaermina Devotee]");
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $json = $skyrimCmd->Actor->RemoveFromAllFactions("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+}
+
+
+if ($argv[1] == '41') {
+
+    $GLOBALS["db"]->insert(
+        'responselog',
+        array(
+            'localts' => time(),
+            'sent' => 0,
+            'text' => "ExtCmdKiss@Varek",
+            'actor' => "Jaryra",
+            'action' => 'command'
+        )
+    );
+}
+
+if ($argv[1] == '42') {
+
+    $GLOBALS["db"]->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => "rolemaster",
+            'text' => "",
+            'action' => "rolecommand|ImpersonatePlayer@Can you read the book of Mannimarco?@inputtext",
+            'tag' => __FILE__ . ":" . __LINE__,
+        ]
+    );
+}
+
+if ($argv[1] == '43') {
+    $GLOBALS['db']->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => 'rolemaster',
+            'text' => '',
+            'action' => "rolecommand|RenameNPC@0x32000D67@Herika",
+            'tag' => '',
+        ]
+    );
+
+    sleep(1);
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Herika");
+    $extended_data = $npcMaster->getExtendedData($npc);
+    $extended_data['background_life_commands'] = true;
+    $extended_data['background_life_enabled'] = true;
+    $extended_data['background_life_last_updated'] = $last_gamets;
+    $extended_data['background_life_player_unattached'] = true;
+    $extended_data['middle_term_enabled'] = 1;
+
+    $metadata = $npcMaster->getExtendedData($npc);
+    $metadata['gps_track'] = true;
+    $npc = $npcMaster->setMetadata($npc, $metadata);
+    $npc = $npcMaster->setExtendedData($npc, $extended_data);
+    $npcMaster->updateByArray($npc);
+}
+if ($argv[1] == '44') {
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName("Jaryra");
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x000847a9");
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+}
+
+if ($argv[1] == '45') {
+    $GLOBALS["db"]->insert(
+        'responselog',
+        array(
+            'localts' => time(),
+            'sent' => 0,
+            'text' => "MoveTo@Elysium Estate",
+            'actor' => "Lydia",
+            'action' => 'command'
+        )
+    );
+}
+
+
+if ($argv[1] == "46") {
+    $GLOBALS["db"]->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => "rolemaster",
+            'text' => "",
+            'action' => "rolecommand|BackgroundCmd@0x00019E0F@TravelTo/101939",
+            'tag' => __FILE__ . ":" . __LINE__,
+        ]
+    );
+
+    $npcMaster = new NpcMaster();
+    $npcname = "Grosta";
+    $npc = $npcMaster->getByName($npcname);
+
+    $meta = $npcMaster->getMetaData($npc);
+    print_r($meta["last_coords"]);
+
+    print_r(getLocationsNearNpcCoords($npcname));
+
+}
+
+if ($argv[1] == "47") {
+    require_once __DIR__ . "/../lib/minimet5_service.php";
+    $sourceText = internalDumbTranslator("we got all the parts of the blade...");
+    $keywords = minimeExtract($sourceText, true);
+    print_r($keywords);
+}
+
+if ($argv[1] == "48") {
+
+    $npcMaster = new NpcMaster();
+    $npcname = "Grosta";
+    $npc = $npcMaster->getByName($npcname);
+    $skyrimCmd = new SkyrimCommandBuilder();
+
+    $json = $skyrimCmd->Actor->AddToFaction("0x{$npc["refid"]}", "0x0001dd09"); //WEPlayerFriend
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->SetFactionRank("0x{$npc["refid"]}", "0x0001dd09", 1); //WEPlayerFriend
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->SetRelationshipRank("0x{$npc["refid"]}", "0x14", 1); //WEPlayerFriend
+    $skyrimCmd->send(cmd: $json);
+}
+
+
+if ($argv[1] == '49') {
+
+
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $npc["refid"] = "14";
+
+    $json = $skyrimCmd->Actor->PlayIdle("0x{$npc["refid"]}", "0x000b5e20");
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+
+}
+
+if ($argv[1] == '50') {
+
+    $npcMaster = new NpcMaster();
+    $npcname = "Gralnach";
+    $npc = $npcMaster->getByName($npcname);
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x00019E19", 0, 0, 155);
+    $skyrimCmd->send(cmd: $json);
+
+    /*$GLOBALS["db"]->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => "rolemaster",
+            'text' => "",
+            'action' => "rolecommand|BackgroundCmd@0x{$npc["refid"]}@ReturnHome",
+            'tag' => __FILE__ . ":" . __LINE__,
+        ]
+    );*/
+}
+
+if ($argv[1] == '51') {
+    $npcMaster = new NpcMaster();
+    $npcname = "Gularzob";
+    $npc = $npcMaster->getByName($npcname);
+
+    $GLOBALS['db']->insert(
+        'responselog',
+        [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => 'rolemaster',
+            'text' => '',
+            'action' => "rolecommand|BackgroundCmd@0x{$npc["refid"]}@MoveToPlayer",
+            'tag' => '',
+        ]
+    );
+
+}
+
+if ($argv[1] == '52') {
+    print_r(DataLastDataExpandedForNPC("Grosta", -50));
+
+}
+
+if ($argv[1] == '53') {
+    require_once __DIR__ . "/../lib/director_scene.php";
+    $json_data = <<<EOT
+{"actions":[],"lines":[{"listener":"Varek","speaker":"Alva","text":"Drinks! Finally, something we can all agree on without twenty minutes of debate. Come, sisters — the cellar's been thirsting for company."},{"listener":"Alva","speaker":"Medresi Dran","text":"Pour generously, Alva. If we're toasting a new sister, we do it properly. To Arielle — may her fangs find the right throats."},{"listener":"Medresi Dran","speaker":"Arielle Eardwulf","text":"My gratitude for the... welcome. I will drink, and I will remember who poured."},{"listener":"Alva","speaker":"Arielle Eardwulf","text":"Oh, she learns fast. Mhoria, Aniette — don't let the vampire outdrink you both. That would be embarrassing."},{"listener":"Varek","speaker":"Mhoria","text":"The Dragonborn calls for celebration, and so we celebrate. Raise your cups — to the Clan, and to the blood that binds us. Drink deep, every one of you."}]}
+EOT;
+    $fakeScene = json_decode($json_data, true);
+    print_r($fakeScene);
+    $GLOBALS['gameRequest'][2] = intval(DataLastKnownGameTS());
+    $master = new NpcMaster();
+
+    foreach ($fakeScene['lines'] as $line) {
+        $actors[$line['speaker']] = $master->getByName($line['speaker']);
+    }
+
+    $scene = dwemerSplitDirectorScene($fakeScene, static function (array $line) use ($actors): array {
+        chimDirectorActorGlobals($actors[$line['speaker']]);
+        return split_sentences_stream(cleanResponse($line['text']));
+    });
+
+    print_r($scene);
+
+    $scene['schema'] = 'chim.director_scene.v2';
+    $scene['id'] = bin2hex(random_bytes(16));
+    $scene['generation'] = 2;
+    foreach ($scene['lines'] as $index => &$line) {
+        chimDirectorActorGlobals($actors[$line['speaker']]);
+        $GLOBALS['ENGINE_ROOT'] = $enginePath;
+        $line['actor_refid'] = $actors[$line['speaker']]['refid'] ?? '';
+        $line['utterance_id'] = 'director-' . $scene['id'] . '-' . $index;
+
+        $line['tts_cache_key'] = md5($line['utterance_id']);
+        $audio = $GLOBALS['ENGINE_ROOT'] . '/soundcache/' . $line['tts_cache_key'] . '.wav';
+
+        error_log($line['utterance_id'] . " " . $audio);
+
+        if (!is_file($audio) || filesize($audio) <= 44)
+            callNpcTtsWithFallback($line['text'], 'default', $line['utterance_id']);
+        if (!is_file($audio) || filesize($audio) <= 44) {
+            dwemerDirectorLogError('Director audio generation failed');
+            throw new RuntimeException('Director audio generation failed');
+        }
+    }
+    unset($line);
+    $db = $GLOBALS['db'];
+    if ($db->query('BEGIN') === false) {
+        dwemerDirectorLogError('Director publication failed');
+        throw new RuntimeException('Director publication failed');
+    }
+    try {
+        foreach ($scene['lines'] as $index => $line) {
+            if (
+                !$db->insertReturningId('eventlog', [
+                    'type' => 'chat',
+                    'ts' => time() + $index,
+                    'gamets' => (int) ($GLOBALS['gameRequest'][2] ?? 0),
+                    'localts' => time(),
+                    'sess' => 'pending',
+                    'data' => $line['speaker'] . ': ' . $line['text'] . ' ' . buildDialogueTargetSuffix($line['listener']),
+                    'people' => '|' . $line['speaker'] . '|' . $line['listener'] . '|',
+                    'location' => $GLOBALS['CACHE_LOCATION'] ?? '',
+                    'party' => $GLOBALS['CACHE_PARTY'] ?? '',
+                    'utterance_id' => $line['utterance_id'],
+                    'delivery_state' => 'pending'
+                ], 'rowid')
+            ) {
+                dwemerDirectorLogError('Director pending history failed');
+                throw new RuntimeException('Director pending history failed');
+            }
+        }
+        $json = json_encode($scene, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        if (
+            !$db->insertReturningId('rolemaster', ['localts' => time(), 'ttl' => 600, 'type' => 'director_scene', 'data' => $json], 'rowid')
+            || !$db->insertReturningId('responselog', [
+                'localts' => time(),
+                'sent' => 0,
+                'actor' => 'rolemaster',
+                'text' => '',
+                'action' => 'rolecommand|DirectorScene@' . base64_encode($json),
+                'tag' => 'director_scene:' . $scene['id']
+            ], 'rowid')
+        ) {
+            dwemerDirectorLogError('Director scene queue failed');
+            throw new RuntimeException('Director scene queue failed');
+        }
+        if ($db->query('COMMIT') === false) {
+            dwemerDirectorLogError('Director commit failed');
+            throw new RuntimeException('Director commit failed');
+        }
+    } catch (Throwable $error) {
+        $db->query('ROLLBACK');
+        dwemerDirectorLogError('Director publication transaction rolled back', $error);
+        throw $error;
+    }
+    Logger::info('[DIRECTOR] Authored scene queued: ' . $scene['id'] . ' lines=' . count($scene['lines']));
+}
+
+if ($argv[1] == '54') {
+    // Telport all npcs belonging to the 'dark followers' profile to player
+    $npcCtl = new NpcMaster();
+    $prfCtl = new CoreProfile();
+    $darkfFollowers = $prfCtl->getByLabel('dark followers');
+    $npcs = $GLOBALS['db']->fetchAll("select refid from core_npc_master where profile_id=" . $darkfFollowers['id']);
+    $skyrimCmd = new SkyrimCommandBuilder();
+    foreach ($npcs as $npc) {
+
+
+        $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x14", 0, 0, 155);
+        $skyrimCmd->send(cmd: $json);
+    }
+
+
 }

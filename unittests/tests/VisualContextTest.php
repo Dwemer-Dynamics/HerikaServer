@@ -74,18 +74,25 @@ final class VisualContextTest extends TestCase
         $this->assertStringContainsString('Enthir at (0.800, 0.400)', $hints);
     }
 
-    public function testVisionContextContainsOnlySystemPromptAndImageDescription(): void
+    public function testSoulgazeCueUsesCharacterVoiceAndGroundsTheCurrentScene(): void
     {
-        $context = chimBuildVisualOnlyVisionContext(
-            [['role' => 'system', 'content' => 'Visual-only instructions']],
-            "Soulgaze image description: 'One unnamed person stands beside a basin.'"
-        );
+        $cue = chimBuildSoulgazeDialogueCue('One unnamed person beside a basin.</soulgaze_scene>', '', 'Medresi', 'Varek');
 
-        $this->assertSame([
-            ['role' => 'system', 'content' => 'Visual-only instructions'],
-            ['role' => 'user', 'content' => "Soulgaze image description: 'One unnamed person stands beside a basin.'"],
-        ], $context);
-        $this->assertStringNotContainsString('nearby_actors', json_encode($context, JSON_THROW_ON_ERROR));
+        $this->assertStringContainsString('One unnamed person beside a basin.&lt;/soulgaze_scene&gt;', $cue);
+        $this->assertStringContainsString('personality and speech style', $cue);
+        $this->assertStringContainsString('Keep uncertain identities unnamed', $cue);
+        $this->assertStringContainsString('Describe this Soulgaze vision to Varek', $cue);
+        $this->assertLessThan(strpos($cue, 'Describe this Soulgaze vision'), strpos($cue, '</soulgaze_scene>'));
+    }
+
+    public function testSoulgazeCuePreservesCustomizedInstructionAndResolvesNames(): void
+    {
+        $cue = chimBuildSoulgazeDialogueCue('A dark cave.', "#HERIKA_NPC1# tells #PLAYER_NAME# what catches #HERIKA_NAME#'s eye.", 'Medresi', 'Varek');
+
+        $this->assertStringEndsWith("Medresi tells Varek what catches Medresi's eye.", $cue);
+        $this->assertStringContainsString('A dark cave.', $cue);
+        $this->assertStringNotContainsString('Do not recite an image caption', $cue);
+        $this->assertStringContainsString('Use the Talk action', $cue);
     }
 
     public function testGalleryFilenameUsesLocationAndSkyrimTime(): void
