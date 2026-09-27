@@ -63,7 +63,7 @@ if (!isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]) ) {
         )??[];
         $nearbySceneContext = trim((string)($GLOBALS["PROMPT_NEARBY_SECTIONS"] ?? ""));
         $contextDataFull = array_merge($contextDataWorld, $contextDataHistoric);
-        $historyData="";
+        $historyData=$isBoredInstruction ? "" : "# Current world context\n";
 
             
         foreach ($contextDataFull as $element) {
@@ -74,10 +74,14 @@ if (!isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]) ) {
         if ($nearbySceneContext !== "") {
             $historyData .= $nearbySceneContext . PHP_EOL.PHP_EOL;
         }
+        if ($isBoredInstruction) {
+            // Ground the opener in the same current world context used by normal dialogue.
+            $historyData .= buildWorldPrompt($GLOBALS["gameRequest"][2] ?? 0) . PHP_EOL.PHP_EOL;
+        }
         
         $recap=$GLOBALS["db"]->fetchOne("SELECT * FROM rolemaster where type='story_summary' ORDER BY rowid DESC LIMIT 1");
         if (isset($recap["data"])) {
-            $historyData=$recap["data"]."\n".$historyData;
+            $historyData=($isBoredInstruction ? "" : "# Historical story summary (not current presence)\n") . $recap["data"]."\n".$historyData;
 
         }
 
@@ -101,6 +105,18 @@ if (!isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]) ) {
         $relContext = RelationshipManager::buildDirectorContext($nearbyNpcsList);
         if (!empty($relContext)) {
             $historyData .= "\n" . $relContext . "\n";
+        }
+
+        if (!$isBoredInstruction) {
+            require_once $GLOBALS['ENGINE_ROOT'] . '/lib/director_scene.php';
+            try {
+                chimGenerateDirectorScene($connectionHandler, (string)($GLOBALS['argv'][3] ?? ''), $historyData);
+            } catch (Throwable $error) {
+                Logger::error('[DIRECTOR] Scene generation failed: ' . $error->getMessage());
+                $GLOBALS['db']->insert('responselog', ['localts' => time(), 'sent' => 0, 'actor' => 'rolemaster',
+                    'text' => '', 'action' => 'rolecommand|DirectorSceneFailed@' . (int)($GLOBALS['argv'][5] ?? 0)]);
+            }
+            return;
         }
 
         // Function stuff
@@ -135,7 +151,7 @@ if (!$isBoredInstruction) {
             $commonprompt = (!empty($promptData['custom_prompt'])) ? $promptData['custom_prompt'] : $promptData['default_prompt'];
         }
     } catch (Exception $e) {
-        Logger::warn("Failed to load director_examples_prompt from database, using hardcoded fallback: " . $e->getMessage());
+        Logger::warn("[DIRECTOR] Failed to load director_examples_prompt from database, using hardcoded fallback: " . $e->getMessage());
     }
 
     // Hardcoded fallback if database query failed
@@ -197,7 +213,7 @@ user request: actor \"a\" leaves the place
                 $directorSystemPrompt = (!empty($promptData['custom_prompt'])) ? $promptData['custom_prompt'] : $promptData['default_prompt'];
             }
         } catch (Exception $e) {
-            Logger::warn("Failed to load {$directorSystemPromptKey} from database, using hardcoded fallback: " . $e->getMessage());
+            Logger::warn("[DIRECTOR] Failed to load {$directorSystemPromptKey} from database, using hardcoded fallback: " . $e->getMessage());
         }
         
         if (!$directorSystemPrompt) {
@@ -224,7 +240,7 @@ user request: actor \"a\" leaves the place
                 }
             } catch (Exception $e) {
                 Logger::warn(
-                    "Failed to load director_bored_event_rules from database, using hardcoded fallback: "
+                    "[DIRECTOR] Failed to load director_bored_event_rules from database, using hardcoded fallback: "
                     . $e->getMessage()
                 );
             }
@@ -243,7 +259,7 @@ user request: actor \"a\" leaves the place
                     $directorInstructionRules = (!empty($promptData['custom_prompt'])) ? $promptData['custom_prompt'] : $promptData['default_prompt'];
                 }
             } catch (Exception $e) {
-                Logger::warn("Failed to load director_instruction_rules from database, using hardcoded fallback: " . $e->getMessage());
+                Logger::warn("[DIRECTOR] Failed to load director_instruction_rules from database, using hardcoded fallback: " . $e->getMessage());
             }
 
             if (!$directorInstructionRules) {
@@ -323,7 +339,7 @@ user request: actor \"a\" leaves the place
                     $GLOBALS["ROLEMASTER_BORED_ALLOWED_ACTORS"] ?? []
                 );
                 Logger::info(
-                    "Queued bored rolemaster instruction for '{$characterName}'"
+                    "[DIRECTOR] Queued bored rolemaster instruction for '{$characterName}'"
                     . ($canonicalListener === null ? " without a valid listener" : " with listener '{$canonicalListener}'")
                 );
             }
@@ -399,11 +415,11 @@ user request: actor \"a\" leaves the place
                     $boredSeedActor
                 );
                 if (empty($response["instructions"])) {
-                    Logger::warn("Discarded bored rolemaster response because it omitted the selected actor or used no eligible nearby actors");
+                    Logger::warn("[DIRECTOR] Discarded bored rolemaster response because it omitted the selected actor or used no eligible nearby actors");
                 } elseif (count($response["instructions"]) !== $originalInstructionCount) {
                     $discardedCount = $originalInstructionCount - count($response["instructions"]);
                     Logger::info(
-                        "Discarded {$discardedCount} secondary or invalid bored rolemaster instruction(s); "
+                        "[DIRECTOR] Discarded {$discardedCount} secondary or invalid bored rolemaster instruction(s); "
                         . "the listener will respond through normal dialogue routing"
                     );
                 }
@@ -453,5 +469,5 @@ user request: actor \"a\" leaves the place
     }
 
 
-    Logger::info("Successfully logged instruction command to responselog");
+    Logger::info("[DIRECTOR] Successfully logged instruction command to responselog");
 ?>

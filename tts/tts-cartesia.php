@@ -828,12 +828,31 @@ function generateCartesiaTTS($text, $voiceId, $mood = 'normal') {
         'speed' => $speed
     );
     
+    // New models use the current API; keep legacy model requests unchanged.
+    $modernModel = preg_match('/^sonic-3\.[56](?:$|-)/', $modelId) === 1;
+    $apiVersion = '2024-11-13';
+    if ($modernModel) {
+        $apiVersion = '2026-08-14';
+        $data['voice'] = $voiceId;
+        unset($data['speed']);
+        $speedPresets = ['slowest' => 0.6, 'slow' => 0.8, 'normal' => 1.0, 'fast' => 1.2, 'fastest' => 1.5];
+        $data['generation_config'] = ['speed' => is_numeric($speed)
+            ? max(0.6, min(1.5, floatval($speed)))
+            : ($speedPresets[$speed] ?? 1.0)];
+        $accent = trim(strval($GLOBALS["TTS"]["CARTESIA"]["accent"] ?? ''));
+        if ($accent !== '' && preg_match('/^sonic-3\.6(?:$|-)/', $modelId) === 1) {
+            $data['accent'] = $accent;
+        }
+    }
+
+    $authHeader = ($modernModel ? 'Authorization: Bearer ' : 'X-API-Key: ') . $apiKey;
+
     // Prepare request
     $options = array(
         'http' => array(
             'method' => 'POST',
-            'header' => "X-API-Key: {$apiKey}\r\n" .
-                       "Cartesia-Version: 2024-11-13\r\n" .
+            'header' => "{$authHeader}\r\n" .
+                       "Cartesia-Version: {$apiVersion}\r\n" .
                        "Content-Type: application/json\r\n",
             'content' => json_encode($data),
             'ignore_errors' => true,

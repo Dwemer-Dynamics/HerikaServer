@@ -54,9 +54,113 @@ final class DynamicProfileQueueTestDb
     }
 }
 
+final class SupersedingUserInputTestDb
+{
+    public array $queries = [];
+    public array $rows = [];
+
+    public function fetchAll(string $query): array
+    {
+        $this->queries[] = $query;
+        return $this->rows;
+    }
+}
+
 final class CoreRequestStabilityTest extends TestCase
 {
     private bool $warningHandlerInstalled = false;
+
+    public function testDirectorUsesSceneTemplatesAndRestoresConnectorState(): void
+    {
+        require_once __DIR__ . '/../../lib/director_scene.php';
+        $actors = ['Sarah' => [], 'Leona' => []];
+        $catalog = ['MoveTo' => ['speakers' => ['Sarah'], 'parameters' => ['properties' => [
+            'target' => ['type' => 'string'], 'speed' => ['type' => 'integer', 'minimum' => 1],
+        ], 'required' => ['target']]]];
+        $connection = new class {
+            public array $captured = [];
+            public string $response = '';
+            public function open($prompt, $options): void {
+                $this->captured = ['options' => $options, 'template' => $GLOBALS['responseTemplate'],
+                    'schema' => $GLOBALS['structuredOutputTemplate'], 'connector' => $GLOBALS['CONNECTOR'],
+                    'functions' => $GLOBALS['FUNCTIONS_ARE_ENABLED'], 'patch' => $GLOBALS['PATCH']];
+            }
+            public function process(): void {}
+            public function isDone(): bool { return true; }
+            public function close($name): string { return $this->response; }
+        };
+        $keys = ['CURRENT_CONNECTOR', 'CONNECTOR', 'PATCH', 'FUNCTIONS_ARE_ENABLED', 'responseTemplate', 'structuredOutputTemplate'];
+        $original = array_intersect_key($GLOBALS, array_flip($keys));
+        try {
+            $GLOBALS['CURRENT_CONNECTOR'] = 'openrouterjson';
+            $GLOBALS['PATCH'] = ['PREAPPEND' => '{"character":"Sarah",'];
+            $GLOBALS['FUNCTIONS_ARE_ENABLED'] = true;
+            $GLOBALS['responseTemplate'] = ['message' => 'Normal dialogue'];
+            $GLOBALS['structuredOutputTemplate'] = ['normal' => true];
+            foreach ([false, true] as $schemaEnabled) {
+                $GLOBALS['CONNECTOR'] = ['openrouterjson' => ['json_schema' => $schemaEnabled, 'PREFILL_JSON' => true]];
+                $before = array_intersect_key($GLOBALS, array_flip($keys));
+                foreach ([false, true] as $malformed) {
+                    $connection->response = $malformed ? '{"lines":[]} trailing junk' : json_encode([
+                        'lines' => [['speaker' => 'Sarah', 'listener' => 'Tom', 'text' => 'Hello.']],
+                        'actions' => [['speaker' => 'Sarah', 'after_line' => 1, 'command_name' => 'MoveTo',
+                            'parameters' => ['target' => 'Leona', 'speed' => null]]],
+                    ]);
+                    try {
+                        $scene = chimRequestDirectorScene($connection, [], $actors, $catalog, 'Tom');
+                        $this->assertFalse($malformed);
+                        $this->assertSame(['target' => 'Leona'], $scene['actions'][0]['parameters']);
+                    } catch (RuntimeException $error) {
+                        $this->assertTrue($malformed);
+                        $this->assertStringContainsString('Director did not return JSON: Syntax error', $error->getMessage());
+                    }
+                    $this->assertSame($before, array_intersect_key($GLOBALS, array_flip($keys)));
+                    $this->assertSame($schemaEnabled ? 'json_schema' : 'json_object', $connection->captured['options']['response_format']['type']);
+                    $this->assertArrayNotHasKey('message', $connection->captured['template']);
+                    $this->assertArrayNotHasKey('PREAPPEND', $connection->captured['patch']);
+                    $this->assertFalse($connection->captured['functions']);
+                    $this->assertFalse($connection->captured['connector']['openrouterjson']['PREFILL_JSON']);
+                    $schema = $connection->captured['schema']['json_schema']['schema'];
+                    $this->assertSame(['Sarah', 'Leona'], $schema['properties']['lines']['items']['properties']['speaker']['enum']);
+                    $this->assertContains('Tom', $schema['properties']['lines']['items']['properties']['listener']['enum']);
+                }
+            }
+        } finally {
+            foreach ($keys as $key) {
+                if (array_key_exists($key, $original)) $GLOBALS[$key] = $original[$key];
+                else unset($GLOBALS[$key]);
+            }
+        }
+    }
+
+    public function testDirectorEndsAtPlayerListenerAndDiscardsLaterActions(): void
+    {
+        require_once __DIR__ . '/../../lib/director_scene_contract.php';
+        $actors = ['Sarah' => [], 'Leona' => []];
+        $catalog = ['MoveTo' => ['speakers' => ['Sarah'], 'parameters' => [
+            'properties' => ['target' => ['type' => 'string']], 'required' => ['target']]]];
+        $opening = ['speaker' => 'Sarah', 'listener' => 'Leona', 'text' => 'Come over here.'];
+        $handoff = ['speaker' => 'Sarah', 'listener' => 'Tom', 'text' => 'What do you think?'];
+        $action = ['speaker' => 'Sarah', 'after_line' => 2, 'command_name' => 'MoveTo',
+            'parameters' => ['target' => 'Tom']];
+        $scene = dwemerValidateDirectorScene(['lines' => [$opening, $handoff,
+            ['speaker' => 'Tom', 'listener' => 'Sarah', 'text' => 'Invented player response.'], $opening],
+            'actions' => [$action, array_replace($action, ['after_line' => 4])]], $actors, $catalog, 'Tom');
+        $this->assertSame([$opening, $handoff], $scene['lines']);
+        $this->assertSame([$action], $scene['actions']);
+        $npcOnly = dwemerValidateDirectorScene(['lines' => [$opening,
+            ['speaker' => 'Leona', 'listener' => 'Sarah', 'text' => 'All right.']]], $actors, $catalog, 'Tom');
+        $this->assertCount(2, $npcOnly['lines']);
+    }
+
+    public function testDirectorRejectsPlayerSpeechEvenIfPlayerIsInActorMap(): void
+    {
+        require_once __DIR__ . '/../../lib/director_scene_contract.php';
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Director line 1: player or narrator cannot speak');
+        dwemerValidateDirectorScene(['lines' => [['speaker' => 'Tom', 'listener' => 'Sarah', 'text' => 'Hello.']]],
+            ['Sarah' => [], 'Tom' => []], [], 'Tom');
+    }
 
     protected function tearDown(): void
     {
@@ -131,6 +235,67 @@ final class CoreRequestStabilityTest extends TestCase
         $this->assertSame([], chimNormalizeTsQueryTerms('{} | & :'));
     }
 
+    public function testSupersedingUserInputLookupUsesStrictRequestTimestamp(): void
+    {
+        $db = new SupersedingUserInputTestDb();
+        $db->rows = [['rowid' => '42', 'ts' => '1002', 'data' => 'inputtext']];
+
+        $result = chimFindSupersedingUserInput($db, '1001', 'instruction');
+
+        $this->assertSame(['rowid' => '42', 'ts' => '1002'], $result);
+        $this->assertCount(1, $db->queries);
+        $this->assertStringContainsString('FROM eventlog ORDER BY rowid DESC LIMIT 100', $db->queries[0]);
+        $this->assertStringContainsString("type='user_input' AND ts>1001", $db->queries[0]);
+        $this->assertStringNotContainsString("COALESCE(data, '')<>'instruction'", $db->queries[0]);
+        $this->assertStringContainsString('ORDER BY rowid DESC LIMIT 1', $db->queries[0]);
+    }
+
+    public function testDirectPlayerInputLookupExcludesAutomaticInstruction(): void
+    {
+        $db = new SupersedingUserInputTestDb();
+        $db->rows = [['rowid' => '42', 'ts' => '1002']];
+
+        $this->assertSame(['rowid' => '42', 'ts' => '1002'], chimFindSupersedingUserInput($db, '1001', 'inputtext'));
+        $this->assertStringContainsString("COALESCE(data, '')<>'instruction'", $db->queries[0]);
+    }
+
+    public function testSupersedingUserInputLookupRejectsInvalidTimestampWithoutQuery(): void
+    {
+        $db = new SupersedingUserInputTestDb();
+
+        $this->assertNull(chimFindSupersedingUserInput($db, '1001 OR 1=1'));
+        $this->assertSame([], $db->queries);
+    }
+
+    public function testReturnLinesRunsBoundaryCheckBeforeTts(): void
+    {
+        $hadForcedStop = array_key_exists('FORCED_STOP', $GLOBALS);
+        $savedForcedStop = $GLOBALS['FORCED_STOP'] ?? null;
+        $GLOBALS['FORCED_STOP'] = false;
+        $boundaryCheckRan = false;
+
+        try {
+            returnLines(
+                ['Boundary test sentence.'],
+                false,
+                static function () use (&$boundaryCheckRan): void {
+                    $boundaryCheckRan = true;
+                    throw new RuntimeException('boundary-check-ran');
+                }
+            );
+            $this->fail('Speech boundary check was not invoked');
+        } catch (RuntimeException $e) {
+            $this->assertSame('boundary-check-ran', $e->getMessage());
+            $this->assertTrue($boundaryCheckRan);
+        } finally {
+            if ($hadForcedStop) {
+                $GLOBALS['FORCED_STOP'] = $savedForcedStop;
+            } else {
+                unset($GLOBALS['FORCED_STOP']);
+            }
+        }
+    }
+
     public function testZonosCheckDoesNotWarnWhenTtsIsNotInitialized(): void
     {
         unset($GLOBALS['TTSFUNCTION'], $GLOBALS['TTS']);
@@ -139,33 +304,24 @@ final class CoreRequestStabilityTest extends TestCase
         $this->assertFalse(zonosIsActive());
     }
 
-    public function testDynamicProfileBatchIsQueuedAndConsumedOnce(): void
+    public function testLegacyDynamicProfileTimerCannotQueueWork(): void
     {
         $db = new DynamicProfileQueueTestDb();
         $GLOBALS['db'] = $db;
-
-        $queueId = queueDynamicProfileBatch([' Lydia ', 'Lydia', 'Aela'], ['updateprofiles_batch_async', '1', '2']);
-        $processed = [];
-        $result = triggerImmediateProfileProcessing(static function (string $npcName, array $gameRequest) use (&$processed): bool {
-            $processed[] = [$npcName, $gameRequest[0]];
-            return true;
-        });
-
-        $this->assertArrayNotHasKey($queueId, $db->rows);
-        $this->assertSame([['Lydia', 'updateprofiles_batch_async'], ['Aela', 'updateprofiles_batch_async']], $processed);
-        $this->assertSame(['locked' => true, 'jobs' => 1, 'npcs' => 2, 'updated' => 2], $result);
+        $result = queueDynamicProfileBatch(['Lydia'], ['updateprofiles_batch_async', '1', '2']);
+        $this->assertSame('server-managed', $result);
+        $this->assertSame([], $db->rows);
     }
 
-    public function testDynamicProfileQueueDoesNothingWhenAnotherWorkerOwnsLock(): void
+    public function testDynamicProfileRequiresAllThresholdsAndAppliesRetryCooldown(): void
     {
-        $db = new DynamicProfileQueueTestDb();
-        $GLOBALS['db'] = $db;
-        $queueId = queueDynamicProfileBatch(['Lydia'], ['updateprofiles_batch_async', '1', '2']);
-        $db->lockAvailable = false;
-
-        $result = triggerImmediateProfileProcessing(static fn(): bool => true);
-
-        $this->assertArrayHasKey($queueId, $db->rows);
-        $this->assertSame(['locked' => false, 'jobs' => 0, 'npcs' => 0, 'updated' => 0], $result);
+        require_once __DIR__ . '/../../lib/dynamic_profile_scheduler.php';
+        $policy = dps_policy([]);
+        $state = ['attempt'=>1000, 'last_game'=>10000000, 'total'=>30, 'consumed'=>0];
+        $this->assertFalse(dps_due($state, $policy, 20000000, 1299));
+        $this->assertTrue(dps_due($state, $policy, 20000000, 1300));
+        $this->assertFalse(dps_due($state, $policy, 19999999, 1300));
+        $state['total'] = 29;
+        $this->assertFalse(dps_due($state, $policy, 20000000, 1300));
     }
 }

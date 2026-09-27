@@ -1,7 +1,7 @@
 <?php
 
 
-define('_LOCATION_RESOLVE_SIM_THRESHOLD', 0.74); // Minimum similarity score for location resolution
+
 /**
  * Force-trigger an NPC background life update on the next mid-term BGL check.
  *
@@ -87,38 +87,6 @@ function checkLastCallsFor($npcName)
 
 
 
-/**
- * Build a PostgreSQL point literal from NPC metadata last_coords.
- *
- * @param array $currentNpcData
- * @return string|null Point literal in the form '(x,y)' or null when unavailable
- */
-function getNpcLastCoordsPoint($currentNpcData)
-{
-    $metadata = $currentNpcData['metadata'] ?? null;
-    if (is_string($metadata)) {
-        $metadata = json_decode($metadata, true);
-    }
-
-    $lastCoords = null;
-    if (is_array($metadata) && isset($metadata['last_coords']) && is_array($metadata['last_coords'])) {
-        $lastCoords = $metadata['last_coords'];
-    } elseif (isset($currentNpcData['last_coords']) && is_array($currentNpcData['last_coords'])) {
-        $lastCoords = $currentNpcData['last_coords'];
-    }
-
-    if (!$lastCoords) {
-        return null;
-    }
-
-    $x = $lastCoords[0] ?? null;
-    $y = $lastCoords[1] ?? null;
-    if (!is_numeric($x) || !is_numeric($y)) {
-        return null;
-    }
-
-    return '(' . floatval($x) . ',' . floatval($y) . ')';
-}
 
 
 /**
@@ -171,11 +139,14 @@ function handleTravelToAction($location, $currentNpcData, $npcName, $last_ts, $l
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
-                'data' => ($location == $resolvedLocation) ? "$npcName failed to travel to $location. Reason: {$GLOBALS["LAST_REASON"]}" : "$npcName starts travelling to $location (resolved as $resolvedLocation $resolvedLocationInterior). Reason: {$GLOBALS["LAST_REASON"]}",
+                'data' => ($location == $resolvedLocation) ? "$npcName failed to travel to $location. Reason: {$GLOBALS["LAST_REASON"]} LocSim:{$locId['sim']}" : "$npcName starts travelling to $location (resolved as $resolvedLocation $resolvedLocationInterior LocSim:{$locId['sim']}). Reason: {$GLOBALS["LAST_REASON"]}",
                 'category' => 'error',
             ]
         );
-        triggerNpcUpdate($npcName);
+        $npc = new NpcMaster();
+        $npcData = $npc->getByName($npcName);
+        $extendedData = $npc->getExtendedData($npcData);
+        triggerNpcUpdate($npcName, +$extendedData['background_life_last_updated_ec']);
         return false;
     }
 
@@ -346,7 +317,7 @@ function handleStayAtPlaceAction($location, $currentNpcData, $npcName, $last_ts,
     if (strtolower($intent) === 'socialize') {
         // If last intent was not socialize, we will trigger an update to the NPC to make it more dynamic and social.
         if (strtolower($previousIntent['category']) !== 'socialize') {
-            if (rand(0, 1)) {
+            if (rand(0, 4) == 0) {
                 triggerNpcUpdate($npcName);
             }
         }
@@ -650,9 +621,9 @@ function handleMoveToAction($targetNpcName, $currentNpcData, $npcName, $last_ts,
 
     if ($targetNpc === null) {
         error_log("[handleMoveToAction] Target NPC not found: $targetNpcName");
-        $locationCandidate=resolveTravelLocation($targetNpcName, $currentNpcData, $db);
+        $locationCandidate = resolveTravelLocation($targetNpcName, $currentNpcData, $db);
 
-        if ( $locationCandidate && isset($locationCandidate["sim"]) && $locationCandidate["sim"] > _LOCATION_RESOLVE_SIM_THRESHOLD) {
+        if ($locationCandidate && isset($locationCandidate["sim"]) && $locationCandidate["sim"] > _LOCATION_RESOLVE_SIM_THRESHOLD) {
             $db->insert('eventlog', [
                 'ts' => $last_ts,
                 'gamets' => $last_gamets + 5,
@@ -1006,7 +977,7 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
                 'category' => 'error',
             ]
         );
-        $extdata=$npcMaster->getExtendedData($currentNpcData);
+        $extdata = $npcMaster->getExtendedData($currentNpcData);
         triggerNpcUpdate($npcName, ++$extdata["background_life_last_updated_ec"]); // Force NPC to update its background life data on the next mid-term check, which should lead it to discover the new location and update accordingly.
     }
 
@@ -1110,7 +1081,7 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
             if (!gameIsPaused())
                 $retryCount++;
             else
-                $retryCount=$retryCount+0.1;
+                $retryCount = $retryCount + 0.1;
             sleep(1);
         }
     }
@@ -1229,7 +1200,7 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         $dialogueBuffer = $connectionHandler->fast_request($dialoguePrompt, ['MAX_TOKENS' => 512], 'backgroundlife');
         updateLastLLMCall($GLOBALS["HERIKA_NAME"]);
 
-        if (!empty($dialogueBuffer)) {
+        if ($dialogueBuffer && !empty(trim($dialogueBuffer))) {
             error_log("[handleSpeakToAction] Generated dialogue between $npcName and $resolvedName.");
 
             $db->insert('eventlog', [
@@ -1243,23 +1214,173 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
                 'location' => $lastEventLocation,
                 'party' => '',
             ]);
-        }
-        triggerNpcUpdate($npcName);
 
-        // Insert bgl_history log entry
-        $db->insert(
-            'bgl_history',
-            [
-                'npc' => $npcName,
-                'ts' => $last_ts,
-                'gamets' => $last_gamets + 20,
-                'localts' => time(),
-                'data' => "$npcName has a conversation with $resolvedName\nDialogue: $dialogueBuffer\nReason: {$GLOBALS["LAST_REASON"]}",
-                'category' => 'dialogue',
-            ]
-        );
+            triggerNpcUpdate($npcName);
+
+            // Insert bgl_history log entry
+            $db->insert(
+                'bgl_history',
+                [
+                    'npc' => $npcName,
+                    'ts' => $last_ts,
+                    'gamets' => $last_gamets + 20,
+                    'localts' => time(),
+                    'data' => "$npcName has a conversation with $resolvedName\nDialogue: $dialogueBuffer\nReason: {$GLOBALS["LAST_REASON"]}",
+                    'category' => 'dialogue',
+                ]
+            );
+        } else {
+              $db->insert(
+                'bgl_history',
+                [
+                    'npc' => $npcName,
+                    'ts' => $last_ts,
+                    'gamets' => $last_gamets + 20,
+                    'localts' => time(),
+                    'data' => "Error generating dialogue for $npcName with $resolvedName. Reason: {$GLOBALS["LAST_REASON"]}",
+                    'category' => 'dialogue',
+                ]
+            );
+            $npc = new NpcMaster();
+            $npcData = $npc->getByName($npcName);
+            $extendedData = $npc->getExtendedData($npcData);
+            triggerNpcUpdate($npcName, +$extendedData['background_life_last_updated_ec']);
+        }
     }
 
+    return true;
+}
+
+/**
+ * Handle SpreadRumors action for NPC background life.
+ *
+ * @param string $rumorDescription A brief description of the rumor to spread
+ * @param array $currentNpcData The acting NPC's data
+ * @param string $npcName The acting NPC's display name
+ * @param int $last_ts Last wall-clock timestamp
+ * @param int $last_gamets Last in-game timestamp
+ * @param int $momentum Session timestamp
+ * @param object $db The database connection object
+ * @param object|null $connectionHandler LLM connection handler
+ * @param string $dynamicBiography Acting NPC's dynamic biography
+ * @param string $contextHistory Recent context for the acting NPC
+ * @param string|null $lastEventLocation Fallback location from recent events
+ * @return bool True if the rumor was generated and stored, false otherwise
+ */
+function handleSpreadRumorsAction($rumorDescription, $currentNpcData, $npcName, $last_ts, $last_gamets, $momentum, $db, $connectionHandler = null, $dynamicBiography = '', $contextHistory = '', $lastEventLocation = null)
+{
+    $rumorDescription = trim((string) $rumorDescription);
+    if ($rumorDescription === '' || $connectionHandler === null) {
+        error_log("[handleSpreadRumorsAction] Missing rumor description or LLM connection for $npcName");
+        return false;
+    }
+
+    $metadata = $currentNpcData['metadata'] ?? [];
+    if (is_string($metadata)) {
+        $metadata = json_decode($metadata, true);
+    }
+    $lastCoords = is_array($metadata) ? ($metadata['last_coords'] ?? []) : [];
+    $location = null;
+
+    if (!empty($lastCoords['location_formid'])) {
+        $locationFormid = $db->escape($lastCoords['location_formid']);
+        $locationRow = $db->fetchOne(
+            "SELECT name, hold, is_interior FROM locations WHERE formid='$locationFormid' LIMIT 1"
+        );
+        $location = $locationRow['hold'] ?? $locationRow['name'] ?? null;
+    }
+
+    if (!$location && !empty($lastCoords[3])) {
+        $location = $lastCoords[3];
+    }
+    if (!$location && $lastEventLocation) {
+        $location = preg_replace('/\s*\(Interior\)\s*$/i', '', trim((string) $lastEventLocation));
+    }
+    if (!$location) {
+        error_log("[handleSpreadRumorsAction] Could not determine current location for $npcName");
+        return false;
+    }
+
+    $contextBlock = !empty($dynamicBiography)
+        ? "<character_sheet>\n{$npcName}:\n{$dynamicBiography}\n</character_sheet>\n\n"
+        : '';
+    $historyBlock = !empty($contextHistory)
+        ? "<context_history>\n{$contextHistory}\n</context_history>\n\n"
+        : '';
+    $dialoguePrompt = [
+        [
+            'role' => 'system',
+            'content' => 'You are a creative writer for the Skyrim (The Elder Scrolls) universe. '
+                . 'Write one brief, believable rumor that an NPC could spread aloud. '
+                . 'Keep it in-world and concise, with no stage directions, labels, or commentary.',
+        ],
+        [
+            'role' => 'user',
+            'content' => $contextBlock . $historyBlock
+                . "{$npcName} is currently in {$location}.\n"
+                . "Turn this brief into a natural rumor: {$rumorDescription}\n"
+                . 'Return only the rumor text, in one or two sentences.',
+        ],
+    ];
+
+    $rumorContent = trim((string) $connectionHandler->fast_request(
+        $dialoguePrompt,
+        ['MAX_TOKENS' => 256],
+        'backgroundlife'
+    ));
+    updateLastLLMCall($GLOBALS['HERIKA_NAME']);
+
+    if ($rumorContent === '') {
+        error_log("[handleSpreadRumorsAction] Failed to generate rumor for $npcName");
+        return false;
+    }
+
+    $db->insert(
+        'rumors',
+        [
+            'ts' => $last_ts,
+            'gamets' => $last_gamets + 1,
+            'type' => 'rumor',
+            'content' => $rumorContent,
+            'hold' => $location,
+        ]
+    );
+
+    $db->insert('eventlog', [
+        'ts' => $last_ts,
+        'gamets' => $last_gamets + 1,
+        'type' => 'innerchat',
+        'data' => "The Narrator: $npcName spreads a rumor in $location: $rumorContent",
+        'sess' => $momentum,
+        'localts' => time(),
+        'people' => $npcName,
+        'location' => $location,
+        'party' => '',
+    ]);
+
+    $db->insert('actions_issued', [
+        'action' => 'SpreadRumors',
+        'fullcall' => "SpreadRumors:$rumorDescription",
+        'actorname' => $npcName,
+        'ts' => $last_ts,
+        'gamets' => $last_gamets,
+        'localts' => time(),
+        'original' => 'backgroundaction',
+    ]);
+
+    $db->insert(
+        'bgl_history',
+        [
+            'npc' => $npcName,
+            'ts' => $last_ts,
+            'gamets' => $last_gamets + 1,
+            'localts' => time(),
+            'data' => "$npcName spreads a rumor in $location: $rumorContent. Reason: {$GLOBALS['LAST_REASON']}",
+            'category' => 'rumor',
+        ]
+    );
+
+    triggerNpcUpdate($npcName);
     return true;
 }
 
@@ -1609,7 +1730,7 @@ function handleTradeItemsAction($tradeType, $actionArgument, $currentNpcData, $n
 
     $processed = 0;
     $targetRefsToRefresh = [];
-    $targetNpcNames="";
+    $targetNpcNames = "";
     foreach ($transactions as $transactionRaw) {
         $args = array_map('trim', explode(':', $transactionRaw));
         $targetNpcName = $args[0] ?? '';
@@ -1620,7 +1741,7 @@ function handleTradeItemsAction($tradeType, $actionArgument, $currentNpcData, $n
         // - GiveItemTo:Target:itemid:count:0
         $gold = isset($args[3]) ? (int) $args[3] : 0;
 
-        
+
         $isMalformed = ($targetNpcName === '' || $itemId === '' || $count <= 0);
         $itemId = preg_replace('/^0x/i', '', strtolower($itemId));
         if ($tradeType !== 'GiveItemTo' && $gold <= 0) {
@@ -1654,7 +1775,7 @@ function handleTradeItemsAction($tradeType, $actionArgument, $currentNpcData, $n
         }
 
         $targetNpc = resolveNpcByName($targetNpcName, $db);
-        $targetNpcNames.= $targetNpcName;
+        $targetNpcNames .= $targetNpcName;
         if ($targetNpc === null) {
             error_log("[handleTradeItemsAction] [$tradeType] Target NPC not found: $targetNpcName");
             $db->insert(
@@ -1673,7 +1794,7 @@ function handleTradeItemsAction($tradeType, $actionArgument, $currentNpcData, $n
 
         $resolvedName = $targetNpc['name'];
         $targetRefHexString = strtolower(convertSignedToUnsignedHex(hexdec($targetNpc['refid'])));
-        
+
 
         if ($tradeType === 'BuyItem') {
             // Buyer receives item and pays gold; seller loses item and receives gold.

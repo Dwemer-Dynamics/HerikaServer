@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . "/lib/playthrough_switching.php";
+pas_http_guard();
 
 /* Voice Sample Extractor */
 

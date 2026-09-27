@@ -28,6 +28,7 @@ require_once dirname(__DIR__) . DIRECTORY_SEPARATOR . 'profile_loader.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'logger.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . "{$GLOBALS['DBDRIVER']}.class.php";
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'core' . DIRECTORY_SEPARATOR . 'npc_master.class.php';
+require_once LIB_PATH . DIRECTORY_SEPARATOR . 'core' . DIRECTORY_SEPARATOR . 'tts_filter_presets.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'relationship_manager.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'utils_game_timestamp.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'eventlog_helper.php';
@@ -223,6 +224,8 @@ function chimNpcManagerDetail(array $row, array $profiles): array
     $row = chimNpcEffectiveProfile($raw);
     $row['_has_shared_profile'] = $sharing['linked'];
     $metadata = chimNpcManagerDecodeJson($row['metadata'] ?? '{}');
+    $ttsFilterPresetId = normalizeTtsFilterPresetId($metadata['tts_filter_preset'] ?? '');
+    unset($metadata['tts_filter_preset']);
     $extended = chimNpcManagerDecodeJson($row['extended_data'] ?? '{}');
     $profileMap = chimNpcManagerProfileMap($profiles);
     $profile = $profileMap[(string)($row['profile_id'] ?? '')] ?? null;
@@ -242,6 +245,7 @@ function chimNpcManagerDetail(array $row, array $profiles): array
             'base' => (string)($row['base'] ?? ''),
             'refid' => (string)($row['refid'] ?? ''),
             'voiceid' => (string)($row['voiceid'] ?? ''),
+            'tts_filter_preset' => $ttsFilterPresetId,
             'oghma_knowledge_tags' => (string)($row['oghma_knowledge_tags'] ?? ''),
             'tags' => (string)($row['tags'] ?? ''),
             'prompt_head' => (string)($row['prompt_head'] ?? ''),
@@ -268,6 +272,13 @@ function chimNpcManagerDetail(array $row, array $profiles): array
         'relationships' => RelationshipManager::normalizeRelationshipMap($extended['relationships'] ?? []),
         'relationships_locked' => chimNpcManagerBool($extended['relationships_locked'] ?? false),
         'metadata' => $metadata,
+        'tts_filter_presets' => array_values(array_map(static function ($preset) {
+            return [
+                'id' => (string)$preset['id'],
+                'label' => (string)$preset['label'],
+                'description' => (string)$preset['description'],
+            ];
+        }, ttsFilterPresetOptions(true))),
         'profiles' => array_map(static function ($profile) {
             return ['id' => $profile['id'], 'label' => $profile['label']];
         }, $profiles),
@@ -842,6 +853,13 @@ function chimNpcManagerSave(array $input, array $profiles): array
 
     // The lookup key always follows the stored Name + RefID identity, never client-supplied md5.
     $update['md5'] = NpcMaster::identityMd5($row, $update['npc_name'] ?? ($row['npc_name'] ?? ''));
+
+    if (array_key_exists('tts_filter_preset', $fields)) {
+        $update['metadata'] = mergeTtsFilterPresetIntoMetadata(
+            $row['metadata'] ?? '{}',
+            $fields['tts_filter_preset']
+        );
+    }
 
     $extended = chimNpcManagerDecodeJson($row['extended_data'] ?? '{}');
     $relationshipChanged = false;

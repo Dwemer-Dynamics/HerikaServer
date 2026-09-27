@@ -189,10 +189,8 @@ $PROMPTS=array(
         "extra"=>["force_tokens_max"=>0]
     ],
     // Datenbank-Prompt (Seelenschau)
-    "vision"=>[ 
-        "cue"=>["{$GLOBALS["ITT"][$GLOBALS["ITTFUNCTION"]]["AI_PROMPT"]}. "],
-        //"player_request"=>["{$GLOBALS["PLAYER_NAME"]} : Schaut Euch das hier an, {$GLOBALS["HERIKA_NAME"]}.{$GLOBALS["HERIKA_NAME"]} betrachtet die AKTUELLE SZENE und sieht: '{$gameRequest[3]}'"],
-        "player_request"=>["Der Erzähler: {$GLOBALS["HERIKA_NAME"]} betrachtet die aktuelle Szene und sieht: '{$gameRequest[3]}'"],
+    "vision"=>[
+        "cue"=>[$soulgazeCue],
         "extra"=>["force_tokens_max"=>512]
     ],
     "chatsimfollow"=>[ 

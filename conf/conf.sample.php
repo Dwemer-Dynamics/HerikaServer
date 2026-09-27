@@ -29,8 +29,11 @@ $DYNAMIC_PROFILE=false; //Dynamic profile updates using a timer system.
 $BGL_TRIGGER_HOURS=24; //Number of in-game hours between Background Life events. NPCs will generate thoughts and take actions based on this interval. Range: 1-720 hours.
 $POWER_AWARENESS_ENABLED=false; //Enable Power Awareness system. NPCs will be aware of relative power levels and react appropriately to threats.
 $MINIME_T5=false; //Assists smaller weight LLMs with action and memory functions.
-$OGHMA_KNOWLEDGE="knowall"; //Assists smaller weight LLMs with action and memory functions.
+$OGHMA_KNOWLEDGE=""; //Comma-separated specialist knowledge classes available to this NPC. Public basic Oghma articles do not require an NPC tag; "knowall" explicitly grants advanced access.
 $OGHMA_AMOUNT=1; //Number of Oghma keywords to extract from each response. More keyword extraction will mean longer response times.
+$OGHMA_RESULT_LIMIT=3; //Maximum number of Oghma articles included in one prompt after forced and conversational selection.
+$OGHMA_EXTRACTOR_FALLBACK=false; //Allow one bounded connector fallback for explicit unresolved knowledge requests.
+$OGHMA_EXTRACTOR_TIMEOUT_MS=1500; //Hard timeout for the optional Oghma connector fallback.
 $PLAYER_RESPEECH=true; //Use default diary connector AI to rewrite player speech. Currently only triggers when starting speech with **.
 $PLAYER_SPEECH_STYLE=""; //Instructions for how the player character speaks and communicates. Used as context when rewriting player dialogue.
 $PROMPT_TIMESTAMP=false; //Add rough timestamp subdividers to event context (e.g., 'Moments Ago', 'A while ago') to help the LLM understand temporal relationships.
@@ -162,11 +165,15 @@ $CONNECTORS=["openrouterjson","openaijson","koboldcppjson"]; //AI Service(s).
 $CONNECTORS_DIARY="openrouter"; //Creates diary entries and memories.
 
 // Core LLM connector defaults (IDs from core_llm_connector table)
+$CORE_CONNECTOR_QUEST_CREATION=4;
+$CORE_CONNECTOR_QUEST_ENGINE=1;
+$CORE_CONNECTOR_QUEST_CREATION_ENABLED=true;
+$CORE_CONNECTOR_QUEST_ENGINE_ENABLED=true;
 $CORE_CONNECTOR_DIRECTOR=1;
 $CORE_CONNECTOR_PLAYER=2;
 $CORE_CONNECTOR_SUMMARY=4;
 $CORE_CONNECTOR_MEDIUMTERM=4;
-$CORE_CONNECTOR_SCENECLASSIFIER=7; // Gemma 3N E4B
+$CORE_CONNECTOR_SCENECLASSIFIER=7; // Gemma 3 4B
 $SCENE_CLASSIFIER_ENABLED=true; // Enable post-request scene tone/genre classification.
 $CORE_CONNECTOR_PROFILES=1;
 $CORE_CONNECTOR_BGL=1;
@@ -348,6 +355,11 @@ $TTS["CHATTERBOX"]["voicelogic"]='voicetype';
 $TTS["CHATTERBOX"]["PARALINGUISTIC_TAGS_ENABLED"]=false; //Enable paralinguistic tags like [laugh], [sigh] for expressive TTS output.
 $TTS["CHATTERBOX"]["PARALINGUISTIC_TAGS_PROMPT"]=''; //Prompt snippet for instructing LLM to use paralinguistic tags.
 $TTS["CHATTERBOX"]["PARALINGUISTIC_TAGS_LIST"]='[clear throat],[sigh],[shush],[cough],[groan],[sniff],[gasp],[chuckle],[laugh]'; //Comma-separated list of supported tags.
+//Higgs TTS 3
+$TTS["HIGGS"]["endpoint"]='http://127.0.0.1:8025';
+$TTS["HIGGS"]["model"]='higgs-v3';
+$TTS["HIGGS"]["voiceid"]='TheNarrator';
+$TTS["HIGGS"]["voicelogic"]='voicetype';
 //OmniVoice
 $TTS["OMNIVOICE"]["endpoint"]='http://127.0.0.1:8021'; //API endpoint.
 $TTS["OMNIVOICE"]["language"]='en'; //Active OmniVoice language profile.
@@ -467,7 +479,8 @@ $TTS["deepgram"]["bitrate"]=24000; //Bitrate.
 $TTS["CARTESIA"]["API_KEY"]=''; //API key.
 $TTS["CARTESIA"]["voiceid"]=''; //Voice file name. Works like XTTS voiceid.
 $TTS["CARTESIA"]["language"]='en'; //Language (en, fr, de, es, etc.).
-$TTS["CARTESIA"]["model_id"]='sonic-3'; //Model (sonic-3, sonic-english, sonic-multilingual).
+$TTS["CARTESIA"]["model_id"]='sonic-3'; //Model (sonic-3, sonic-3.5, sonic-3.6, or a dated snapshot).
+$TTS["CARTESIA"]["accent"]=''; //Optional Sonic 3.6 accent ID supported by the selected multilingual voice.
 $TTS["CARTESIA"]["speed"]='normal'; //Speed (slowest, slow, normal, fast, fastest).
 
 //Inworld TTS

@@ -218,110 +218,6 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
         width: 20%;
     }
 
-    /* Relationship history rows: compact per-change presentation.
-       Same palette and density as the CHIM home dashboard widget. */
-    .relationship-change-cell {
-        display: grid;
-        gap: 5px;
-        margin: 0;
-        padding: 0;
-        list-style: none;
-    }
-
-    .relationship-change-entry {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
-        gap: 8px;
-        align-items: baseline;
-        min-width: 0;
-    }
-
-    .relationship-change-delta {
-        min-width: 3.1em;
-        padding: 1px 6px;
-        border-radius: 4px;
-        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-        font-size: 0.92em;
-        font-weight: 700;
-        font-variant-numeric: tabular-nums;
-        text-align: center;
-        white-space: nowrap;
-    }
-
-    /* The sign carries the meaning, so colour is reinforcement only. */
-    .relationship-change-delta.is-up {
-        color: #7ee08a;
-        background: rgba(76, 175, 80, 0.14);
-        border: 1px solid rgba(126, 224, 138, 0.35);
-    }
-
-    .relationship-change-delta.is-down {
-        color: #ff8a80;
-        background: rgba(244, 67, 54, 0.14);
-        border: 1px solid rgba(255, 138, 128, 0.35);
-    }
-
-    .relationship-change-delta.is-type {
-        color: #f2bd7f;
-        background: rgba(242, 124, 17, 0.14);
-        border: 1px solid rgba(242, 189, 127, 0.35);
-        font-family: inherit;
-        font-size: 0.72em;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-    }
-
-    .relationship-change-entry-body {
-        display: block;
-        min-width: 0;
-    }
-
-    .relationship-change-reason {
-        display: block;
-        color: #e2e2e2;
-        line-height: 1.35;
-        overflow-wrap: anywhere;
-    }
-
-    .relationship-change-entry-meta {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        gap: 3px 6px;
-        margin-top: 2px;
-        font-size: 0.85em;
-        color: #929292;
-    }
-
-    .relationship-change-target {
-        color: #bdbdbd;
-        overflow-wrap: anywhere;
-    }
-
-    .relationship-change-arrow {
-        color: #6f6f6f;
-    }
-
-    .relationship-change-tier {
-        padding: 0 4px;
-        border: 1px solid #4a4033;
-        border-radius: 3px;
-        color: #d9c39a;
-    }
-
-    .relationship-change-sr {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        margin: -1px;
-        padding: 0;
-        overflow: hidden;
-        clip: rect(0 0 0 0);
-        clip-path: inset(50%);
-        white-space: nowrap;
-        border: 0;
-    }
-
     /* Responsive Table */
     @media (max-width: 768px) {
         .table-container {
@@ -974,7 +870,7 @@ function getTimeColor($time) {
             // Add subtitle description
             echo "<div class='event-log-intro'>";
             echo "<span style='color: rgb(242, 124, 17); font-weight: bold;'>📝 Events:</span> ";
-            echo "<span style='color: #f8f9fa;'>Combined timeline of in-game events and relationship changes. Relationship history remains stored separately and is not copied into the Event Log or AI event context.</span>";
+            echo "<span style='color: #f8f9fa;'>Raw log of in-game events for inspection and, where applicable, AI context. Events used in prompts are filtered by relevance.</span>";
             echo "</div>";
 
             // Keep context guidance directly below the description so both scan as one compact introduction.
@@ -1026,23 +922,12 @@ function getTimeColor($time) {
             $page = $eventLogPage;
             $offset = ($page - 1) * $limit;
             
-            $sourceWindow = $limit + $offset;
-            $eventResults = $db->fetchAll(
+            $results = $db->fetchAll(
                 "SELECT type, data, people, gamets, localts, ts, rowid
                  FROM eventlog a
                  WHERE $eventLogVisibleWhereClause
                  ORDER BY gamets DESC, ts DESC, localts DESC, rowid DESC
-                 LIMIT $sourceWindow"
-            );
-            $showRelationshipHistory = !in_array('relationship', $eventLogHiddenTypes, true);
-            $relationshipResults = $showRelationshipHistory
-                ? chimFetchRelationshipHistoryTimelineRows($db, $sourceWindow, 0, 0, 0, true)
-                : [];
-            $results = chimMergeTimelineRows(
-                $eventResults,
-                $relationshipResults,
-                $limit,
-                $offset
+                 LIMIT $limit OFFSET $offset"
             );
             
             $columnHeaders = [
@@ -1054,18 +939,10 @@ function getTimeColor($time) {
             
             $mappedResults = array_map(function ($row) use ($columnHeaders) {
                 $mappedRow = [];
-                $isRelationshipHistory = ($row['source'] ?? '') === 'relationship_history';
                 // Add checkbox column first (PostgreSQL returns rowid in lowercase)
-                $mappedRow['☑'] = $isRelationshipHistory
-                    ? ''
-                    : '<input type="checkbox" class="event-checkbox" data-rowid="' . htmlspecialchars($row['rowid'] ?? '') . '" style="cursor: pointer; width: 18px; height: 18px;">';
+                $mappedRow['☑'] = '<input type="checkbox" class="event-checkbox" data-rowid="' . htmlspecialchars($row['rowid'] ?? '') . '" style="cursor: pointer; width: 18px; height: 18px;">';
                 
                 foreach ($row as $key => $value) {
-                    if ($key === 'changes') {
-                        // Structured relationship details back the compact Events cell below;
-                        // they are not a column, and they are not a scalar to escape.
-                        continue;
-                    }
                     if ($key === 'data' && function_exists('chimRenderNarratorRoleplayText')) {
                         $value = chimRenderNarratorRoleplayText($value);
                     }
@@ -1078,13 +955,8 @@ function getTimeColor($time) {
                         $value = $dt->format('d-m-Y H:i:s');
                     }
                     
-                    // Relationship history gets the compact per-change presentation in the
-                    // web view only; the stored prose still backs the API and AI consumers.
-                    if ($key === 'data' && $isRelationshipHistory) {
-                        $value = chimRenderRelationshipChangeCellHtml($row['changes'] ?? [], (string)$value);
-                    }
                     // Special handling for chat events
-                    else if ($row['type'] === 'chat' && ($key === 'data' || $key === 'type')) {
+                    if ($row['type'] === 'chat' && ($key === 'data' || $key === 'type')) {
                         $value = '<span style="color:rgb(255, 255, 255);">' . htmlspecialchars($value ?? '') . '</span>';
                     } else {
                         $value = htmlspecialchars($value ?? '');
@@ -1115,11 +987,9 @@ function getTimeColor($time) {
                         }
                         $mappedRow['People Present'] = htmlspecialchars($peoplePresent);
                     } else if ($key === 'rowid') {
-                        $mappedRow['Record'] = $isRelationshipHistory
-                            ? 'Relationship #' . intval($row['relationship_history_id'] ?? 0)
-                            : '<a class="icon-link" href="#" style="color: red !important;" onclick="deleteRowAndRefresh(\'eventlog\', ' . intval($value) . '); return false;">'
-                                . intval($value) . ' <i class="bi-trash" style="color: red !important;"></i></a>';
-                    } else if (in_array($key, ['people', 'ts', 'source', 'relationship_history_id'], true)) {
+                        $mappedRow['Record'] = '<a class="icon-link" href="#" style="color: red !important;" onclick="deleteRowAndRefresh(\'eventlog\', ' . intval($value) . '); return false;">'
+                            . intval($value) . ' <i class="bi-trash" style="color: red !important;"></i></a>';
+                    } else if ($key === 'people' || $key === 'ts') {
                         // Skip rendering raw people column; we show only 'People Present'
                         continue;
                     } else {
@@ -1136,12 +1006,11 @@ function getTimeColor($time) {
             $prevPage = max(1, $page - 1);
             $nextPage = $page + 1;
             
-            // Get total count for pagination
-            $countQuery = "SELECT COUNT(*) as total FROM eventlog WHERE $eventLogVisibleWhereClause";
-            $countResult = $db->fetchAll($countQuery);
-            $totalRecords = intval($countResult[0]['total'] ?? 0);
-            if ($showRelationshipHistory) {
-                $totalRecords += chimCountRelationshipHistoryTimelineRows($db);
+            // Get total count for pagination from the per-type counts already
+            // fetched for the filter dropdown, avoiding another eventlog scan.
+            $totalRecords = 0;
+            foreach ($eventLogTypeOptions as $eventLogTypeOption) {
+                $totalRecords += intval($eventLogTypeOption['total'] ?? 0);
             }
             $totalPages = ceil($totalRecords / $limit);
             
@@ -1243,7 +1112,6 @@ function getTimeColor($time) {
             let autoRefreshIntervalEventLog = null;
             let isLiveModeEventLog = " . ($isAutoRefresh ? 'true' : 'false') . ";
             let lastRowIdEventLog = 0;
-            let lastRelationshipHistoryIdEventLog = " . chimGetLatestRelationshipHistoryId($db) . ";
             let totalNewEventsEventLog = 0;
             const currentPageEventLog = $page;
             const currentLimitEventLog = $limit;
@@ -1322,7 +1190,6 @@ function getTimeColor($time) {
 
                 const apiParams = new URLSearchParams();
                 apiParams.set('since_rowid', String(sinceRowId));
-                apiParams.set('since_relationship_id', String(lastRelationshipHistoryIdEventLog));
                 apiParams.set('use_saved_filters', '1');
 
                 fetch(eventLogApiBaseUrl + '?' + apiParams.toString())
@@ -1339,13 +1206,8 @@ function getTimeColor($time) {
                                 const newRow = document.createElement('tr');
                                 newRow.style.backgroundColor = '#2d5a2d';
                                 
-                                const isRelationshipHistory = String(row['ROWID'] || '').startsWith('relationship:');
-
-                                // Relationship history is read-only here; deleting events must not alter relationship state.
                                 const checkboxTd = document.createElement('td');
-                                checkboxTd.innerHTML = isRelationshipHistory
-                                    ? ''
-                                    : '<input type=\"checkbox\" class=\"event-checkbox\" data-rowid=\"' + (row['ROWID'] || '') + '\" style=\"cursor: pointer; width: 18px; height: 18px;\" onclick=\"updateDeleteButton()\">';
+                                checkboxTd.innerHTML = '<input type=\"checkbox\" class=\"event-checkbox\" data-rowid=\"' + (row['ROWID'] || '') + '\" style=\"cursor: pointer; width: 18px; height: 18px;\" onclick=\"updateDeleteButton()\">';
                                 newRow.appendChild(checkboxTd);
                                 
                                 // Add data cells
@@ -1372,9 +1234,7 @@ function getTimeColor($time) {
                                 
                                 const td6 = document.createElement('td');
                                 const rowId = row['ROWID'] || '';
-                                td6.innerHTML = isRelationshipHistory
-                                    ? 'Relationship #' + String(rowId).split(':').pop()
-                                    : '<a class=\"icon-link\" href=\"#\" style=\"color: red !important;\" onclick=\"deleteRowAndRefresh(\'eventlog\', ' + JSON.stringify(rowId) + '); return false;\">' + rowId + ' <i class=\"bi-trash\" style=\"color: red !important;\"></i></a>';
+                                td6.innerHTML = '<a class=\"icon-link\" href=\"#\" style=\"color: red !important;\" onclick=\"deleteRowAndRefresh(\'eventlog\', ' + JSON.stringify(rowId) + '); return false;\">' + rowId + ' <i class=\"bi-trash\" style=\"color: red !important;\"></i></a>';
                                 newRow.appendChild(td6);
                                 
                                 if (headerRow && headerRow.nextSibling) {
@@ -1397,11 +1257,6 @@ function getTimeColor($time) {
                             totalNewEventsEventLog += data.new_count;
                         }
 
-                        const latestRelationshipId = Number(data.latest_relationship_id || 0);
-                        if (Number.isFinite(latestRelationshipId) && latestRelationshipId > lastRelationshipHistoryIdEventLog) {
-                            lastRelationshipHistoryIdEventLog = latestRelationshipId;
-                        }
-                        
                         if (liveIndicator) {
                             liveIndicator.style.opacity = '1';
                         }
@@ -1952,7 +1807,9 @@ function getTimeColor($time) {
 
         
         <!-- Memory Summaries Tab -->
-        <div id="memory-tab" class="tab-content <?php echo $activeTab === 'memory' ? 'active' : ''; ?>">
+        <?php // Inactive tabs skip their queries and markup on event log loads; switchTab() visits them via href instead. ?>
+        <div id="memory-tab" class="tab-content <?php echo $activeTab === 'memory' ? 'active' : ''; ?>"<?php echo $activeTab === 'eventlog' ? ' data-deferred="true"' : ''; ?>>
+            <?php if ($activeTab !== 'eventlog'): ?>
             <?php
             // Show success/delete messages
             if (isset($_GET['updated'])) {
@@ -2220,10 +2077,12 @@ function getTimeColor($time) {
                 }
             }
             </script>
+            <?php endif; ?>
         </div>
 
         <!-- Active Quests Tab -->
-        <div id="quests-tab" class="tab-content <?php echo $activeTab === 'quests' ? 'active' : ''; ?>">
+        <div id="quests-tab" class="tab-content <?php echo $activeTab === 'quests' ? 'active' : ''; ?>"<?php echo $activeTab === 'eventlog' ? ' data-deferred="true"' : ''; ?>>
+            <?php if ($activeTab !== 'eventlog'): ?>
             <?php
             $results = $db->fetchAll("SELECT name, id_quest, briefing, briefing2, data from quests");
             
@@ -2257,10 +2116,12 @@ function getTimeColor($time) {
                 echo "</div>";
             }
             ?>
+            <?php endif; ?>
         </div>
 
         <!-- Book Log Tab -->
-        <div id="books-tab" class="tab-content <?php echo $activeTab === 'books' ? 'active' : ''; ?>">
+        <div id="books-tab" class="tab-content <?php echo $activeTab === 'books' ? 'active' : ''; ?>"<?php echo $activeTab === 'eventlog' ? ' data-deferred="true"' : ''; ?>>
+            <?php if ($activeTab !== 'eventlog'): ?>
             <?php
             $results = $db->fetchAll("SELECT title, content, gamets, localts, ts, ROWID FROM books A ORDER BY gamets DESC, rowid DESC LIMIT 150 OFFSET 0");
             
@@ -2309,6 +2170,7 @@ function getTimeColor($time) {
                 echo "</div>";
             }
             ?>
+            <?php endif; ?>
         </div>
 
         <div id="adventure-tab" class="tab-content embed-tab <?php echo $activeTab === 'adventure' ? 'active' : ''; ?>">
@@ -2435,6 +2297,12 @@ function switchTab(tabName, updateHistory = true) {
     const target = document.getElementById(tabName + '-tab');
     const clickedButton = document.querySelector('.events-memories-navigation .tab-button[data-tab="' + tabName + '"]');
     if (!target || !clickedButton) return;
+
+    // Deferred tabs carry no server-rendered content on this load, so visit them directly.
+    if (target.dataset.deferred) {
+        window.location.href = clickedButton.href;
+        return;
+    }
 
     // Hide all tab contents
     const tabContents = document.querySelectorAll('.tab-content');

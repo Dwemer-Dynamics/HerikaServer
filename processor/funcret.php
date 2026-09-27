@@ -128,7 +128,9 @@ if (isset($returnFunction[2])) {
 
 	error_log("[CHIM] Checking <$functionCodeName> <{$returnFunction[1]}>");
 
-	$followupEnabled = !empty($followupConfig['enabled']);
+	$issuedAction = herikaActionCatalogGetLastActionsIssuedMap()[$functionCodeName] ?? [];
+	$directorAction = str_starts_with((string)($issuedAction['original'] ?? ''), '[director_scene]');
+	$followupEnabled = !$directorAction && !empty($followupConfig['enabled']);
 	$followupPrompt = trim(strval($followupConfig['prompt'] ?? ''));
 
 	if (!$followupEnabled) {

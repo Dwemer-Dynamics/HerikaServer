@@ -48,6 +48,7 @@ CREATE TABLE public.core_npc_master (
     profile_id integer,
     dynamic_profile integer,
     extended_data jsonb,
+    plugin_extended_data jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(plugin_extended_data) = 'object'),
     md5 text,
     gamets_last_updated numeric,
     core text,

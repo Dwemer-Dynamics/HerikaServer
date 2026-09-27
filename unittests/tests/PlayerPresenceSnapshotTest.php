@@ -232,6 +232,41 @@ final class PlayerPresenceSnapshotTest extends TestCase
         $this->assertSame('', $snapshot['audience']);
     }
 
+    public function testExecutionModeIsValidatedIndependentlyOfSavedMood(): void
+    {
+        foreach (['DIRECTOR', 'STANDARD', 'HYPNOSIS'] as $mode) {
+            foreach (['', 'happy', 'custom'] as $mood) {
+                $payload = ['source' => 'plugin_player_routing_v2', 'execution_mode' => $mode, 'player_mood' => $mood];
+                $this->assertSame($mode, chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode($payload)))['execution_mode']);
+            }
+        }
+        foreach ([['source' => 'legacy', 'execution_mode' => 'DIRECTOR'],
+            ['source' => 'plugin_player_routing_v2', 'execution_mode' => 'INVALID'],
+            ['source' => 'plugin_player_routing_v2', 'execution_mode' => ['DIRECTOR']], []] as $payload) {
+            $this->assertSame('', chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode($payload)))['execution_mode']);
+        }
+    }
+
+    public function testHypnosisTargetSnapshotRejectsMalformedListenerMetadata(): void
+    {
+        foreach (['plugin_player_routing_v2', 'plugin_spatial_input_v1'] as $source) {
+            $snapshot = chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode([
+                'source' => $source, 'listener' => ' Lydia ', 'target_mode' => 'direct',
+            ])));
+            $this->assertSame('Lydia', $snapshot['listener']);
+            $this->assertSame('direct', $snapshot['target_mode']);
+        }
+        foreach ([['Lydia'], "Lydia\n", 'Lydia|Faendal', str_repeat('x', 257)] as $listener) {
+            $snapshot = chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode([
+                'source' => 'plugin_player_routing_v2', 'listener' => $listener, 'target_mode' => ['everyone'],
+            ])));
+            $this->assertSame('', $snapshot['listener']);
+            $this->assertSame('', $snapshot['target_mode']);
+        }
+        $snapshot = chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode(['listener' => 'Lydia'])));
+        $this->assertSame('', $snapshot['listener']);
+    }
+
     public function testPlayerMoodIsDecodedOnlyFromThePluginRoutingSnapshot(): void
     {
         $encoded = base64_encode((string)json_encode([
@@ -426,7 +461,7 @@ final class PlayerPresenceSnapshotTest extends TestCase
         $this->assertSame(0, $db->queryCount);
     }
 
-    public function testRequestExecutionModeIsIgnored(): void
+    public function testUnmarkedRequestExecutionModeIsIgnored(): void
     {
         $encoded = base64_encode((string)json_encode([
             'execution_mode' => 'whisper',
@@ -434,7 +469,7 @@ final class PlayerPresenceSnapshotTest extends TestCase
 
         $snapshot = chimDecodePlayerRoutingSnapshotField($encoded);
 
-        $this->assertArrayNotHasKey('execution_mode', $snapshot);
+        $this->assertSame('', $snapshot['execution_mode']);
     }
 
     public function testDirectivePeopleIncludeSelectedSpeakerAndExplicitListener(): void

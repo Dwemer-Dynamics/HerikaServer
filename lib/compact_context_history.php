@@ -37,6 +37,8 @@ if (!function_exists('chimCompactHistoryWhitespace')) {
     }
 }
 
+// Updated to support several listeners.
+
 if (!function_exists('chimCompactHistoryDialogue')) {
     function chimCompactHistoryDialogue(string $content, string $fallbackSpeaker, bool $acceptAnySpeakerPrefix = true): string
     {
@@ -44,9 +46,9 @@ if (!function_exists('chimCompactHistoryDialogue')) {
         $speaker = trim($fallbackSpeaker);
         $listener = '';
 
-        if (preg_match('/\s*\((?:talking|whispering|shouting)\s+to\s+([^\)]+)\)\s*\.?\s*$/iu', $content, $match)) {
+        if (preg_match('/\s*\((?:talking|whispering|shouting|speaking privately|speaking loudly)\s+to\s+([^\)]+)\)\s*\.?\s*$/iu', $content, $match)) {
             $listener = chimCompactHistoryWhitespace($match[1]);
-            $content = trim((string)preg_replace('/\s*\((?:talking|whispering|shouting)\s+to\s+[^\)]+\)\s*\.?\s*$/iu', '', $content));
+            $content = trim((string)preg_replace('/\s*\((?:talking|whispering|shouting|speaking privately|speaking loudly)\s+to\s+[^\)]+\)\s*\.?\s*$/iu', '', $content));
         }
 
         if (preg_match('/^([^:\r\n]{1,100}):\s*(.+)$/us', $content, $match)) {

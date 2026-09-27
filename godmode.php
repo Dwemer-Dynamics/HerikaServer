@@ -1,23 +1,14 @@
 <?php
-
-
-// Developer wish: migrate this to json post requests dll side
-error_log(__FILE__." start");
-
-if (strpos($_SERVER["QUERY_STRING"],"&")===false)
-    $receivedData = mb_scrub(base64_decode(substr($_SERVER["QUERY_STRING"],5)));
-else
-    $receivedData = mb_scrub(base64_decode(substr($_SERVER["QUERY_STRING"],5,strpos($_SERVER["QUERY_STRING"],"&")-4)));
-
-
+require_once __DIR__ . '/lib/chim_interaction.php';
+chimInteractionRequire();
+// Forward the exact off-stage request to the same authored-scene worker as Director mode.
 ignore_user_abort(true);
-
-// Expected format input|ts|gamets|PLAYER_NAME::
-$gameRequest = explode("|", $receivedData);
-
-$userWish=explode(":",$gameRequest[3]);
-$output='';
-$instruction=escapeshellarg("{$userWish[1]}");
-exec("php /var/www/html/HerikaServer/service/manager.php rolemaster instruction \"$instruction\" notify", $output, $returnCode);
-
-?>
+$receivedData = base64_decode((string)($_GET['DATA'] ?? ''), true);
+if ($receivedData === false) { http_response_code(400); exit; }
+$gameRequest = explode('|', mb_scrub($receivedData));
+$instruction = preg_replace('/^[^:]+:\s*/', '', (string)($gameRequest[3] ?? ''));
+$managerPath = __DIR__ . '/service/manager.php';
+$phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
+exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath) . ' rolemaster instruction '
+    . escapeshellarg($instruction) . ' notify ' . (int)($_GET['director_generation'] ?? 0), $output, $returnCode);
+if ($returnCode !== 0) http_response_code(500);
