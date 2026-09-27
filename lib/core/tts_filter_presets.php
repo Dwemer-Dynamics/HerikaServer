@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . "/speech_trace.php";
 
 const CHIM_TTS_FILTER_PRESET_VERSION = 2;
 
@@ -395,8 +396,11 @@ function applyActiveTtsFilterPresetToOutput($ttsOutput)
     }
 
     $audioPath = resolveTtsFilterAudioPath($ttsOutput);
+    $filterStarted = hrtime(true);
+    chimSpeechTrace('filter_started', ['preset' => $presetId]);
     $filterGraph = ttsFilterPresetGraph($presetId);
     if ($audioPath === null || $filterGraph === '') {
+        chimSpeechTrace('filter_failed', ['preset' => $presetId]);
         logTtsFilterPresetMessage('error', "[TTS FILTER] Cannot process preset '{$presetId}': connector output is not a readable soundcache WAV.");
         return $ttsOutput;
     }
@@ -424,16 +428,19 @@ function applyActiveTtsFilterPresetToOutput($ttsOutput)
     if ($exitCode !== 0 || !is_file($temporaryPath) || filesize($temporaryPath) <= 44) {
         @unlink($temporaryPath);
         $details = trim(implode(' ', array_slice($commandOutput, -3)));
+        chimSpeechTrace('filter_failed', ['preset' => $presetId]);
         logTtsFilterPresetMessage('error', "[TTS FILTER] FFmpeg failed for preset '{$presetId}' (exit {$exitCode}). {$details}");
         return $ttsOutput;
     }
 
     if (!@rename($temporaryPath, $audioPath)) {
         @unlink($temporaryPath);
+        chimSpeechTrace('filter_failed', ['preset' => $presetId]);
         logTtsFilterPresetMessage('error', "[TTS FILTER] Could not replace the connector output for preset '{$presetId}'.");
         return $ttsOutput;
     }
 
+    chimSpeechTrace('filter_completed', ['preset' => $presetId, 'duration_ms' => round((hrtime(true) - $filterStarted) / 1000000, 3)]);
     logTtsFilterPresetMessage('debug', "[TTS FILTER] Applied preset '{$presetId}' version " . CHIM_TTS_FILTER_PRESET_VERSION . '.');
     return $ttsOutput;
 }
