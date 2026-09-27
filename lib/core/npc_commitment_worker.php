@@ -59,7 +59,7 @@ if (!function_exists('chimCommitmentQueueCreatedNotification')) {
             'text' => '',
             'action' => 'rolecommand|DebugNotification@' . chimCommitmentNotificationText($actorName, $subject),
             'tag' => '',
-        ]) !== false;
+        ], 'rowid') > 0;
     }
 }
 
