@@ -1443,9 +1443,12 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             return;
         }
     }
-    $currentNpcData = $incomingRefid !== ''
-        ? $npcMaster->getByPromptIdentifier(NpcMaster::displayIdentifier($localName, $incomingRefid))
-        : $npcMaster->getByName($localName);
+    $currentNpcData = $referenceSource ? $npcMaster->getByReferenceSource($referenceSource) : null;
+    if (!$currentNpcData) {
+        $currentNpcData = $incomingRefid !== ''
+            ? $npcMaster->getByRefId($incomingRefid)
+            : $npcMaster->getByName($localName);
+    }
     if ($currentNpcData && $referenceSource) {
         $storedSource = $npcMaster->getMetadata($currentNpcData)['refid_source'] ?? '';
         if ($storedSource !== '' && !chimStableFormReferenceEquals($storedSource, $referenceSource)) {

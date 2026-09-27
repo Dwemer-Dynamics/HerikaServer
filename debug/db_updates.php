@@ -8252,6 +8252,17 @@ if ($migrationOk) {
     Logger::error("Failed to apply eventlog_session_payload migration; existing views were preserved");
 }
 
+// Re-key existing actor rows without changing their IDs, character data or profile ownership.
+if ($checkVersion('npc_stable_identity') < 20260927001) {
+    require_once __DIR__ . '/../lib/core/npc_master.class.php';
+    try {
+        chimMigrateStableNpcIdentity();
+        $updateVersion('npc_stable_identity', 20260927001);
+    } catch (Throwable $error) {
+        Logger::error('Stable NPC identity migration failed: ' . $error->getMessage());
+    }
+}
+
 // Run the idempotent constraint check after snapshot restores too: LIKE does not clone foreign keys.
 if ($db->execQuery(file_get_contents(__DIR__ . '/../data/npc_profile_sharing.sql')) !== false) {
     if ($checkVersion('npc_profile_sharing') < 20260901001) {

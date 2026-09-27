@@ -758,7 +758,7 @@ if (!function_exists('chimResolveNpcIdAfterCreate')) {
     }
 }
 
-// RefID is read-only in management because Name + RefID is the profile lookup identity.
+// RefID is a game-owned routing address; names do not determine the stable profile identity.
 if (!function_exists('chimApplyStoredNpcIdentityToPost')) {
     function chimApplyStoredNpcIdentityToPost($npc, $id): void
     {

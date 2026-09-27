@@ -303,7 +303,7 @@ if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext
         // Profile isn't loaded yet at this point, so derive the NPC name from the DB using the profile MD5
         $npcTarget = '';
         if (isset($_GET["profile"]) && $_GET["profile"] !== '' && $_GET["profile"] !== md5('The Narrator')) {
-            $npcRow = $db->fetchOne("SELECT npc_name FROM core_npc_master WHERE md5='" . $db->escape($_GET["profile"]) . "' LIMIT 1");
+            $npcRow = (new NpcMaster())->getByMD5($_GET["profile"]);
             if ($npcRow && !empty($npcRow['npc_name'])) {
                 $npcTarget = $npcRow['npc_name'];
             }

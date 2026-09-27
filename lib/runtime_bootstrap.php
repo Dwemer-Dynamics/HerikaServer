@@ -65,6 +65,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             'skyrim_quest_definitions' => 20260628003,
             'core_tts_connector_omnivoice' => 20260708001,
             'npc_actor_identity' => 20260824003,
+            'npc_stable_identity' => 20260927001,
             'npc_profile_sharing' => 20260901001,
             'oghma_catalog' => 20260827001,
             'core_tts_pronunciation' => 20260829003,
@@ -74,7 +75,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             $versionRows = $db->fetchAll(
                 "SELECT tablename, version
                  FROM public.database_versioning
-                 WHERE tablename IN ('responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog','npc_actor_identity','npc_profile_sharing')"
+                 WHERE tablename IN ('responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog','npc_actor_identity','npc_profile_sharing','npc_stable_identity')"
             );
         } catch (\Throwable $e) {
             $decision = true;

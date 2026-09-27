@@ -87,10 +87,10 @@ function chimNpcReferenceGroupCatalog(): array
 }
 
 // Load the effective catalog once per request; custom rows replace defaults by key.
-function chimNpcAlternateReferenceGroups(): array
+function chimNpcAlternateReferenceGroups(bool $refresh = false): array
 {
     static $groups = null;
-    if ($groups !== null) { return $groups; }
+    if (!$refresh && $groups !== null) { return $groups; }
     $groups = [];
     foreach (chimNpcReferenceGroupTableRows('combined_npc_profile_reference_groups') as $group) {
         if ($group['enabled']) { $groups[$group['group_key']] = $group; }
@@ -156,6 +156,20 @@ function chimNpcAssertReferenceGroupsUnique(array $effective): void
     }
 }
 
+// Rule changes release only automatic links; dormant data and manually chosen sharing stay intact.
+function chimNpcInvalidateReferenceGroup(string $key): void
+{
+    $db = $GLOBALS['db'];
+    $keySql = $db->escape($key);
+    $epoch = bin2hex(random_bytes(16));
+    if ($db->execQuery("UPDATE core_npc_master SET profile_owner_npc_id = NULL,
+        metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb) - '_chim_auto_link_group',
+            '{_chim_profile_epoch}', '\"{$epoch}\"'::jsonb)
+        WHERE metadata->>'_chim_auto_link_group' = '{$keySql}'") === false) {
+        throw new RuntimeException('Cannot refresh automatic profile bindings');
+    }
+}
+
 // Save an override atomically while keeping every enabled reference in one group only.
 function chimNpcSaveReferenceGroup(array $input): array
 {
@@ -163,8 +177,8 @@ function chimNpcSaveReferenceGroup(array $input): array
     $db = $GLOBALS['db'];
     if ($db->execQuery('BEGIN') === false) { throw new RuntimeException('Cannot begin reference group update'); }
     try {
-        if ($db->execQuery('LOCK TABLE public.npc_profile_reference_groups,
-            public.npc_profile_reference_groups_custom IN SHARE ROW EXCLUSIVE MODE') === false) {
+        if ($db->execQuery('LOCK TABLE public.game_plugins, public.core_npc_master,
+            public.npc_profile_reference_groups, public.npc_profile_reference_groups_custom IN SHARE ROW EXCLUSIVE MODE') === false) {
             throw new RuntimeException('Cannot lock reference groups');
         }
         $catalog = chimNpcReferenceGroupCatalog();
@@ -178,6 +192,7 @@ function chimNpcSaveReferenceGroup(array $input): array
             throw new InvalidArgumentException('The custom group limit of 200 has been reached');
         }
         unset($candidate['generated_key']);
+        $previous = $custom[$key] ?? ($defaults[$key] ?? null);
         $custom[$key] = $candidate;
         $effective = array_replace($defaults, $custom);
         chimNpcAssertReferenceGroupsUnique($effective);
@@ -196,9 +211,16 @@ function chimNpcSaveReferenceGroup(array $input): array
                 plugin_name = EXCLUDED.plugin_name,
                 local_formids = EXCLUDED.local_formids,
                 enabled = EXCLUDED.enabled,
-                updated_at = CURRENT_TIMESTAMP") === false || $db->execQuery('COMMIT') === false) {
+                updated_at = CURRENT_TIMESTAMP") === false) {
             throw new RuntimeException('Cannot save reference group');
         }
+        // Label-only edits do not disturb ownership or invalidate open workers.
+        if (!$previous || $previous['plugin_name'] !== $candidate['plugin_name'] ||
+            $previous['local_formids'] !== $candidate['local_formids'] || $previous['enabled'] !== $candidate['enabled']) {
+            chimNpcInvalidateReferenceGroup($key);
+        }
+        if ($db->execQuery('COMMIT') === false) { throw new RuntimeException('Cannot commit reference group'); }
+        chimNpcAlternateReferenceGroups(true);
     } catch (Throwable $error) {
         $db->execQuery('ROLLBACK');
         throw $error;
@@ -216,20 +238,24 @@ function chimNpcDeleteReferenceGroup(string $key): array
     $db = $GLOBALS['db'];
     if ($db->execQuery('BEGIN') === false) { throw new RuntimeException('Cannot begin reference group reset'); }
     try {
-        if ($db->execQuery('LOCK TABLE public.npc_profile_reference_groups,
-            public.npc_profile_reference_groups_custom IN SHARE ROW EXCLUSIVE MODE') === false) {
+        if ($db->execQuery('LOCK TABLE public.game_plugins, public.core_npc_master,
+            public.npc_profile_reference_groups, public.npc_profile_reference_groups_custom IN SHARE ROW EXCLUSIVE MODE') === false) {
             throw new RuntimeException('Cannot lock reference groups');
         }
         $catalog = chimNpcReferenceGroupCatalog();
         $defaults = array_column($catalog['defaults'], null, 'group_key');
         $custom = array_column($catalog['custom'], null, 'group_key');
+        $hadOverride = isset($custom[$key]);
         unset($custom[$key]);
         chimNpcAssertReferenceGroupsUnique(array_replace($defaults, $custom));
         $keySql = $db->escape($key);
         if ($db->execQuery("DELETE FROM public.npc_profile_reference_groups_custom
-            WHERE group_key = '{$keySql}'") === false || $db->execQuery('COMMIT') === false) {
+            WHERE group_key = '{$keySql}'") === false) {
             throw new RuntimeException('Cannot delete reference group');
         }
+        if ($hadOverride) { chimNpcInvalidateReferenceGroup($key); }
+        if ($db->execQuery('COMMIT') === false) { throw new RuntimeException('Cannot commit reference group reset'); }
+        chimNpcAlternateReferenceGroups(true);
     } catch (Throwable $error) {
         $db->execQuery('ROLLBACK');
         throw $error;
@@ -275,6 +301,11 @@ function chimNpcAutoLinkProfile(array $actor): bool
     try {
         if ($db->execQuery('LOCK TABLE game_plugins, core_npc_master IN SHARE ROW EXCLUSIVE MODE') === false) {
             throw new RuntimeException('Cannot lock automatic profile link');
+        }
+        // A concurrent catalog edit wins; do not rebuild links from a stale rule.
+        if ((chimNpcAlternateReferenceGroups(true)[$group] ?? null) !== $definition) {
+            $db->execQuery('ROLLBACK');
+            return false;
         }
         $rows = $db->fetchAll($query);
         $ids = array_map(static fn($row) => (int)$row['id'], $rows);
@@ -345,9 +376,7 @@ function chimNpcEffectiveProfile($actor)
     $ownerId = (int)($actor['profile_owner_npc_id'] ?? 0);
     if (!$ownerId) { return $actor; }
     $owner = $GLOBALS['db']->fetchOne("SELECT * FROM core_npc_master WHERE id = {$ownerId}");
-    if (!$owner || !empty($owner['profile_owner_npc_id']) ||
-        (strcasecmp(trim($owner['npc_name']), trim($actor['npc_name'])) !== 0 &&
-            (chimNpcAlternateGroup($actor) === null || chimNpcAlternateGroup($actor) !== chimNpcAlternateGroup($owner)))) {
+    if (!$owner || !empty($owner['profile_owner_npc_id'])) {
         throw new RuntimeException('Invalid shared NPC profile; unlink it before continuing');
     }
     foreach (CHIM_SHARED_NPC_FIELDS as $field) { $actor[$field] = $owner[$field] ?? null; }
@@ -535,17 +564,11 @@ function chimNpcWriteSharedProfile(NpcMaster $manager, int $id, array $data): bo
             throw new UnexpectedValueException('Profile sharing changed; reload before saving');
         }
         $ownerId = (int)($actor['profile_owner_npc_id'] ?? $id);
-        if (isset($data['npc_name']) && $data['npc_name'] !== $actor['npc_name'] && count(chimNpcProfileMembers($actor)) > 1) {
-            throw new InvalidArgumentException('Unlink shared profiles before renaming');
-        }
         if ($ownerId === $id) {
             $saved = $manager->updateActor($id, $data);
         } else {
             $owner = $actors[$ownerId] ?? null;
             if (!$owner || !empty($owner['profile_owner_npc_id'])) { throw new RuntimeException('Invalid profile owner'); }
-            if (isset($data['npc_name']) && $data['npc_name'] !== $actor['npc_name']) {
-                throw new InvalidArgumentException('Unlink shared profiles before renaming');
-            }
             $shared = array_intersect_key($data, array_flip(CHIM_SHARED_NPC_FIELDS));
             $physical = array_diff_key($data, array_flip(CHIM_SHARED_NPC_FIELDS));
             if (array_key_exists('extended_data', $data)) {

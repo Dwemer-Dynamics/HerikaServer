@@ -851,7 +851,7 @@ function chimNpcManagerSave(array $input, array $profiles): array
         unset($update['refid']);
     }
 
-    // The lookup key always follows the stored Name + RefID identity, never client-supplied md5.
+    // The lookup key follows the stored physical reference, never a display name or client-supplied hash.
     $update['md5'] = NpcMaster::identityMd5($row, $update['npc_name'] ?? ($row['npc_name'] ?? ''));
 
     if (array_key_exists('tts_filter_preset', $fields)) {

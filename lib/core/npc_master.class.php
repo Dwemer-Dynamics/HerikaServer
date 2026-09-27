@@ -423,7 +423,7 @@ class NpcMaster
         return strtoupper(str_pad($refid, 8, '0', STR_PAD_LEFT));
     }
 
-    // Name plus normalized RefID is both the visible actor identifier and profile lookup key.
+    // A readable command target; persistence uses the separate stable reference identity.
     public static function displayIdentifier($npcName, $refid = '')
     {
         $name = trim((string)$npcName);
@@ -431,23 +431,18 @@ class NpcMaster
         return $normalizedRefid !== '' ? "{$name} [RefID: {$normalizedRefid}]" : $name;
     }
 
+    // The stored profile selector follows the physical reference, never its display name or load slot.
     public static function identityMd5($row, $npcName = null, $refid = null)
     {
-        $name = $npcName !== null
-            ? trim((string) $npcName)
-            : (is_array($row) ? trim((string) ($row['npc_name'] ?? '')) : '');
-        $storedRefid = $refid !== null
-            ? $refid
-            : (is_array($row) ? ($row['refid'] ?? '') : '');
-        if (self::normalizeRefId($storedRefid) === '' && is_array($row)) {
-            $metadata = is_array($row['metadata'] ?? null)
-                ? $row['metadata'] : (json_decode($row['metadata'] ?? '{}', true) ?: []);
-            $source = chimParseNpcReferenceSource($metadata['refid_source'] ?? '');
-            if ($source) {
-                return md5($name . ' [Source: ' . $source['stable_key'] . ']');
-            }
+        $metadata = is_array($row['metadata'] ?? null)
+            ? $row['metadata'] : (json_decode($row['metadata'] ?? '{}', true) ?: []);
+        $source = chimParseNpcReferenceSource($metadata['refid_source'] ?? '');
+        if ($source) {
+            return md5('ref:' . strtolower($source['plugin_name']) . '|' . $source['local_formid']);
         }
-        return md5(self::displayIdentifier($name, $storedRefid));
+        $runtimeRef = self::normalizeRefId($refid ?? ($row['refid'] ?? ''));
+        if ($runtimeRef !== '') { return md5('runtime:' . $runtimeRef); }
+        return md5(trim((string)($npcName ?? ($row['npc_name'] ?? ''))));
     }
 
     // A recorded RefID distinguishes this profile from other actors with the same display name.
@@ -643,16 +638,20 @@ class NpcMaster
             return $this->getByName($identifier);
         }
 
-        $name = trim($matches[1]);
-        $refid = strtoupper(str_pad($matches[2], 8, '0', STR_PAD_LEFT));
-        $escapedName = $this->escape($name);
-        $escapedRefid = $this->escape($refid);
-        $rows = $this->db->fetchAll(
-            "SELECT * FROM {$this->table}
-             WHERE lower(npc_name) = lower('{$escapedName}') AND upper(refid) = '{$escapedRefid}'
-             ORDER BY gamets_last_updated DESC NULLS LAST, id ASC"
-        );
-        return count((array)$rows) === 1 ? chimNpcEffectiveProfile($rows[0]) : null;
+        // The name is presentation only. A renamed actor is still the same physical reference.
+        return $this->getByRefId($matches[2]);
+    }
+
+    // Stable placed-reference lookup refuses duplicate legacy rows instead of picking a profile.
+    public function getByReferenceSource(string $source)
+    {
+        $parsed = chimParseNpcReferenceSource($source);
+        if (!$parsed) { return null; }
+        $key = $this->escape(strtolower($parsed['stable_key']));
+        $rows = $this->db->fetchAll("SELECT * FROM {$this->table}
+            WHERE lower(metadata->>'refid_source') = '{$key}' ORDER BY id");
+        if (count($rows) > 1) { throw new RuntimeException('Duplicate stable actor reference; reconcile profiles before registration'); }
+        return $rows ? chimNpcEffectiveProfile($rows[0]) : null;
     }
 
     // Read NPC by md5
@@ -664,17 +663,27 @@ class NpcMaster
             return null;
         }
 
-        $escaped = $this->escape($md5Hash);
-        $query   = "SELECT * FROM {$this->table} WHERE md5 = '{$escaped}' LIMIT 1";
-        return chimNpcEffectiveProfile($this->db->fetchOne($query));
+        if (!preg_match('/^[a-f0-9]{32}$/i', (string)$md5Hash)) { return null; }
+        $escaped = $this->escape(strtolower($md5Hash));
+        $rows = $this->db->fetchAll("SELECT * FROM {$this->table} WHERE md5 = '{$escaped}'");
+        if (!$rows) {
+            // Older clients hash the readable target. Compatibility never resolves an ambiguous name.
+            $rows = $this->db->fetchAll("SELECT * FROM {$this->table}
+                WHERE refid IS NOT NULL AND BTRIM(refid) <> ''
+                AND md5(BTRIM(npc_name) || ' [RefID: ' || upper(refid) || ']') = '{$escaped}'");
+        }
+        return count($rows) === 1 ? chimNpcEffectiveProfile($rows[0]) : null;
     }
 
-    // Read NPC by md5
-    public function getByRefId($npcName)
+    // Runtime IDs are current routing addresses, independent of the actor's visible name.
+    public function getByRefId($refid)
     {
-        $escaped = $this->escape($npcName);
-        $query   = "SELECT * FROM {$this->table} WHERE refid = '{$escaped}' order by 	gamets_last_updated	desc nulls last LIMIT 1";
-        return chimNpcEffectiveProfile($this->db->fetchOne($query));
+        $refid = self::normalizeRefId($refid);
+        if ($refid === '') { return null; }
+        $escaped = $this->escape(strtolower($refid));
+        $rows = $this->db->fetchAll("SELECT * FROM {$this->table} WHERE lower(refid) = '{$escaped}'");
+        if (count($rows) > 1) { throw new RuntimeException('Duplicate runtime actor reference; reconcile profiles before registration'); }
+        return count($rows) === 1 ? chimNpcEffectiveProfile($rows[0]) : null;
     }
 
     // Read all NPCs (optional WHERE)
@@ -1806,7 +1815,9 @@ restore AS (
             WHEN h.extended_data IS NULL THEN NULL
             ELSE h.extended_data - '_chim_history_source'
         END AS extended_data,
-        CASE WHEN COALESCE(d.current_metadata->>'refid_source', '') <> '' THEN d.current_md5 ELSE h.md5 END AS md5,
+        CASE WHEN COALESCE(d.current_metadata->>'refid_source', '') <> '' THEN d.current_md5
+            WHEN COALESCE(h.refid, '') <> '' THEN md5('runtime:' || upper(h.refid))
+            ELSE h.md5 END AS md5,
         h.gamets_last_updated,
         h.core,
         h.base,
@@ -2196,4 +2207,3 @@ WHERE rn = 1
 AND npc_name not in (select distinct npc_name from core_npc_master)");
     }
 }
-

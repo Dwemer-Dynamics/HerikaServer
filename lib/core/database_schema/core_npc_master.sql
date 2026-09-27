@@ -145,6 +145,10 @@ CREATE INDEX idx_core_npc_master_refid_lookup
 ALTER TABLE ONLY public.core_npc_master
     ADD CONSTRAINT npc_master_pkey PRIMARY KEY (id);
 
+CREATE UNIQUE INDEX idx_npc_stable_reference
+    ON public.core_npc_master (lower(metadata->>'refid_source'))
+    WHERE COALESCE(metadata->>'refid_source', '') <> '';
+
 CREATE INDEX idx_npc_profile_owner ON public.core_npc_master (profile_owner_npc_id)
     WHERE profile_owner_npc_id IS NOT NULL;
 

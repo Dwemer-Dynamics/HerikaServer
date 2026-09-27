@@ -44,16 +44,13 @@ function chimPlanNpcReferenceRemap(array $rows, array $oldPlugins, array $newPlu
             if ($plugin && strlen($plugin['formid_prefix']) === 5 && hexdec($source['local_formid']) > 0xFFF) {
                 throw new RuntimeException('NPC reference no longer fits its plugin; compaction requires manual reconciliation');
             }
-            $name = trim($row['npc_name']);
-            $hash = $newRefid
-                ? md5($name . ' [RefID: ' . $newRefid . ']')
-                : md5($name . ' [Source: ' . $source['stable_key'] . ']');
+            $hash = md5('ref:' . strtolower($source['plugin_name']) . '|' . $source['local_formid']);
             if ((string)$newRefid !== $refid || ($metadata['refid_source'] ?? '') !== $source['stable_key'] || $hash !== ($row['md5'] ?? '')) {
                 $updates[] = ['id' => (int)$row['id'], 'refid' => $newRefid, 'md5' => $hash, 'source' => $source['stable_key']];
             }
         }
         if ($newRefid !== null && $newRefid !== '') {
-            $identity = strtolower($row['npc_name']) . '|' . $newRefid;
+            $identity = $newRefid;
             if (isset($occupied[$identity])) {
                 throw new RuntimeException('Ambiguous NPC reference remap; existing profiles were left unchanged');
             }
@@ -122,5 +119,42 @@ function chimSyncNpcReferenceLoadOrder(array $plugins): int
     } catch (Throwable $e) {
         $db->execQuery('ROLLBACK');
         throw $e;
+    }
+}
+
+// Upgrade selectors in place; conflicting references abort without merging or deleting profiles.
+function chimMigrateStableNpcIdentity(): void
+{
+    $db = $GLOBALS['db'];
+    if ($db->execQuery('BEGIN') === false) { throw new RuntimeException('Cannot begin stable NPC identity migration'); }
+    try {
+        if ($db->execQuery('LOCK TABLE core_npc_master IN SHARE ROW EXCLUSIVE MODE') === false) {
+            throw new RuntimeException('Cannot lock NPC identities');
+        }
+        $rows = $db->fetchAll('SELECT id, npc_name, refid, metadata, md5 FROM core_npc_master');
+        $sources = [];
+        foreach ($rows as $row) {
+            $source = chimParseNpcReferenceSource(chimNpcProfileJson($row['metadata'] ?? null)['refid_source'] ?? '');
+            if ($source) {
+                $key = strtolower($source['stable_key']);
+                if (isset($sources[$key])) { throw new RuntimeException('Duplicate stable NPC reference; existing profiles were left unchanged'); }
+                $sources[$key] = true;
+            }
+            $hash = NpcMaster::identityMd5($row);
+            $metadata = chimNpcProfileJson($row['metadata'] ?? null);
+            $canonicalSource = $source ? $source['stable_key'] : null;
+            if ($hash === $row['md5'] && (!$source || ($metadata['refid_source'] ?? '') === $canonicalSource)) { continue; }
+            $sourceUpdate = $source ? ", metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('refid_source', '" . $db->escape($canonicalSource) . "'::text)" : '';
+            if ($db->execQuery("UPDATE core_npc_master SET md5 = '{$hash}'{$sourceUpdate} WHERE id = " . (int)$row['id']) === false) {
+                throw new RuntimeException('Cannot update stable NPC selector');
+            }
+        }
+        if ($db->execQuery("CREATE UNIQUE INDEX IF NOT EXISTS idx_npc_stable_reference
+            ON core_npc_master (lower(metadata->>'refid_source'))
+            WHERE COALESCE(metadata->>'refid_source', '') <> ''") === false ||
+            $db->execQuery('COMMIT') === false) { throw new RuntimeException('Cannot commit stable NPC identity migration'); }
+    } catch (Throwable $error) {
+        $db->execQuery('ROLLBACK');
+        throw $error;
     }
 }

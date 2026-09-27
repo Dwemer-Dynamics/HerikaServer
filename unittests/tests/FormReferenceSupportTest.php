@@ -26,12 +26,23 @@ final class FormReferenceSupportTest extends TestCase
         $updates = chimPlanNpcReferenceRemap($rows, $old, $new);
         $this->assertSame(['07001234', '05001234', 'FE034ABC'], array_column($updates, 'refid'));
         $this->assertSame(['First.esp|00001234', 'Second.esp|00001234', 'Light.esp|00000ABC'], array_column($updates, 'source'));
-        $this->assertSame(md5('Guard [RefID: 07001234]'), $updates[0]['md5']);
+        $this->assertSame(md5('ref:first.esp|00001234'), $updates[0]['md5']);
         $this->assertSame('First.esp|00001234', chimParseNpcReferenceSource('First.esp/00001234')['stable_key']);
         $this->assertNull(chimParseNpcReferenceSource('../First.esp/1234'));
         $this->assertNull(chimParseNpcReferenceSource('First.esp/FF001234'));
         $this->assertSame('VR.esp|00012ABC', chimConvertRuntimeFormIdToStableReference('FE012ABC',
             chimIndexLoadedGamePluginsByPrefix([['plugin_name' => 'VR.esp', 'formid_prefix' => 'FE']])));
+    }
+
+    public function testStableProfileSelectorIgnoresNameAndRuntimePrefix(): void
+    {
+        $actor = ['npc_name' => 'Guard', 'refid' => '05001234',
+            'metadata' => ['refid_source' => 'First.esp|00001234']];
+        $renamed = array_replace($actor, ['npc_name' => 'Captain', 'refid' => '09001234']);
+        $this->assertSame(NpcMaster::identityMd5($actor), NpcMaster::identityMd5($renamed));
+        $this->assertSame(md5('ref:first.esp|00001234'), NpcMaster::identityMd5($actor));
+        $this->assertSame(md5('runtime:FF001234'), NpcMaster::identityMd5([
+            'npc_name' => 'Bandit', 'refid' => 'FF001234', 'metadata' => '{}']));
     }
 
     public function testRemovedPluginProfilesRemainUnavailableUntilTheirPluginReturns(): void
