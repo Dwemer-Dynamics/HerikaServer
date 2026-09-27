@@ -46,6 +46,7 @@ BEGIN
         IF NOT (table_name=ANY(source_names)) THEN
             SELECT v.version_key, v.version INTO version_key, required_version FROM (VALUES
                 ('bgl_history','bgl_history',20260623001::bigint),
+                ('npc_private_thoughts','npc_private_thoughts',20260926001::bigint),
                 ('market_cache','market_cache',20260805001::bigint),
                 ('core_tts_fallback','core_tts_fallback',20260727001::bigint),
                 ('core_tts_pronunciation','core_tts_pronunciation',20260829003::bigint),
@@ -204,7 +205,7 @@ BEGIN
     SELECT obj_description(oid,'pg_namespace')::jsonb->'missing_tables' INTO missing FROM pg_namespace WHERE nspname=stage_schema;
     SELECT obj_description(oid,'pg_namespace')::jsonb->'empty_tables' INTO empty_tables FROM pg_namespace WHERE nspname=stage_schema;
     IF EXISTS(SELECT 1 FROM jsonb_array_elements_text(missing) t(name)
-        WHERE NOT (coalesce(empty_tables,'[]'::jsonb) ? name) AND name NOT IN ('bgl_history','market_cache','profile_settings_presets','oghma_audit')) THEN
+        WHERE NOT (coalesce(empty_tables,'[]'::jsonb) ? name) AND name NOT IN ('bgl_history','market_cache','profile_settings_presets','oghma_audit','npc_private_thoughts')) THEN
         RAISE EXCEPTION 'This save needs a content upgrade through Playthrough Manager';
     END IF;
     PERFORM chim_meta.restore_playthrough(stage_schema,selected_tables);

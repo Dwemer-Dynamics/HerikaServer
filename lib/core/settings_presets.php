@@ -73,6 +73,8 @@ function chimSettingsPresetDefaultProfileOverrides(): array
         'AUTO_DIARY_WAIT_ENABLED' => false,
         'MATERIALIZE_DIARY_ENABLED' => false,
         'LATEST_DIARY_CONTEXT_ENABLED' => false,
+        'PRIVATE_NPC_THOUGHTS_ENABLED' => false,
+        'PRIVATE_NPC_THOUGHTS_COUNT' => 3,
         'LLM_RANDOMIZER_ENABLED' => false,
     ] + chimSettingsPresetDefaultProfileRuntimeValues();
 }
@@ -107,6 +109,8 @@ function chimProfileSettingsPresetBuiltIns(): array
         'AUTO_DIARY_WAIT_ENABLED' => false,
         'MATERIALIZE_DIARY_ENABLED' => false,
         'LATEST_DIARY_CONTEXT_ENABLED' => false,
+        'PRIVATE_NPC_THOUGHTS_ENABLED' => false,
+        'PRIVATE_NPC_THOUGHTS_COUNT' => 3,
         'LLM_RANDOMIZER_ENABLED' => false,
     ] + chimSettingsPresetLocalProfileRuntimeValues();
 

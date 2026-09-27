@@ -6689,7 +6689,13 @@ function call_llm_internal() {
         }
     }
     
-    $connectionHandler->close('standard');
+    $completedResponse = $connectionHandler->close('standard');
+    if ($outputWasValid && !$ERROR_TRIGGERED && is_string($completedResponse)
+        && method_exists($connectionHandler, 'hasCompletedPrivateThoughtResponse')
+        && $connectionHandler->hasCompletedPrivateThoughtResponse()) {
+        require_once __DIR__ . '/npc_private_thoughts.php';
+        chimStorePrivateThoughtResponse($completedResponse);
+    }
     //fwrite($fileLog, $totalBuffer . PHP_EOL); // Write the line to the file with a line break // DEBUG CODE
 
 

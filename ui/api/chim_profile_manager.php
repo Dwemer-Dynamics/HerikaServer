@@ -57,6 +57,7 @@ function chimProfileManagerLabel(string $name): string
         'RECHAT_P' => 'Player Rechat Probability', 'RECHAT_ALLOW_ACTIONS' => 'Allow Rechat Actions',
         'CORE_LANG' => 'Language', 'LANG_LLM_XTTS' => 'LLM/TTS Language',
         'BORED_EVENT' => 'Bored Event',
+        'PRIVATE_NPC_THOUGHTS_ENABLED' => 'Private NPC Thoughts', 'PRIVATE_NPC_THOUGHTS_COUNT' => 'Recent Thoughts in Context',
         'CONTEXT_HISTORY' => 'Context History', 'CONTEXT_HISTORY_DIARY' => 'Diary Context History',
         'CONTEXT_HISTORY_DYNAMIC_PROFILE' => 'Dynamic Profile Context History', 'MAX_WORDS_LIMIT' => 'Maximum Words',
         'QUEST_COMMENT' => 'Quest Commentary', 'QUEST_COMMENT_CHANCE' => 'Quest Commentary Chance',
@@ -103,7 +104,7 @@ function chimProfileManagerDetail(CoreProfile $profiles, int $id): array
             if (!empty($field['web_only'])) continue;
             $name = $field['name'];
             $field['label'] = chimProfileManagerLabel($name);
-            $field['value'] = $metadata[$name] ?? ($field['type'] === 'boolean' ? false : '');
+            $field['value'] = $metadata[$name] ?? ($field['default'] ?? ($field['type'] === 'boolean' ? false : ''));
             if (($field['type'] ?? '') === 'boolean') {
                 $field['value'] = chimProfileManagerBool($field['value']);
             }

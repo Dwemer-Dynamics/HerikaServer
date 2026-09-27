@@ -1028,6 +1028,13 @@ class openaijson
         return $content; // not a reasoning model, return content w/o processing
     }
 
+    private $privateThoughtFinishReason = null;
+
+    public function hasCompletedPrivateThoughtResponse(): bool
+    {
+        return $this->privateThoughtFinishReason === 'stop';
+    }
+
     public function process()
     {
         global $alreadysent;
@@ -1098,6 +1105,7 @@ class openaijson
 
         // process any remaining reasoning content on stream completion
         if (is_array($data) && isset($data["choices"][0]["finish_reason"]) && $data["choices"][0]["finish_reason"] !== null) {
+            $this->privateThoughtFinishReason = $data['choices'][0]['finish_reason'];
             $this->_stopProc = true;
             if (!empty($this->_output_buffer)) {
                 $clean_remain = $this->removeChainOfThought("");

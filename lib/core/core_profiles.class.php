@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . "/npc_private_thoughts.php";
 
 class CoreProfile
 {
@@ -49,10 +50,18 @@ class CoreProfile
                 'RPG_COMMENTS_CHANCE'    => $this->configuredInt('RPG_COMMENTS_CHANCE', 50, 0, 100),
                 'COMBAT_BARK_COOLDOWN'   => $this->configuredInt('COMBAT_BARK_COOLDOWN', 30, 10, 600),
                 'LATEST_DIARY_CONTEXT_ENABLED' => false,
+                'PRIVATE_NPC_THOUGHTS_ENABLED' => false,
+                'PRIVATE_NPC_THOUGHTS_COUNT' => 3,
             ];
             $data['metadata'] = json_encode($defaultMeta, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         }
 
+        if (isset($data['metadata'])) {
+            $thoughtMetadata = json_decode($data['metadata'], true);
+            if (is_array($thoughtMetadata)) {
+                $data['metadata'] = json_encode(chimNormalizePrivateThoughtMetadata($thoughtMetadata), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            }
+        }
         foreach ($data as $k => $v) {
             // Preserve explicit 0/false values; only treat empty-string/null as unset.
             if ($v === '' || $v === null) {
@@ -150,6 +159,12 @@ class CoreProfile
             "prompt",
         ];
 
+        if (isset($data['metadata'])) {
+            $thoughtMetadata = json_decode($data['metadata'], true);
+            if (is_array($thoughtMetadata)) {
+                $data['metadata'] = json_encode(chimNormalizePrivateThoughtMetadata($thoughtMetadata), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            }
+        }
         foreach ($data as $k => $v) {
             // Preserve explicit 0/false values; only treat empty-string/null as unset.
             if ($v === '' || $v === null) {

@@ -2002,6 +2002,8 @@ $ittById = $byId($ittRows);
         $autoDiaryWaitEnabled = !empty($profileMetadata['AUTO_DIARY_WAIT_ENABLED']);
         $physicalDiaryEnabled = !empty($profileMetadata['MATERIALIZE_DIARY_ENABLED']);
         $latestDiaryContextEnabled = !empty($profileMetadata['LATEST_DIARY_CONTEXT_ENABLED']);
+        $privateThoughtsEnabled = filter_var($profileMetadata['PRIVATE_NPC_THOUGHTS_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $privateThoughtCount = max(1, min(10, intval($profileMetadata['PRIVATE_NPC_THOUGHTS_COUNT'] ?? 3)));
         $randomizerEnabled = !empty($profileMetadata['LLM_RANDOMIZER_ENABLED']);
         $fallbackEnabled = !empty($profileMetadata['LLM_FALLBACK_ENABLED']);
 
@@ -2016,6 +2018,7 @@ $ittById = $byId($ittRows);
                 'title' => 'Profiles & Memories',
                 'cards' => [
                     ['key' => 'DYNAMIC_PROFILE_ENABLED', 'icon' => '&#x267B;&#xFE0F;', 'title' => 'Dynamic Profile', 'enabled' => $dynamicProfileEnabled, 'short' => 'Allow gameplay events to evolve NPC profiles.', 'help' => 'Allow systems to evolve NPC profiles based on gameplay events. NPCs using this profile will have dynamic profile enabled by default.'],
+                    ['key' => 'PRIVATE_NPC_THOUGHTS_ENABLED', 'icon' => '&#x1F4AD;', 'title' => 'Private NPC Thoughts', 'enabled' => $privateThoughtsEnabled, 'short' => 'Keep private reflections for each NPC.', 'help' => 'Generate private reflections after dialogue and include them in the Character prompt. Off by default. Turning this off preserves stored thoughts.'],
                     ['key' => 'MIDDLE_TERM_MEMORY_ENABLED', 'icon' => '&#x1F4C3;', 'title' => 'Middle Term Memory', 'enabled' => $mtmEnabled, 'short' => 'Include periodic middle-term memory summaries.', 'help' => 'Saves a list of recent events after every 10 memory summaries. NPCs using this profile will have MTM enabled by default.'],
                     ['key' => 'SHORT_TERM_MEMORY_ENABLED', 'icon' => '&#x1F5C2;&#xFE0F;', 'title' => 'Short Term Memory', 'enabled' => $stmEnabled, 'short' => 'Fill the gap between middle-term memory and recent dialogue.', 'help' => 'Injects the scene summaries an NPC has lived through but can no longer see - newer than its middle-term memory digest, older than the recent dialogue it still remembers word for word. The recent-dialogue window is shortened to match, so nothing appears twice.'],
                 ],
@@ -2692,7 +2695,7 @@ $ittById = $byId($ittRows);
 
     <script>
     document.addEventListener('DOMContentLoaded', function(){
-        const names = ['default_npc','meta_vis[LLM_RANDOMIZER_ENABLED]','meta_vis[LLM_FALLBACK_ENABLED]','meta_vis[DYNAMIC_PROFILE_ENABLED]','meta_vis[MIDDLE_TERM_MEMORY_ENABLED]','meta_vis[SHORT_TERM_MEMORY_ENABLED]','meta_vis[AUTO_DIARY_ENABLED]','meta_vis[AUTO_DIARY_WAIT_ENABLED]','meta_vis[MATERIALIZE_DIARY_ENABLED]','meta_vis[LATEST_DIARY_CONTEXT_ENABLED]'];
+        const names = ['default_npc','meta_vis[PRIVATE_NPC_THOUGHTS_ENABLED]','meta_vis[LLM_RANDOMIZER_ENABLED]','meta_vis[LLM_FALLBACK_ENABLED]','meta_vis[DYNAMIC_PROFILE_ENABLED]','meta_vis[MIDDLE_TERM_MEMORY_ENABLED]','meta_vis[SHORT_TERM_MEMORY_ENABLED]','meta_vis[AUTO_DIARY_ENABLED]','meta_vis[AUTO_DIARY_WAIT_ENABLED]','meta_vis[MATERIALIZE_DIARY_ENABLED]','meta_vis[LATEST_DIARY_CONTEXT_ENABLED]'];
         names.forEach(n=>{
             const cb = document.querySelector(`input[type="checkbox"][name="${n}"]`);
             if (!cb) return;
@@ -2818,6 +2821,15 @@ const saveAllBtn = document.getElementById('btn_save_all');
             } catch (Throwable $_e) { $dynSelected = []; }
         ?>
         <div class="profile-feature-grid">
+            <div class="setting-row">
+                <div>
+                    <label class="setting-key" for="private_thought_count">Recent Thoughts in Context</label>
+                    <div class="setting-desc" id="private_thought_count_help">Used when Private NPC Thoughts is on. Controls context, not stored history.</div>
+                </div>
+                <div class="setting-input">
+                    <input type="number" id="private_thought_count" name="meta_vis[PRIVATE_NPC_THOUGHTS_COUNT]" min="1" max="10" step="1" value="<?= $privateThoughtCount ?>" aria-describedby="private_thought_count_help">
+                </div>
+            </div>
         <?php if (!empty($__dynOptions)): ?>
         <div class="provider-card">
             <div class="provider-head">
@@ -2992,7 +3004,7 @@ const saveAllBtn = document.getElementById('btn_save_all');
                 'mode' => 'profile',
                 'fieldName' => 'metadata',
                 'settingsCatalog' => $profileOverrideCatalog,
-                'reservedKeys' => ['DYNAMIC_PROFILE_ENABLED', 'MIDDLE_TERM_MEMORY_ENABLED', 'SHORT_TERM_MEMORY_ENABLED', 'SHORT_TERM_MEMORY_MAX', 'AUTO_DIARY_ENABLED', 'AUTO_DIARY_WAIT_ENABLED', 'MATERIALIZE_DIARY_ENABLED', 'LATEST_DIARY_CONTEXT_ENABLED', 'LLM_RANDOMIZER_ENABLED', 'RPG_COMMENTS', 'RPG_COMMENTS_CHANCE', 'DYNAMIC_PROFILE_FIELDS', 'DYNAMIC_PROFILE_INTERVAL_DAYS', 'DYNAMIC_PROFILE_MIN_EVENTS', 'DYNAMIC_PROFILE_COOLDOWN_MINUTES'],
+                'reservedKeys' => ['PRIVATE_NPC_THOUGHTS_ENABLED', 'PRIVATE_NPC_THOUGHTS_COUNT', 'DYNAMIC_PROFILE_ENABLED', 'MIDDLE_TERM_MEMORY_ENABLED', 'SHORT_TERM_MEMORY_ENABLED', 'SHORT_TERM_MEMORY_MAX', 'AUTO_DIARY_ENABLED', 'AUTO_DIARY_WAIT_ENABLED', 'MATERIALIZE_DIARY_ENABLED', 'LATEST_DIARY_CONTEXT_ENABLED', 'LLM_RANDOMIZER_ENABLED', 'RPG_COMMENTS', 'RPG_COMMENTS_CHANCE', 'DYNAMIC_PROFILE_FIELDS', 'DYNAMIC_PROFILE_INTERVAL_DAYS', 'DYNAMIC_PROFILE_MIN_EVENTS', 'DYNAMIC_PROFILE_COOLDOWN_MINUTES'],
                 'currentData' => $currentProfileOverrides,
                 'systemFields' => [],
             ];
