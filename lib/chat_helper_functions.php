@@ -127,9 +127,11 @@ function callConfiguredTts($textString, $mood, $stringforhash)
     }
 
     $activePresetId = getActiveTtsFilterPresetId();
+    $filteredCache = is_file(dirname(__DIR__) . '/soundcache/' . md5(trim($stringforhash)) . '.wav.ttsfilter');
+    $requiresFreshAudio = $activePresetId !== 'none' || $filteredCache;
     $hadAvoidTtsCache = array_key_exists('AVOID_TTS_CACHE', $GLOBALS);
     $previousAvoidTtsCache = $GLOBALS['AVOID_TTS_CACHE'] ?? null;
-    if ($activePresetId !== 'none') {
+    if ($requiresFreshAudio) {
         // Connector cache keys are text-only, so a filtered NPC must not reuse another voice or preset.
         $GLOBALS['AVOID_TTS_CACHE'] = true;
     }
@@ -137,7 +139,7 @@ function callConfiguredTts($textString, $mood, $stringforhash)
     try {
         $ttsOutput = $GLOBALS["TTS_IN_USE"]($textString, $mood, $stringforhash);
     } finally {
-        if ($activePresetId !== 'none') {
+        if ($requiresFreshAudio) {
             if ($hadAvoidTtsCache) {
                 $GLOBALS['AVOID_TTS_CACHE'] = $previousAvoidTtsCache;
             } else {
@@ -1675,16 +1677,18 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                 if (!$ttsOutput) {
                     if (isset($GLOBALS["TTS_FALLBACK_FNCT"])) {
                         $activePresetId = getActiveTtsFilterPresetId();
+                        $filteredCache = is_file(dirname(__DIR__) . '/soundcache/' . md5(trim($responseForSubtitles)) . '.wav.ttsfilter');
+                        $requiresFreshAudio = $activePresetId !== 'none' || $filteredCache;
                         $hadAvoidTtsCache = array_key_exists('AVOID_TTS_CACHE', $GLOBALS);
                         $previousAvoidTtsCache = $GLOBALS['AVOID_TTS_CACHE'] ?? null;
-                        if ($activePresetId !== 'none') {
+                        if ($requiresFreshAudio) {
                             $GLOBALS['AVOID_TTS_CACHE'] = true;
                         }
 
                         try {
                             $ttsOutput = $GLOBALS["TTS_FALLBACK_FNCT"]($responseForSpeech, $mood, $responseForSubtitles);
                         } finally {
-                            if ($activePresetId !== 'none') {
+                            if ($requiresFreshAudio) {
                                 if ($hadAvoidTtsCache) {
                                     $GLOBALS['AVOID_TTS_CACHE'] = $previousAvoidTtsCache;
                                 } else {

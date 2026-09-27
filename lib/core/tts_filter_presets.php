@@ -283,6 +283,49 @@ function normalizeTtsFilterPresetId($value, $allowInternal = false)
     return isset($presets[$id]) ? $id : 'none';
 }
 
+// Select a temporary NPC effect from fresh game observations without changing the saved preset.
+function resolveActorTtsFilterPreset(array $metadata, bool $enabled, bool $detectTransformations, ?int $nowMs = null): string
+{
+    $saved = normalizeTtsFilterPresetId($metadata['tts_filter_preset'] ?? '');
+    if (!$enabled) {
+        return $saved;
+    }
+    $nowMs ??= (int) round(microtime(true) * 1000);
+    // Nearby actors refresh about every eight seconds. Expire observations after one minute.
+    $transformation = $metadata['transformation_state'] ?? [];
+    $activity = $metadata['activity_status'] ?? [];
+    foreach (['transformation', 'activity'] as $kind) {
+        $state = $kind === 'transformation' ? $transformation : $activity;
+        if (!is_array($state)) {
+            continue;
+        }
+        $age = $nowMs - (int) ($state['received_at_ms'] ?? $state['timestamp'] ?? 0);
+        $gameTime = (float) ($GLOBALS['gameRequest'][2] ?? 0);
+        if ($age < 0 || $age > 60000 || ($gameTime > 0 && (float) ($state['gamets'] ?? 0) > $gameTime)) {
+            continue;
+        }
+        if ($kind === 'transformation' && $detectTransformations) {
+            if (($state['state'] ?? '') === 'werewolf') {
+                return 'deep';
+            }
+            if (($state['state'] ?? '') === 'vampire_lord') {
+                return 'sinister';
+            }
+        } elseif ($kind === 'activity') {
+            if (!empty($state['is_dead']) || !empty($state['is_unconscious']) || !empty($state['is_sleeping'])) {
+                return $saved;
+            }
+            if (!empty($state['is_in_combat']) || !empty($state['is_attacking'])) {
+                return 'commanding';
+            }
+            if (!empty($state['is_sneaking'])) {
+                return 'soft_spoken';
+            }
+        }
+    }
+    return $saved;
+}
+
 function setActiveTtsFilterPreset($value, $allowInternal = false)
 {
     $id = normalizeTtsFilterPresetId($value, $allowInternal);
@@ -390,16 +433,31 @@ function logTtsFilterPresetMessage($level, $message)
 function applyActiveTtsFilterPresetToOutput($ttsOutput)
 {
     $presetId = getActiveTtsFilterPresetId();
-    if ($presetId === 'none' || !$ttsOutput) {
+    if (!$ttsOutput) {
         return $ttsOutput;
     }
 
     $audioPath = resolveTtsFilterAudioPath($ttsOutput);
+    if ($presetId === 'none') {
+        if ($audioPath !== null) {
+            @unlink($audioPath . '.ttsfilter');
+        }
+        return $ttsOutput;
+    }
     $filterGraph = ttsFilterPresetGraph($presetId);
     if ($audioPath === null || $filterGraph === '') {
         logTtsFilterPresetMessage('error', "[TTS FILTER] Cannot process preset '{$presetId}': connector output is not a readable soundcache WAV.");
         return $ttsOutput;
     }
+
+    // The client addresses audio by dialogue-text hash. Mark in-place filtered WAVs so a
+    // later normal voice cannot reuse them. Failed marking leaves the unfiltered audio intact.
+    $marker = $audioPath . '.ttsfilter';
+    if (!is_file($marker) && @file_put_contents($marker, 'filtered', LOCK_EX) === false) {
+        logTtsFilterPresetMessage('error', '[TTS FILTER] Cannot mark cached audio; leaving it unfiltered.');
+        return $ttsOutput;
+    }
+    @chmod($marker, 0660);
 
     try {
         $nonce = bin2hex(random_bytes(6));
