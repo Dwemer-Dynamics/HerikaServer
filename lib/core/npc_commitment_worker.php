@@ -112,6 +112,7 @@ if (!function_exists('chimCommitmentExtractWithLlm')) {
                 'role' => 'user',
                 'content' => json_encode([
                     'npc' => $actorName,
+                    'current_game_time_days' => ((int)($job['current_gamets'] ?? 0)) / 10000000,
                     'request' => chimCommitmentCleanRequestText((string)($job['request_text'] ?? '')),
                     'partial_task' => $partial,
                 ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
@@ -175,13 +176,32 @@ if (!function_exists('chimCommitmentProcessQueue')) {
                         $db->execQuery('ROLLBACK');
                         continue;
                     }
-                    $createResult = chimCommitmentCreate(
+                    $createResult = null;
+                    if (trim((string)($payload['location'] ?? '')) !== '') {
+                        require_once __DIR__ . '/npc_schedules.php';
+                        $actorSql = $db->escape((string)$job['actor_name']);
+                        $locationSql = $db->escape(trim((string)$payload['location']));
+                        $npcs = $db->fetchAll("SELECT * FROM core_npc_master WHERE lower(npc_name)=lower('{$actorSql}') LIMIT 2");
+                        $locations = $db->fetchAll("SELECT DISTINCT name,formid FROM locations WHERE lower(name)=lower('{$locationSql}') LIMIT 2");
+                        if (count($npcs) === 1 && count($locations) === 1) {
+                            try {
+                                $scheduleId = chimScheduleSave($npcs[0], [
+                                    'subject'=>$payload['subject'], 'mode'=>'task',
+                                    'location_id'=>$locations[0]['formid'],
+                                    'due_gamets'=>(int)$job['current_gamets'] + chimCommitmentHoursToGamets($payload['due_in_hours']),
+                                    'repeat_hours'=>$payload['repeat_every_hours'] ?? 0,
+                                ], 0, true);
+                                $createResult = ['ok'=>true, 'id'=>$scheduleId, 'pending_validation'=>true];
+                            } catch (InvalidArgumentException $e) { $payload['schedule_issue']=$e->getMessage(); }
+                        } else $payload['schedule_issue']='Clarify the exact NPC and recognised destination before scheduling travel.';
+                    }
+                    if ($createResult === null) $createResult = chimCommitmentCreate(
                         (string)$job['actor_name'], $payload, (int)($job['current_gamets'] ?? 0)
                     );
                     if (empty($createResult['ok'])) {
                         throw new RuntimeException($createResult['error'] ?? 'Task insert failed');
                     }
-                    if (!chimCommitmentQueueCreatedNotification((string)$job['actor_name'], (string)$payload['subject'])) {
+                    if (empty($createResult['pending_validation']) && !chimCommitmentQueueCreatedNotification((string)$job['actor_name'], (string)$payload['subject'])) {
                         throw new RuntimeException('Task notification failed');
                     }
                     if (!$db->execQuery('COMMIT')) throw new RuntimeException('Task commit failed');

@@ -11,4 +11,6 @@ $GLOBALS['TASKS']['npccommitments']['fn'] = function () {
 
     require_once $enginePath . 'lib/core/npc_commitment_worker.php';
     chimCommitmentProcessQueue();
+    require_once $enginePath . 'lib/core/npc_schedules.php';
+    chimScheduleTick();
 };

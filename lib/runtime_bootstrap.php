@@ -55,6 +55,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
 
         $requiredVersions = [
             'responselog_interaction' => 20260912001,
+            'npc_schedules' => 20260927001,
             'general_settings' => 20260919001,
             'core_stt_connector' => 20260502002,
             'core_itt_connector' => 20260502002,
@@ -70,7 +71,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             $versionRows = $db->fetchAll(
                 "SELECT tablename, version
                  FROM public.database_versioning
-                 WHERE tablename IN ('responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog')"
+                 WHERE tablename IN ('npc_schedules','responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog')"
             );
         } catch (\Throwable $e) {
             $decision = true;

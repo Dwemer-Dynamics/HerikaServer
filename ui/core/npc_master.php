@@ -2195,12 +2195,13 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
     <button type="button" class="npc-editor-tab" role="tab" aria-selected="false" data-npc-editor-tab="info">🛠️ Info</button>
     <button type="button" class="npc-editor-tab" role="tab" aria-selected="false" data-npc-editor-tab="actions">⚡ Actions</button>
     <button type="button" class="npc-editor-tab" role="tab" aria-selected="false" data-npc-editor-tab="background-life">🌍 Background Life</button>
+    <button type="button" class="npc-editor-tab" role="tab" aria-selected="false" data-npc-editor-tab="schedules">Schedules</button>
     <button type="button" class="npc-editor-tab" role="tab" aria-selected="false" data-npc-editor-tab="history">📜 History</button>
 </div>
 <style>
 .npc-editor-tabs {
     display:grid;
-    grid-template-columns:repeat(7, minmax(0, 1fr));
+    grid-template-columns:repeat(8, minmax(0, 1fr));
     gap:8px;
     margin-bottom:14px;
     padding:8px;
@@ -2486,7 +2487,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
             tablist.dataset.initialized = '1';
 
             const panels = {};
-            ['general','bios','relationships','info','actions','background-life','history'].forEach(function(section){
+            ['general','bios','relationships','info','actions','background-life','schedules','history'].forEach(function(section){
                 const panel = document.createElement('div');
                 panel.className = 'npc-editor-panel form-grid';
                 if (section === 'history') panel.classList.add('npc-editor-panel-history');
@@ -2511,6 +2512,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
             }
 
             function sectionFor(unit){
+                if (unit.id === "npc-schedules") return "schedules";
                 if (unit.id === 'relationship-editor-section' || unit.querySelector('#relationship-editor-section')) return 'relationships';
                 if (unit.id === 'relationship-change-history') return 'relationships';
                 const label = unit.querySelector('label:not([for])');
@@ -3531,6 +3533,12 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
             <small class="hint">Manual edits save to the latest middle-term memory entry. Future auto-generated summaries continue appending after your edit.</small>
         </div>
 
+        <?php if ($editItem): ?>
+        <div id="npc-schedules" class="form-item span-2" data-schedule-root></div>
+        <link rel="stylesheet" href="../css/npc_schedules.css">
+        <script src="../js/npc_schedules.js"></script>
+        <script>window.chimSchedules(document.getElementById('npc-schedules'), '../api/npc_schedules.php', <?= (int)$editItem['id'] ?>);</script>
+        <?php endif; ?>
         <?php if ($editItem): ?>
         <div class="form-item span-2 npc-task-section">
             <div class="npc-task-toolbar">

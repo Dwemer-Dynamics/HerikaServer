@@ -383,7 +383,7 @@ if (!function_exists('chimCommitmentGetActive')) {
         return $db->fetchAll("
             SELECT id, commitment_type, subject, counterparty, location_name, status,
                    created_gamets, due_gamets, repeat_interval_gamets, occurrence_count,
-                   last_resolved_gamets
+                   last_resolved_gamets, payload_json
               FROM public.npc_commitments
              WHERE lower(actor_name) = lower('{$actorSql}')
                AND status IN ('scheduled', 'due')
@@ -435,6 +435,8 @@ if (!function_exists('chimCommitmentFormatContext')) {
                 ? 'DUE NOW'
                 : 'due in about ' . max(1, (int)round($hours)) . ' in-game hour(s)';
             $details = [];
+            $taskPayload = json_decode((string)($row['payload_json'] ?? '{}'), true);
+            if (!empty($taskPayload['schedule_issue'])) $details[] = 'Schedule not active; ask for clarification: ' . $taskPayload['schedule_issue'];
             if (!empty($row['counterparty'])) {
                 $details[] = 'with ' . trim((string)$row['counterparty']);
             }

@@ -126,6 +126,8 @@ $npcMaster = new NpcMaster();
 $connector = new LLMConnector();
 
 $currentNpcData = $npcMaster->getByName($npcName);
+if ($db->fetchOne("SELECT r.id FROM npc_schedule_runs r JOIN npc_commitments t ON t.id=r.task_id WHERE t.npc_id=" . (int)($currentNpcData['id'] ?? 0) . " AND (r.phase IN ('travelling','waiting','active','releasing') OR r.pending_op IN ('travel','ensure')) LIMIT 1")) return;
+
 $currentConnectorData = $connector->getById($GLOBALS['CORE_CONNECTOR_BGL']);
 
 $profile = new CoreProfile();

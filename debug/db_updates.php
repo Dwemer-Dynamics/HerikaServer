@@ -8425,6 +8425,12 @@ if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_pro
     throw new RuntimeException('Dynamic profile migration failed.');
 }
 
+// Scheduled NPC travel and correlated game acknowledgements.
+if ($checkVersion('npc_schedules') < 20260927001) {
+    if (!$db->execQuery(file_get_contents(__DIR__ . '/../lib/core/database_schema/npc_schedules.sql'))) throw new RuntimeException('Schedule migration failed.');
+    $updateVersion('npc_schedules', 20260927001);
+}
+
 // Keep the installed snapshot functions and pgAdmin comments aligned with the current table policy.
 require_once dirname(__DIR__) . '/lib/playthrough_schema.php';
 require_once dirname(__DIR__) . '/lib/playthrough_preferences.php';
