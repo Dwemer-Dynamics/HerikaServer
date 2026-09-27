@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/chim_interaction.php';
+require_once __DIR__ . '/sentence_boundaries.php';
 
 define("_MINIMAL_DISTANCE_TO_BE_THE_SAME", 0.0);
 define("_MAXIMAL_DISTANCE_TO_BE_RELATED", 0.8);
@@ -398,36 +399,11 @@ function cleanResponse($rawResponse)
 // This sentence will never be splitted: "It is, my Thane. The crisp air here is better than the soot of Whiterun. I've been honing my blade since dawn."
 
 function findFastSentencePosition($s_string,$min_sentence_size=0) {
-    // Find the position of the first sentence-ending punctuation followed by a space
-    // This preserves ellipsis (...) because we require a space after the punctuation
-    $eosPunc = preg_quote(getEndOfSentencePunctuation(), '/'); // .?!。？！
-
-    // Match the EOS punctuation character followed by spaces
-    // Negative lookbehind ensures we don't match after ellipsis (..)
-    // "Don't split after ellipses either... Thanks :-)" -for example
-    $splitSentenceRegex = "/([" . $eosPunc . "])(?<!\.\.)(?<!\.\.\.)\s+/u";
-
-    // Find the first safe match and return the position of the EOS punctuation.
-    // Do not split while a single-asterisk narration span is still open.
-    if (preg_match_all($splitSentenceRegex, $s_string, $matches, PREG_OFFSET_CAPTURE)) {
-        foreach ($matches[1] as $match) {
-            $position = $match[1];
-            // Use the end of the matched punctuation so that multi-byte characters
-            // (e.g. Japanese 。！？ which are 3 bytes in UTF-8) are not split mid-character.
-            $endPosition = $position + strlen($match[0]) - 1;
-            if ($min_sentence_size > 0 && $endPosition <= $min_sentence_size) {
-                continue;
-            }
-
-            $candidate = substr($s_string, 0, $endPosition + 1);
-            if (hasUnclosedSingleAsteriskBlock($candidate)) {
-                continue;
-            }
-
-            return $endPosition;
+    foreach (chimSentenceBoundaries($s_string) as $end) {
+        if ($min_sentence_size <= 0 || $end - 1 > $min_sentence_size) {
+            return $end - 1;
         }
     }
-
     return false;
 }
 
@@ -469,42 +445,15 @@ function br2nl($string)
 }
 
 function split_at_end_of_sentence($paragraph) {
-    // Split only at sentence-ending punctuation followed by a space
-    // This preserves ellipsis (...) because we require a space after the punctuation
-    $eosPunc = preg_quote(getEndOfSentencePunctuation(), '/'); // .?!。？！
-
-    // Split at any end-of-sentence punctuation followed by one or more spaces
-    // Negative lookahead (?!\.) ensures we don't split after a dot if another dot follows (ellipsis)
-    // "Don't split after ellipses either... Thanks :-)" -for example
-    $splitSentenceRegex = "/(?<=[" . $eosPunc . "])(?<!\.\.)(?<!\.\.\.)\s+/u";
-
-    if (!preg_match_all($splitSentenceRegex, $paragraph, $matches, PREG_OFFSET_CAPTURE)) {
-        return [$paragraph];
-    }
-
     $sentences = [];
-    $chunkStart = 0;
-
-    foreach ($matches[0] as $match) {
-        $splitOffset = $match[1];
-        $candidate = substr($paragraph, 0, $splitOffset);
-        if (hasUnclosedSingleAsteriskBlock($candidate)) {
-            continue;
-        }
-
-        $sentence = trim(substr($paragraph, $chunkStart, $splitOffset - $chunkStart));
-        if ($sentence !== '') {
-            $sentences[] = $sentence;
-        }
-
-        $chunkStart = $splitOffset + strlen($match[0]);
+    $start = 0;
+    foreach (chimSentenceBoundaries($paragraph) as $end) {
+        $sentence = trim(substr($paragraph, $start, $end - $start));
+        if ($sentence !== '') $sentences[] = $sentence;
+        $start = $end;
     }
-
-    $tail = trim(substr($paragraph, $chunkStart));
-    if ($tail !== '') {
-        $sentences[] = $tail;
-    }
-
+    $tail = trim(substr($paragraph, $start));
+    if ($tail !== '') $sentences[] = $tail;
     return $sentences ?: [$paragraph];
 }
 
@@ -518,7 +467,6 @@ function split_sentences($paragraph)
     }
 
     $paragraphNcr = br2nl($paragraph); // Remove any BR tags
-    $paragraphNcr = preg_replace('/([。！？])(?=\S)/u', '$1 ', $paragraphNcr);
 
     $sentences = split_at_end_of_sentence($paragraphNcr);
 
@@ -531,7 +479,6 @@ function split_sentences_stream($paragraph)
         return [$paragraph];
     }
 
-    $paragraph = preg_replace('/([。！？])(?=\S)/u', '$1 ', $paragraph);
     // Split at sentence boundaries
     $sentences = split_at_end_of_sentence($paragraph);
 
