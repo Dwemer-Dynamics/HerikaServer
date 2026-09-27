@@ -2695,6 +2695,7 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
                                     <button onclick="requestAction('<?php echo addslashes($marker['name']); ?>')" class="marker-action-btn" title="Trigger a Background Life action for <?php echo htmlspecialchars($marker['name'], ENT_QUOTES, 'UTF-8'); ?>">Trigger Action</button>
                                     <button onclick="requestReporting('<?php echo addslashes($marker['name']); ?>')" class="marker-action-btn" title="Send a letter from <?php echo htmlspecialchars($marker['name'], ENT_QUOTES, 'UTF-8'); ?>" style="background: #4488ff;">Send Letter</button>
                                     <button onclick="updateCoords('<?php echo addslashes($marker['name']); ?>')" title="Request coords update now" class="marker-action-btn-trans" style="border: 2px solid #00ff00; background: #44ff44;">📍</button>
+                                    <button type="button" class="marker-action-btn" data-npc-letters title="Write to <?php echo htmlspecialchars($marker['name'], ENT_QUOTES, 'UTF-8'); ?>">Write Letter</button>
                                 </div>
                                 <div class="marker-card-row-label">Rules</div>
                                 <div class="marker-card-toggles">
@@ -3288,6 +3289,7 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
     </div>
     </section>
     <script src="<?php echo htmlspecialchars($webRoot); ?>/ui/js/background_life_history.js?v=<?php echo (int) @filemtime(__DIR__ . '/js/background_life_history.js'); ?>"></script>
+    <script defer src="<?php echo htmlspecialchars($webRoot); ?>/ui/js/background_life_letters.js?v=<?php echo (int) @filemtime(__DIR__ . '/js/background_life_letters.js'); ?>"></script>
 
     <div
         class="bgl-modal"
@@ -3298,7 +3300,7 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
         <div class="bgl-modal-dialog bgl-recent-events-dialog" role="dialog" aria-modal="true" aria-labelledby="npc-recent-events-title">
             <div class="bgl-modal-header">
                 <h3 id="npc-recent-events-title">NPC History</h3>
-                <button type="button" class="bgl-modal-close" onclick="closeNpcRecentEvents()" aria-label="Close recent events modal">&times;</button>
+                <button type="button" class="bgl-modal-close" id="npc-history-close" onclick="closeNpcRecentEvents()" aria-label="Close recent events modal">&times;</button>
             </div>
             <div class="bgl-npc-history-tabs" role="tablist" aria-label="NPC history sections">
                 <button type="button" class="bgl-npc-history-tab active" data-npc-history-tab="events" role="tab" aria-selected="true">📚 Event History</button>
@@ -3310,7 +3312,30 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
                 <div class="bgl-recent-events-list" id="npc-recent-events-list"></div>
             </section>
             <section class="bgl-npc-history-panel" id="npc-letters-history-panel" hidden>
-                <div id="npc-letter-history-content"></div>
+                <div id="bgl-correspondence" data-api-url="<?php echo htmlspecialchars($webRoot); ?>/ui/api/background_life_letter.php">
+                    <div class="bgl-letter-toolbar">
+                        <strong>Correspondence</strong>
+                        <button type="button" class="bgl-history-button" id="bgl-letter-refresh">Refresh letters</button>
+                    </div>
+                    <div id="bgl-letter-status" role="status" aria-live="polite"></div>
+                    <form id="bgl-letter-form" class="bgl-letter-form">
+                        <label for="bgl-letter-body" id="bgl-letter-label">Write Letter</label>
+                        <div class="bgl-letter-hint" id="bgl-letter-terms"></div>
+                        <textarea id="bgl-letter-body" rows="4" required disabled aria-describedby="bgl-letter-terms bgl-letter-count"></textarea>
+                        <div class="bgl-letter-toolbar">
+                            <span class="bgl-letter-hint" id="bgl-letter-count"></span>
+                            <div class="bgl-letter-actions">
+                                <button type="button" class="bgl-history-button" id="bgl-letter-cancel-reply" hidden>Cancel reply</button>
+                                <button type="submit" class="bgl-history-button" id="bgl-letter-send" disabled>Send Letter</button>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="bgl-letter-thread" class="bgl-letter-thread"></div>
+                </div>
+                <details class="bgl-letter-archive">
+                    <summary>Recorded NPC letters</summary>
+                    <div id="npc-letter-history-content"></div>
+                </details>
             </section>
             <section class="bgl-npc-history-panel" id="npc-thoughts-history-panel" hidden>
                 <div id="npc-thought-history-content"></div>
