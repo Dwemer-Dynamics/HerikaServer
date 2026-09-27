@@ -2819,7 +2819,7 @@ pipeline_status_set('llm', false);
 
 if (!$outputWasValid) {
     Logger::warn("LLM returned invalid output.");
-    if (isset($GLOBALS["LLM_RETRY_FNCT"])) {
+    if (isset($GLOBALS["LLM_RETRY_FNCT"]) && empty($GLOBALS['CHIM_PROVIDER_RECOVERY_HANDLED'])) {
         $GLOBALS["LLM_RETRY_FNCT"]();
     }
 }
