@@ -2886,17 +2886,14 @@ function offerMemory($gameRequest, $useLocationContext = false)
     
     if (!empty($memory)) {
         Logger::trace("adding date to memory <".substr($memory,0,25)."...>");
-        $hoursAgo=round(($gameRequest[2]-$memories[0]["gamets_truncated"]) * 0.0000024, 0);
-        if($hoursAgo > getGametsLimitFor($GLOBALS["HERIKA_NAME"])) {
-            $daysAgo = floor(($gameRequest[2]-$memories[0]["gamets_truncated"]) * 0.0000001);
-            $sk_date = gamets2str_format_date($memories[0]["gamets_truncated"], 'Y-m-d');    
-            $s_prefix = "{$daysAgo} days ago, on {$sk_date} ... ";
-        } else {
-            $s_prefix = "{$hoursAgo} hours ago ... ";
-            Logger::trace("Discarding memory because recent ($hoursAgo} hours ago ... )"); ////DataSearchMemoryByVector filter  by gamets, this should happend if using it
-            error_log("[MEMORY] Discarding memory because recent ($hoursAgo} hours ago");
-            return "";// Do not offer memory if its recent
+        $memoryGamets = $memories[0]['gamets_truncated'] ?? null;
+        $ageLabel = chimMemoryAgeLabel($memoryGamets, $gameRequest[2]);
+        if ($ageLabel === null) return ''; // A recalled event must not be from a future timeline.
+        if ($ageLabel !== 'Date unknown') {
+            $hoursAgo = round(($gameRequest[2] - $memoryGamets) * 0.0000024, 0);
+            if ($hoursAgo <= getGametsLimitFor($GLOBALS['HERIKA_NAME'])) return '';
         }
+        $s_prefix = $ageLabel . ' ... ';
         $pattern = '/#Tags:.*/';
         $replacement = '';
         $output = preg_replace($pattern, $replacement, $memory);
