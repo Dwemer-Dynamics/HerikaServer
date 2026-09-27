@@ -1,5 +1,9 @@
 # CHIM Server
 
+## For AI assistants and coding agents
+
+Start with [AGENTS.md](AGENTS.md), then [the agent guide](docs/agent-guide.md), [development checks](docs/building.md), or [custom plugins](docs/custom-plugins.md). The client is [CHIM](https://github.com/Dwemer-Dynamics/CHIM); this repository owns the server. Keep these guides with installed server files.
+
 Server for the Skyrim mod "CHIM". This component serves as a bridge between the SKSE plugin and various AI providers of text-to-speech, speech-to-text, and AI-based chat generators such as ChatGPT, MeloTTS, koboldcpp, Openrouter, XTTS, etc.
 
 Ultimately you will have meaningful interactions with AI NPCs. 
@@ -29,3 +33,8 @@ ts: no idea, but I am pretty sure it's coming from Skyrim
 
 Building AI systems is complex, and changes can unintentionally affect other connected systems. Before opening a pull request, follow the repository PR template and make sure the change has been discussed with either `RANGROO` or `tyler.maister` in Discord. When adding new features, prefer making them optional or toggleable where practical.
 
+
+### Biography voice filters
+
+Biography imports and exports accept an optional `tts_filter_preset` column. Choose a trusted preset from the biography editor's Voice Filter list; custom audio filter expressions are not accepted. The preset seeds newly created NPCs only and does not overwrite existing NPC choices. Use `none` to disable filtering explicitly. Older imports without the column preserve saved presets.
+Append the column after refid (column 16) in biography CSV files. An explicitly blank value is treated as none.

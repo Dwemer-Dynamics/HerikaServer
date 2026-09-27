@@ -8,9 +8,10 @@ chimRuntimeBootstrap($enginePath, [
     'load_narrator' => true,
 ]);
 
-if (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_DIRECTOR')) {
+if (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_QUEST_ENGINE')) {
     http_response_code(409);
-    echo json_encode(['error' => 'Director Mode is turned off in Global Settings.']);
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'Quest Engine Connector is turned off in Global Settings.']);
     exit;
 }
 
@@ -32,7 +33,14 @@ require_once $enginePath . "lib/core/core_profiles.class.php";
 require_once $enginePath . "lib/core/llm_connector.class.php";
 
 $connector = new LLMConnector();
-$currentConnectorData = $connector->getById($GLOBALS["CORE_CONNECTOR_DIRECTOR"]);
+$connectorId = (int) ($GLOBALS["CORE_CONNECTOR_QUEST_ENGINE"] ?? 0);
+$currentConnectorData = $connectorId > 0 ? $connector->getById($connectorId) : null;
+if (!$currentConnectorData) {
+    http_response_code(409);
+    header('Content-Type: application/json');
+    echo json_encode(['error' => 'Select a valid Quest Engine Connector in Global Settings.']);
+    exit;
+}
 $connector->setOldGlobals($currentConnectorData);
 
 $method = $_SERVER['REQUEST_METHOD'];
@@ -87,12 +95,10 @@ $contextData = $prompt;
 
 $connectionHandler = $connector->getConnector($currentConnectorData);
 
-$MODEL = "google/gemini-3.7-flash";
-//$MODEL = "nex-agi/deepseek-v3.1-nex-n1:free";
 
 $buffer = $connectionHandler->fast_request(
     $contextData,
-    ["MAX_TOKENS" => 4096, "model" => $MODEL],
+    ["MAX_TOKENS" => 4096],
     "questplanner"
 );
 
@@ -500,7 +506,7 @@ while ($retryCount < $maxRetries && !$validationPassed) {
                 // Make retry request
                 $currentBuffer = $connectionHandler->fast_request(
                     $retryPrompt,
-                    ["MAX_TOKENS" => 4096, "model" => $MODEL, "temperature" => 0.3],
+                    ["MAX_TOKENS" => 4096, "temperature" => 0.3],
                     "questplanner"
                 );
             } else {

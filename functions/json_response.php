@@ -212,7 +212,7 @@
                 'mode' => $modeDescription,
                 'mode_enum' => array_values(array_unique($modeValues)),
                 'target' => "Actor, recipient, or destination required by the selected action. Prefer exact Name [RefID: XXXXXXXX] from people_present for actors. For Travel_To use the destination; Consume uses the exact BaseID:ItemName inventory identifier; TeleportNPC uses the actor to teleport; SpawnItem and SpawnGold use the recipient; SpawnNPC uses the SNQE template key; KillTarget uses the victim; CreateNewNPC and DirectorCommand use their requested brief. Use '{$playerName}', PLAYER, or me for player-targeted actions. For grouped actions, put the variant in mode, never target. Leave blank when no target is needed.",
-                'item' => 'Actual item, spell, location, or crime detail required by the selected action. Use exact shown identifiers for inventory, held, or nearby items. Handle_Crime add_bounty uses the crime type here. TeleportNPC uses the destination and SpawnItem uses the item name. For grouped actions, put the variant in mode, never item. Leave blank when no item or detail is needed.',
+                'item' => 'Actual item, spell, location, or crime detail required by the selected action. Use exact shown identifiers for inventory, held, or nearby items. Handle_Crime add_bounty uses the crime type here. TeleportNPC uses the destination and SpawnItem uses the item name. For ReadBook, select only a readable book, note, letter, or journal: use exact BaseID:BookTitle from inventory, otherwise the closest title words from the player request; never substitute armor, food, another item, or the first inventory entry. For grouped actions, put the variant in mode, never item. Leave blank when no item or detail is needed.',
                 'amount' => 'Positive integer quantity when required. It is required for SpawnItem, SpawnNPC, SpawnGold, Give in gold mode, and Handle_Crime add_bounty when item is Custom; optional for Give in item mode. Omit it when the selected action does not use an amount.',
             ];
         }
@@ -370,7 +370,7 @@
         $inlineNarrationEnabled = $inlineNarrationMode !== 'disabled';
         $messageDescription = "lines of dialogue";
         if (chimIsVisionRequest()) {
-            $messageDescription = "{$promptCharacterName}'s spoken Soulgaze explanation of the current scene. Describe only what is visibly present right now through {$GLOBALS["PLAYER_NAME"]}'s eyes, focusing on people, environment, objects, and immediate activity. Do not continue unrelated conversation, do not answer stale dialogue, and do not invent unseen details.";
+            $messageDescription = "{$promptCharacterName}'s spoken response to the current Soulgaze vision, in their own personality and speech style. Use the final Soulgaze scene description for visible details and conversation context for natural reactions. Do not invent unseen details or answer an older conversation turn.";
         } elseif ($inlineNarrationEnabled) {
             $messageDescription = "If needed, start with one brief third-person narration block in single asterisks, then put {$promptCharacterName}'s spoken text after it. Example: *She smiles* It's good to see you again, my friend! Do not wrap the entire reply in asterisks, and keep spoken dialogue outside the asterisks.";
         } elseif (chimIsDirectNarratorDialogue()) {
@@ -483,7 +483,7 @@
         $inlineNarrationEnabled = $inlineNarrationMode !== 'disabled';
         $messageDescription = "lines of {$promptCharacterName}'s dialogue";
         if (chimIsVisionRequest()) {
-            $messageDescription = "{$promptCharacterName}'s spoken Soulgaze explanation of the current scene. Describe only what is visibly present right now through {$GLOBALS["PLAYER_NAME"]}'s eyes, focusing on people, environment, objects, and immediate activity. Do not continue unrelated conversation, do not answer stale dialogue, and do not invent unseen details.";
+            $messageDescription = "{$promptCharacterName}'s spoken response to the current Soulgaze vision, in their own personality and speech style. Use the final Soulgaze scene description for visible details and conversation context for natural reactions. Do not invent unseen details or answer an older conversation turn.";
         } elseif ($inlineNarrationEnabled) {
             $messageDescription = "If needed, start with one brief third-person narration block in single asterisks, then put {$promptCharacterName}'s spoken text after it. Example: *She smiles* It's good to see you again, my friend! Do not wrap the entire reply in asterisks, and keep spoken dialogue outside the asterisks.";
         } elseif (chimIsDirectNarratorDialogue()) {

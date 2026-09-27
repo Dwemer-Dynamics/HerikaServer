@@ -1014,7 +1014,7 @@ class openrouterjson
                         if (is_array($finalData["message"]))
                             $finalData["message"]=implode(",",$finalData["message"]);
                         
-                        $mangledBuffer = str_replace($this->_extractedbuffer, "", $finalData["message"]);
+                        $mangledBuffer = __jpd_extract_incremental_message($this->_extractedbuffer, $finalData["message"]);
                         $this->_extractedbuffer=$finalData["message"];
                         if (isset($finalData["listener"])) {
                             if (isset($finalData["action"])&&($finalData["action"]=="Talk")&& lazyEmpty($finalData["listener"]) && !lazyEmpty($finalData["target"]))
@@ -1497,4 +1497,3 @@ class openrouterjson
     }
 
 }
-

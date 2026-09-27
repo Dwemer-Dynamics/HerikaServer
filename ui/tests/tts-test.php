@@ -52,7 +52,8 @@ if (isset($connectorMetadata['API_KEY']) && trim(strval($connectorMetadata['API_
 }
 $testStringDefault = "In Skyrim's land of snow and ice, where dragons soar and snowstorms bind the roads, a steady voice can still cut through the cold.";
 $testString = trim(strval($_POST['customstring'] ?? $_GET['customstring'] ?? $testStringDefault));
-$voiceId = trim(strval($_POST['voiceid'] ?? $_GET['voiceid'] ?? $_POST['voice_override'] ?? $_GET['voice_override'] ?? 'TheNarrator'));
+$defaultVoiceId = $connectorDriver === 'azure' ? 'en-US-GuyNeural' : 'TheNarrator';
+$voiceId = trim(strval($_POST['voiceid'] ?? $_GET['voiceid'] ?? $_POST['voice_override'] ?? $_GET['voice_override'] ?? $defaultVoiceId));
 $audioUrl = '';
 $debugData = [];
 $errorText = '';
@@ -197,7 +198,7 @@ audio { width: 100%; margin-top: 10px; }
                 <div class="field">
                     <label for="voiceid">VoiceId</label>
                     <input type="text" id="voiceid" name="voiceid" value="<?php echo h($voiceId); ?>">
-                    <div class="field-help">Connector-specific voice ID for this test run. Defaults to <code>TheNarrator</code>.</div>
+                    <div class="field-help">Connector-specific voice ID for this test run. Defaults to <code><?php echo h($defaultVoiceId); ?></code> for this connector.</div>
                 </div>
 
                 <button type="submit" class="btn-save">Run Test</button>

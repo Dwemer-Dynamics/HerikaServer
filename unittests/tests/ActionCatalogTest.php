@@ -844,6 +844,7 @@ final class ActionCatalogTest extends TestCase
             'GiveItemTo', 'GiveGoldTo',
             'OpenInventory', 'OpenInventory2',
             'Drink', 'Toast',
+            'Inspect', 'InspectSurroundings', 'CheckInventory', 'TakeASeat', 'GoToSleep', 'TravelTo', 'ReturnBackHome',
         ];
         $GLOBALS['FUNCTIONS'] = [];
         $GLOBALS['TEST_FUNCTION_CODE_MAP'] = [];
@@ -863,8 +864,8 @@ final class ActionCatalogTest extends TestCase
         $GLOBALS['HERIKA_ACTION_GROUP_CUSTOM_CODE_SET'] = [];
 
         try {
-            $this->assertSame(7, herikaActionGroupsApplyToRuntime());
-            $this->assertCount(8, $GLOBALS['FUNCTIONS']);
+            $this->assertSame(10, herikaActionGroupsApplyToRuntime());
+            $this->assertCount(11, $GLOBALS['FUNCTIONS']);
             $this->assertContains('KeepAction', array_column($GLOBALS['FUNCTIONS'], 'name'));
             $this->assertContains('Handle_Crime', array_column($GLOBALS['FUNCTIONS'], 'name'));
             $this->assertContains('Start_Combat', array_column($GLOBALS['FUNCTIONS'], 'name'));
@@ -925,6 +926,23 @@ final class ActionCatalogTest extends TestCase
         $GLOBALS['HERIKA_GROUPED_ACTION_SPECS'] = herikaActionGroupsGetSpecs();
 
         try {
+            foreach ([['GroupedObserve','actor','Inspect','Lydia'], ['GroupedObserve','surroundings','InspectSurroundings',''], ['GroupedObserve','inventory','CheckInventory',''], ['GroupedRest','sit','TakeASeat',''], ['GroupedRest','sleep','GoToSleep',''], ['GroupedTravel','destination','TravelTo','Whiterun'], ['GroupedTravel','home','ReturnBackHome','']] as [$group,$mode,$legacy,$target]) {
+                $resolved = herikaActionGroupsResolveExecution($group, ['mode'=>$mode,'target'=>$target]);
+                $this->assertTrue($resolved['valid']);
+                $this->assertSame($legacy, $resolved['code_name']);
+                $this->assertSame($target, $resolved['parameter_value']);
+            }
+            $this->assertSame('potions', herikaActionGroupsResolveExecution('GroupedObserve', ['mode'=>'inventory','item'=>'potions'])['parameter_value']);
+            $this->assertFalse(herikaActionGroupsResolveExecution('GroupedObserve', ['mode'=>'actor'])['valid']);
+            $this->assertFalse(herikaActionGroupsResolveExecution('GroupedTravel', ['mode'=>'destination'])['valid']);
+            $this->assertFalse(herikaActionGroupsResolveExecution('GroupedRest', ['mode'=>'relax'])['valid']);
+            $GLOBALS['HERIKA_GROUPED_ACTION_SPECS']['GroupedObserve']['variants'] = ['inventory'=>'CheckInventory'];
+            $this->assertFalse(herikaActionGroupsResolveExecution('GroupedObserve', ['mode'=>'actor','target'=>'Lydia'])['valid']);
+            $GLOBALS['HERIKA_GROUPED_ACTION_SPECS']['GroupedObserve'] = herikaActionGroupsGetSpecs()['GroupedObserve'];
+
+            $this->assertContains('Relax', herikaGetRetiredActionCodes());
+            $this->assertFalse(herikaActionCatalogRowIsAvailableInCurrentMode(['code_name'=>'Relax','available_to_npc'=>true,'is_activated'=>true]));
+
             $combat = herikaActionGroupsResolveExecution('GroupedStartCombat', [
                 'target' => 'Bandit',
                 'mode' => 'brawl',

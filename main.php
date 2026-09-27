@@ -1,4 +1,10 @@
 <?php
+require_once __DIR__ . '/lib/chim_interaction.php';
+$interactionData = base64_decode((string)($_GET['DATA'] ?? ''), true);
+$interactionType = strtolower(explode('|', (string)$interactionData, 2)[0]);
+if (chimInteractionIsTrigger($interactionType)) chimInteractionRequire();
+require_once __DIR__ . "/lib/playthrough_guard.php";
+pgr_http_preflight("main");
 
 /* Definitions and main includes */
 error_reporting(E_ALL);
@@ -33,6 +39,7 @@ chimRuntimeBootstrap($path, [
     'load_player_name' => true,
     'load_narrator' => true,
 ]);
+$db = $GLOBALS["db"];
 require_once($path . "lib/game_activity.php");
 require_once($path . "lib/background_processor.php");
 if (!headers_sent() && function_exists('chimGetNarratorDisplayNameHeaderValue')) {
@@ -61,6 +68,7 @@ require_once($path . "lib/core/npc_master.class.php");
 require_once($path . "lib/core/core_profiles.class.php");
 require_once($path . "lib/semaphore_manager.class.php");
 require_once($path . "lib/pipeline_status.php");
+require_once($path . "lib/core/book_read.class.php");
 
 // PARSE GET RESPONSE into $gameRequest
 $cooldownPeriod = 600;
@@ -133,6 +141,7 @@ MAIN FLOW
 
 $gameRequest = explode("|", $receivedData);
 $GLOBALS["gameRequest"] = &$gameRequest;
+if (chimInteractionIsTrigger($gameRequest[0])) chimInteractionRequire();
 unset($GLOBALS["CHIM_TURN_PEOPLE_SNAPSHOT"]);
 unset($GLOBALS["CHIM_CHAT_SHORTCUT_ROUTED"]);
 $requestRoutingSnapshot = chimDecodePlayerRoutingSnapshotField($gameRequest[4] ?? "");
@@ -215,6 +224,10 @@ if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext
             'party'=>''
         )
     );
+
+    // Pause only initialized playback. Pending uploads must keep their bounded waiting state.
+    bookReadStatePauseForInput();
+
     // unset($db);
 }
 
@@ -254,6 +267,8 @@ if (in_array($gameRequest[0],["addnpc"])) {
 
 if (($gameRequest[0]=="playerinfo")||(($gameRequest[0]=="newgame"))) {
     sleep(1);   // Give time to populate data
+
+    chimMaybeSyncPlayerName(chimExtractPlayerNameFromGamePayload($gameRequest[3] ?? ''), true);
 
     // Load/newgame is a hard scene boundary. Rolemaster scene notes are transient
     // director state; do not let them bleed across save/load into normal chat.
@@ -981,9 +996,7 @@ if (in_array($gameRequest[0],["info","infonpc","infonpc_close","infoloc","infoit
 
 // Check if the gameRequest matches specific types
 if (in_array($gameRequest[0], ["playerinfo", "newgame"])) {
-    // NOTE: Automatic player name detection from game is disabled
-    // Player name is now managed through Player Management UI or quickstart menu
-    // This was formerly: Update player name from playerinfo event
+    // Player identity was synced at the load boundary above.
     logEvent($gameRequest);
     terminate();
 }
@@ -1117,6 +1130,14 @@ requireFilesRecursively(__DIR__.DIRECTORY_SEPARATOR."ext".DIRECTORY_SEPARATOR,"p
 // Most called events: 'request,'infonpc','infonpc_close'.
 
 require(__DIR__.DIRECTORY_SEPARATOR."processor".DIRECTORY_SEPARATOR."comm.php");
+// Communication handlers still record quests, loads and vanilla dialogue while interaction is Off.
+if (!chimInteractionAllowed()) {
+    if (!$MUST_END && empty($GLOBALS['chim_interaction_observed']) && !chimInteractionIsTrigger($gameRequest[0])) {
+        logEvent($gameRequest);
+    }
+    terminate();
+}
+
 
 
 if (in_array($gameRequest[0],["rechat","narration"]) ) {
@@ -1359,6 +1380,7 @@ if (in_array($gameRequest[0],["rechat","narration"]) ) {
 
 
 // Handle narrator_welcome events (must be AFTER comm.php which converts init to narrator_welcome)
+
 if ($gameRequest[0] == "narrator_welcome") {
     // Load narrator profile with full connector configuration
     require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
@@ -1522,6 +1544,8 @@ if ($EXECUTION_MODE=="INJECTION_LOG") {
     terminate();
 
 }
+
+chimInteractionRequire();
 
 // What is this for?
 if (in_array($gameRequest[0], ["continue", "continue_group"], true) && empty($GLOBALS["RECHAT_PREVIOUS_SPEAKER"])) {
@@ -2050,6 +2074,7 @@ if (!is_array($contextDataHistoric)) {
 // summaries up to the one straddling that floor; if one straddles, the window is cropped to start
 // just after it, so nothing is present twice. One continuous timeline:
 // world -> STM summaries (older, summarised) -> verbatim window (recent) -> cue.
+
 $contextDataHistoric = chimAttachShortTermMemoryToWindow(
     $contextDataHistoric,
     $GLOBALS["HERIKA_NAME"],
@@ -2057,6 +2082,7 @@ $contextDataHistoric = chimAttachShortTermMemoryToWindow(
     $GLOBALS["HERIKA_NAME"] !== "The Narrator"
         && (!chimCompactChatEnabled() || chimShortTermMemoryInCompactChatEnabled())
 );
+
 
 // Info about location and npcs in first position
 // Check $nearbySections
@@ -2300,24 +2326,20 @@ if (!function_exists('isOghmaSettingEnabled')) {
     }
 }
 
-$minimeEnabled = isMinimeT5Enabled();
-$oghmaCustomEnabled = isOghmaSettingEnabled($GLOBALS["OGHMA_CUSTOM"] ?? false);
 $oghmaInfiniumEnabled = isOghmaSettingEnabled($GLOBALS["OGHMA_INFINIUM"] ?? false);
-$racialOghmaEnabled = isOghmaSettingEnabled($GLOBALS['RACIAL_OGHMA'] ?? true);
-$locationOghmaEnabled = isOghmaSettingEnabled($GLOBALS['LOCATION_OGHMA'] ?? true);
+$oghmaFallbackEnabled = isOghmaSettingEnabled(
+    $GLOBALS['OGHMA_EXTRACTOR_FALLBACK'] ?? ($GLOBALS['OGHMA_CUSTOM'] ?? false)
+);
 
 // Debug: Log the actual values being checked BEFORE the conditional
-error_log("[OGHMA CHECK] MINIME_T5(auto)=" . ($minimeEnabled ? 'Y' : 'N')
-    . " | OGHMA_CUSTOM=" . var_export($GLOBALS["OGHMA_CUSTOM"] ?? null, true)
-    . " (enabled=" . ($oghmaCustomEnabled ? 'Y' : 'N') . ")"
+error_log("[OGHMA CHECK] OGHMA_EXTRACTOR_FALLBACK=" . var_export($GLOBALS['OGHMA_EXTRACTOR_FALLBACK'] ?? null, true)
+    . " (enabled=" . ($oghmaFallbackEnabled ? 'Y' : 'N') . ")"
     . " | OGHMA_INFINIUM=" . var_export($GLOBALS["OGHMA_INFINIUM"] ?? null, true)
     . " (enabled=" . ($oghmaInfiniumEnabled ? 'Y' : 'N') . ")");
 
-if (($minimeEnabled || $oghmaCustomEnabled || $racialOghmaEnabled || $locationOghmaEnabled) && $oghmaInfiniumEnabled) {
-    if (!isset($GLOBALS["OGHMA_CALLED"])) {// Avoid double call
-        require(__DIR__."/processor/oghma.php");
-        $GLOBALS["OGHMA_CALLED"] = true;
-    }
+if (!isset($GLOBALS["OGHMA_CALLED"])) {// Avoid double call
+    require(__DIR__."/processor/oghma.php");
+    $GLOBALS["OGHMA_CALLED"] = true;
 }
 chimRequestPerformanceMark('oghma_ready');
 
@@ -2440,12 +2462,17 @@ if ($currentHold) {
     $rumorsText = build_rumor_prompt_xml($rumors);
 }
 
-// Narration-like requests should stay descriptive instead of drifting into
-// ordinary conversation turns.
-$isVisionRequest = $gameRequest[0] === "vision";
-if ($isVisionRequest) {
-    $GLOBALS["COMMAND_PROMPT"] = "Relay only the supplied Soulgaze image description. Never identify, position, or describe a person unless that information is explicit in the image description. Do not add facts from memory, biographies, prior dialogue, nearby actor data, current activities, or world knowledge. If the image description leaves a person's identity uncertain, keep them unnamed. Use the Talk action.";
-} else if ($gameRequest[0] === "narration" || $gameRequest[0] === "narrator_welcome") {
+$bookReadingActorName = function_exists('chimGetPromptCharacterName')
+    ? chimGetPromptCharacterName()
+    : ($GLOBALS["HERIKA_NAME"] ?? '');
+$bookReadingTask=bookReadIsNpcReading($bookReadingActorName);
+if ($bookReadingTask) {
+    $bookReadingTaskText="\n<current_task>\n#{$bookReadingActorName} is reading book '{$bookReadingTask}'\n</current_task>";
+} else {
+    $bookReadingTaskText="";
+}
+// Narration requests retain their descriptive response instruction.
+if ($gameRequest[0] === "narration" || $gameRequest[0] === "narrator_welcome") {
     $GLOBALS["COMMAND_PROMPT"] = "Respond with atmospheric narration only. Use the Talk action.";
 }
 
@@ -2490,6 +2517,7 @@ if (isset($GLOBALS["TTSFUNCTION"]) && !empty($GLOBALS["TTSFUNCTION"])) {
     $ttsMap = [
         'melotts' => 'MELOTTS',
         'xtts-fastapi' => 'XTTSFASTAPI',
+        'higgs' => 'HIGGS',
         'omnivoice' => 'OMNIVOICE',
         'chatterbox' => 'CHATTERBOX',
         'pockettts' => 'POCKETTTS',
@@ -2564,41 +2592,28 @@ if (!empty($GLOBALS["OGHMA_HINT"])) {
     $knowledgeSection = "\n\n<knowledge>\n" . $GLOBALS["OGHMA_HINT"] . "\n</knowledge>";
 }
 
-if ($isVisionRequest) {
-    $systemPromptRaw = "<roleplay_instructions>\nYou are #HERIKA_NAME#, explaining a Soulgaze image to #PLAYER_NAME#. The image description in the request is your only evidence about the depicted scene.\n</roleplay_instructions>" .
-        "\n\n<general_instructions>\n" . $GLOBALS["COMMAND_PROMPT"] .
-        "\n</general_instructions>" . $actionsList . $paralinguisticTagsPrompt . "\n";
-    $promptCompositionSections = [
-        'roleplay_instructions' => 'Soulgaze visual-only response role',
-        'general_instructions' => $GLOBALS["COMMAND_PROMPT"] ?? '',
-        'actions' => $actionsList ?? '',
-        'paralinguistic_tags' => $paralinguisticTagsPrompt ?? '',
-    ];
-    $contextDataFull = [];
-    $compactHistoryBlock = '';
-    $memoryInjectionCtx = [];
-} else {
-    $systemPromptRaw = "<roleplay_instructions>\n" . $GLOBALS["PROMPT_HEAD"] .
-        "\n</roleplay_instructions>" . $worldPrompt .
-        "\n\n<character>\n" . $GLOBALS["HERIKA_PERS"] . $dynamicBiography . $latestDiaryContext . $characterBottomInjections .
-        "\n</character>" . $knowledgeSection .
-        "\n\n<general_instructions>\n" . $GLOBALS["COMMAND_PROMPT"] .
-        "\n</general_instructions>" . $actionsList . $nearbySections . $promptBottomInjections . $paralinguisticTagsPrompt .
-        "\n" . $rumorsText . "\n";
+$systemPromptRaw = "<roleplay_instructions>\n" . $GLOBALS["PROMPT_HEAD"] .
+    "\n</roleplay_instructions>" . $worldPrompt .
+    "\n\n<character>\n" . $GLOBALS["HERIKA_PERS"] . $dynamicBiography . $latestDiaryContext . $characterBottomInjections .
+    "\n</character>" . $knowledgeSection .
+    "\n\n<general_instructions>\n" . $GLOBALS["COMMAND_PROMPT"] .
+    "\n</general_instructions>" . $actionsList . $nearbySections . $promptBottomInjections . $paralinguisticTagsPrompt .
+    "\n" . $rumorsText.
+    "\n" . $bookReadingTaskText . "\n";
 
-    $promptCompositionSections = [
-        'roleplay_instructions' => $GLOBALS["PROMPT_HEAD"] ?? '',
-        'world' => $worldPrompt ?? '',
-        'character' => ($GLOBALS["HERIKA_PERS"] ?? '') . ($dynamicBiography ?? '') . ($latestDiaryContext ?? '') . ($characterBottomInjections ?? ''),
-        'knowledge' => $knowledgeSection ?? '',
-        'general_instructions' => $GLOBALS["COMMAND_PROMPT"] ?? '',
-        'actions' => $actionsList ?? '',
-        'nearby_actors' => $nearbySections ?? '',
-        'plugin_injections' => $promptBottomInjections ?? '',
-        'paralinguistic_tags' => $paralinguisticTagsPrompt ?? '',
-        'rumors' => $rumorsText ?? '',
-    ];
-}
+$promptCompositionSections = [
+    'roleplay_instructions' => $GLOBALS["PROMPT_HEAD"] ?? '',
+    'world' => $worldPrompt ?? '',
+    'character' => ($GLOBALS["HERIKA_PERS"] ?? '') . ($dynamicBiography ?? '') . ($latestDiaryContext ?? '') . ($characterBottomInjections ?? ''),
+    'knowledge' => $knowledgeSection ?? '',
+    'general_instructions' => $GLOBALS["COMMAND_PROMPT"] ?? '',
+    'actions' => $actionsList ?? '',
+    'nearby_actors' => $nearbySections ?? '',
+    'plugin_injections' => $promptBottomInjections ?? '',
+    'paralinguistic_tags' => $paralinguisticTagsPrompt ?? '',
+    'rumors' => $rumorsText ?? '',
+    'book_reading_task' => $bookReadingTaskText ?? ''
+];
 
 $systemPrompt = chimFormatPromptXmlSections(
     strtr(
@@ -2742,9 +2757,7 @@ if ($gameRequest[0] == "funcret") {
     $contextData = array_merge($head, ($contextDataFull), $prompt);
     
 }
-if ($isVisionRequest) {
-    $contextData = chimBuildVisualOnlyVisionContext($head, strval($gameRequest[3] ?? ''));
-}
+
 chimRequestPerformanceMark('prompt_ready');
 
 

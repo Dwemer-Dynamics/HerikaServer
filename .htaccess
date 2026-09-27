@@ -4,3 +4,8 @@
     Header set Access-Control-Allow-Headers "X-Requested-With, Content-Type"
 </IfModule>
 
+# PHP and the transfer handler enforce the archive limits; Apache defaults to 1 GiB.
+<Files "playthrough_transfer.php">
+    LimitRequestBody 0
+</Files>
+

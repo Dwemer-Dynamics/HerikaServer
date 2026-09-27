@@ -3,6 +3,7 @@
 require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib/logger.php");
 require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib/settings.php");
 require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib/oghma_aliases.php");
+require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib/tts_pronunciation.php");
 
 $checkVersion = function($tablename) {
     global $db;
@@ -108,6 +109,10 @@ try {
     }
     if ($checkTableExists("core_tts_fallback") == -1) {
         $db->execQuery(file_get_contents(__DIR__."/../lib/core/database_schema/core_tts_fallback.sql"));
+        $db->execQuery("SET search_path TO public");
+    }
+    if ($checkTableExists("core_tts_pronunciation") == -1) {
+        chimEnsureTtsPronunciationDictionary();
         $db->execQuery("SET search_path TO public");
     }
     if ($checkTableExists("core_llm_connector") == -1) {
@@ -3481,157 +3486,43 @@ if (!$existsColumn || !$existsColumn[0]["column_name"]) {
     echo '<script>alert("A patch (add service column to core_llm_connector) has been applied to Database")</script>';
 }
 
-if ($checkVersion("core_llm_connector") < 20260423001) {
-    Logger::debug("Applying core_llm_connector 20260423001 - Seeding dedicated scene classifier connector");
-    try {
-        $sceneClassifierLabel = "Gemma 3N E4B";
-        $sceneClassifierLabelEscaped = $db->escape($sceneClassifierLabel);
-        $existingSceneClassifier = $db->fetchOne(
-            "SELECT id FROM public.core_llm_connector WHERE LOWER(COALESCE(label,'')) = LOWER('{$sceneClassifierLabelEscaped}') LIMIT 1"
-        );
-
-        if (!$existingSceneClassifier || !isset($existingSceneClassifier["id"])) {
-            $openRouterBadge = $db->fetchOne("SELECT id FROM public.core_api_badge WHERE LOWER(label) = 'openrouter' LIMIT 1");
-            $openRouterBadgeId = intval($openRouterBadge["id"] ?? 0);
-
-            $insertPayload = [
-                "label" => $sceneClassifierLabel,
-                "metadata" => "{}",
-                "url" => "https://openrouter.ai/api/v1/chat/completions",
-                "model" => "google/gemma-3n-e4b-it",
-                "provider" => "openrouter",
-                "driver" => "openrouterjson",
-                "max_tokens" => 128,
-                "enforce_json" => 1,
-                "prefill_json" => 0,
-                "json_schema" => 1,
-                "temperature" => 0.2,
-                "service" => "openrouter"
-            ];
-            if ($openRouterBadgeId > 0) {
-                $insertPayload["api_badge_id"] = $openRouterBadgeId;
-            }
-
-            $db->insert("public.core_llm_connector", $insertPayload);
-            Logger::info("Inserted dedicated scene classifier connector '{$sceneClassifierLabel}'");
-        } else {
-            Logger::info("Dedicated scene classifier connector already exists with ID " . intval($existingSceneClassifier["id"]));
-        }
-
-        $updateVersion("core_llm_connector", 20260423001);
-        Logger::info("Applied patch core_llm_connector 20260423001");
-    } catch (Exception $e) {
-        Logger::error("Error applying core_llm_connector 20260423001: " . $e->getMessage());
+// Supersede the legacy classifier seeds without resetting customized connectors.
+if ($checkVersion("core_llm_connector") < 20260919001) {
+    $migrationOk = $db->execQuery("
+        UPDATE public.core_llm_connector
+        SET model = 'google/gemma-3-4b-it', label = 'Gemma 3 4B'
+        WHERE model = 'google/gemma-3n-e4b-it'
+          AND url = 'https://openrouter.ai/api/v1/chat/completions'
+          AND driver = 'openrouterjson'
+          AND LOWER(label) IN (
+              'gemma 3n e4b', 'scene classifier (gemma 3n e4b)',
+              'scene classifier (gemini 2.5 flash lite)'
+          )
+    ") !== false;
+    if ($migrationOk) {
+        $migrationOk = $db->execQuery("
+            INSERT INTO public.core_llm_connector (
+                label, metadata, url, model, provider, driver, max_tokens,
+                enforce_json, prefill_json, api_badge_id, json_schema, temperature, service
+            )
+            SELECT 'Gemma 3 4B', '{}', 'https://openrouter.ai/api/v1/chat/completions',
+                   'google/gemma-3-4b-it', 'openrouter', 'openrouterjson', 128,
+                   1, 0, (SELECT id FROM public.core_api_badge WHERE LOWER(label) = 'openrouter' ORDER BY id LIMIT 1),
+                   1, 0.2, 'openrouter'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM public.core_llm_connector
+                WHERE LOWER(label) IN (
+                    'gemma 3 4b', 'gemma 3n e4b', 'scene classifier (gemma 3n e4b)',
+                    'scene classifier (gemini 2.5 flash lite)'
+                )
+            )
+        ") !== false;
     }
-}
-
-if ($checkVersion("core_llm_connector") < 20260423002) {
-    Logger::debug("Applying core_llm_connector 20260423002 - Migrating scene classifier default to Gemma 3N E4B");
-    try {
-        $sceneClassifierLabel = "Gemma 3N E4B";
-        $legacySceneClassifierLabel = "Scene Classifier (Gemma 3N E4B)";
-        $legacySceneClassifierLabel2 = "Scene Classifier (Gemini 2.5 Flash Lite)";
-        $sceneClassifierLabelEscaped = $db->escape($sceneClassifierLabel);
-        $legacySceneClassifierLabelEscaped = $db->escape($legacySceneClassifierLabel);
-        $legacySceneClassifierLabelEscaped2 = $db->escape($legacySceneClassifierLabel2);
-
-        $sceneClassifierRow = $db->fetchOne(
-            "SELECT id FROM public.core_llm_connector
-             WHERE LOWER(COALESCE(label,'')) = LOWER('{$sceneClassifierLabelEscaped}')
-                OR LOWER(COALESCE(label,'')) = LOWER('{$legacySceneClassifierLabelEscaped}')
-                OR LOWER(COALESCE(label,'')) = LOWER('{$legacySceneClassifierLabelEscaped2}')
-             ORDER BY id ASC
-             LIMIT 1"
-        );
-
-        $openRouterBadge = $db->fetchOne("SELECT id FROM public.core_api_badge WHERE LOWER(label) = 'openrouter' LIMIT 1");
-        $openRouterBadgeId = intval($openRouterBadge["id"] ?? 0);
-
-        $sceneClassifierPayload = [
-            "label" => $sceneClassifierLabel,
-            "metadata" => "{}",
-            "url" => "https://openrouter.ai/api/v1/chat/completions",
-            "model" => "google/gemma-3n-e4b-it",
-            "provider" => "openrouter",
-            "driver" => "openrouterjson",
-            "max_tokens" => 128,
-            "enforce_json" => 1,
-            "prefill_json" => 0,
-            "json_schema" => 1,
-            "temperature" => 0.2,
-            "service" => "openrouter"
-        ];
-        if ($openRouterBadgeId > 0) {
-            $sceneClassifierPayload["api_badge_id"] = $openRouterBadgeId;
-        }
-
-        if ($sceneClassifierRow && isset($sceneClassifierRow["id"])) {
-            $db->updateRow("public.core_llm_connector", $sceneClassifierPayload, "id=" . intval($sceneClassifierRow["id"]));
-            Logger::info("Updated dedicated scene classifier connector ID " . intval($sceneClassifierRow["id"]) . " to Gemma 3N E4B");
-        } else {
-            $db->insert("public.core_llm_connector", $sceneClassifierPayload);
-            Logger::info("Inserted dedicated scene classifier connector '{$sceneClassifierLabel}'");
-        }
-
-        $updateVersion("core_llm_connector", 20260423002);
-        Logger::info("Applied patch core_llm_connector 20260423002");
-    } catch (Exception $e) {
-        Logger::error("Error applying core_llm_connector 20260423002: " . $e->getMessage());
-    }
-}
-
-if ($checkVersion("core_llm_connector") < 20260423003) {
-    Logger::debug("Applying core_llm_connector 20260423003 - Shortening scene classifier connector label");
-    try {
-        $sceneClassifierLabel = "Gemma 3N E4B";
-        $legacySceneClassifierLabels = [
-            "Scene Classifier (Gemma 3N E4B)",
-            "Scene Classifier (Gemini 2.5 Flash Lite)"
-        ];
-
-        $conditions = [];
-        $conditions[] = "LOWER(COALESCE(label,'')) = LOWER('" . $db->escape($sceneClassifierLabel) . "')";
-        foreach ($legacySceneClassifierLabels as $legacyLabel) {
-            $conditions[] = "LOWER(COALESCE(label,'')) = LOWER('" . $db->escape($legacyLabel) . "')";
-        }
-
-        $sceneClassifierRow = $db->fetchOne(
-            "SELECT id FROM public.core_llm_connector WHERE " . implode(" OR ", $conditions) . " ORDER BY id ASC LIMIT 1"
-        );
-
-        $openRouterBadge = $db->fetchOne("SELECT id FROM public.core_api_badge WHERE LOWER(label) = 'openrouter' LIMIT 1");
-        $openRouterBadgeId = intval($openRouterBadge["id"] ?? 0);
-
-        $sceneClassifierPayload = [
-            "label" => $sceneClassifierLabel,
-            "metadata" => "{}",
-            "url" => "https://openrouter.ai/api/v1/chat/completions",
-            "model" => "google/gemma-3n-e4b-it",
-            "provider" => "openrouter",
-            "driver" => "openrouterjson",
-            "max_tokens" => 128,
-            "enforce_json" => 1,
-            "prefill_json" => 0,
-            "json_schema" => 1,
-            "temperature" => 0.2,
-            "service" => "openrouter"
-        ];
-        if ($openRouterBadgeId > 0) {
-            $sceneClassifierPayload["api_badge_id"] = $openRouterBadgeId;
-        }
-
-        if ($sceneClassifierRow && isset($sceneClassifierRow["id"])) {
-            $db->updateRow("public.core_llm_connector", $sceneClassifierPayload, "id=" . intval($sceneClassifierRow["id"]));
-            Logger::info("Renamed scene classifier connector ID " . intval($sceneClassifierRow["id"]) . " to '{$sceneClassifierLabel}'");
-        } else {
-            $db->insert("public.core_llm_connector", $sceneClassifierPayload);
-            Logger::info("Inserted dedicated scene classifier connector '{$sceneClassifierLabel}'");
-        }
-
-        $updateVersion("core_llm_connector", 20260423003);
-        Logger::info("Applied patch core_llm_connector 20260423003");
-    } catch (Exception $e) {
-        Logger::error("Error applying core_llm_connector 20260423003: " . $e->getMessage());
+    if ($migrationOk) {
+        $updateVersion("core_llm_connector", 20260919001);
+        Logger::info("Applied scene classifier model refresh 20260919001");
+    } else {
+        Logger::error("Failed to apply scene classifier model refresh 20260919001");
     }
 }
 
@@ -3640,13 +3531,17 @@ if ($checkTableExists("core_npc_master_history") == -1) {
 } else
     Logger::info(__FILE__." core_npc_master_history exists");
 
+// Key order must track restoreNPC()'s ORDER BY: newest game timestamp, then most recently
+// written. Renamed so existing installs rebuild it -- a plain CREATE INDEX IF NOT EXISTS
+// would silently keep the old key order under the same name.
+$db->execQuery("DROP INDEX IF EXISTS public.idx_core_npc_master_history_restore");
 $db->execQuery(
-    "CREATE INDEX IF NOT EXISTS idx_core_npc_master_history_restore
+    "CREATE INDEX IF NOT EXISTS idx_core_npc_master_history_restore_v2
      ON public.core_npc_master_history (
          npc_id,
          gamets_last_updated DESC NULLS LAST,
-         (CASE WHEN extended_data ->> '_chim_history_source' = 'infosave' THEN 1 ELSE 0 END) DESC,
-         created DESC
+         created DESC,
+         history_id DESC
      )"
 );
 
@@ -3779,6 +3674,7 @@ try {
         ["name"=>"core_llm_connector","file"=>__DIR__."/../lib/core/database_schema/core_llm_connector.sql"],
         ["name"=>"core_tts_connector","file"=>__DIR__."/../lib/core/database_schema/core_tts_connector.sql"],
         ["name"=>"core_tts_fallback","file"=>__DIR__."/../lib/core/database_schema/core_tts_fallback.sql"],
+        ["name"=>"core_tts_pronunciation","file"=>__DIR__."/../lib/core/database_schema/core_tts_pronunciation.sql"],
         ["name"=>"core_stt_connector","file"=>__DIR__."/../lib/core/database_schema/core_stt_connector.sql"],
         ["name"=>"core_profiles",     "file"=>__DIR__."/../lib/core/database_schema/core_profiles.sql"],
         ["name"=>"core_npc_master",   "file"=>__DIR__."/../lib/core/database_schema/core_npc_master.sql"]
@@ -3789,6 +3685,7 @@ try {
             $db->execQuery(file_get_contents($t["file"]));
         }
     }
+    chimEnsureTtsPronunciationDictionary();
 } catch (Exception $e) {
     Logger::error("Final repair pass failed: ".$e->getMessage());
 }
@@ -3945,6 +3842,8 @@ if ($checkVersion("bio_templates_seed")<20250913001) {
 
 // Always (re)create combined view once base tables exist
 try {
+    $db->execQuery("ALTER TABLE public.bio_templates ADD COLUMN IF NOT EXISTS tts_filter_preset TEXT");
+    $db->execQuery("ALTER TABLE public.bio_templates_custom ADD COLUMN IF NOT EXISTS tts_filter_preset TEXT");
     $db->execQuery("DROP VIEW IF EXISTS public.combined_bio_templates CASCADE;");
     $db->execQuery("
         CREATE VIEW public.combined_bio_templates AS
@@ -3962,7 +3861,7 @@ try {
                c.voiceid,
                c.gender,
                c.race,
-               c.refid
+               c.refid, c.tts_filter_preset
           FROM public.bio_templates_custom c
         UNION ALL
         SELECT b.npc_name,
@@ -3979,7 +3878,7 @@ try {
                b.voiceid,
                b.gender,
                b.race,
-               b.refid
+               b.refid, b.tts_filter_preset
           FROM (public.bio_templates b
                 LEFT JOIN public.bio_templates_custom c
                   ON ((b.npc_name)::text = (c.npc_name)::text))
@@ -6244,6 +6143,10 @@ if ($checkVersion("general_settings") < 20260502003) {
     try {
         $managedDescriptions = chimGetManagedGeneralSettingDescriptions();
         foreach (chimGetManagedGeneralSettingIds() as $settingId) {
+            // SNQE slots are initialized after legacy connector assignments have been migrated.
+            if (strpos($settingId, 'CORE_CONNECTOR_QUEST_') === 0) {
+                continue;
+            }
             $definition = chimGetSchemaDefinition($settingId);
             $hasLegacyValue = chimReadLegacyGlobalValue($settingId, "__CHIM_SETTING_MISSING__");
             if ($hasLegacyValue === "__CHIM_SETTING_MISSING__") {
@@ -7002,6 +6905,91 @@ if ($checkVersion("core_action") < 20260825001) {
     }
 }
 
+if ($checkVersion("core_action") < 20260901001) {
+    Logger::debug("Applying core_action 20260901001 - add equipment and book reading custom actions");
+
+    $migrationOk = $db->execQuery(<<<'SQL'
+INSERT INTO public.core_action_custom (
+    code_name, action_name, description, return_message,
+    available_to_npc, available_to_followers, available_to_narrator,
+    is_activated, parameters_json, metadata, game_function,
+    import_version, script_proxy_program
+) VALUES
+    (
+        'EquipGear',
+        'Equip_Gear',
+        'Equips one piece of gear or cloth.',
+        '#HERIKA_NAME# puts #ITEM#',
+        TRUE, TRUE, FALSE, TRUE,
+        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact baseID from <inventory> tag (e.g., 0x12345). Must match format exactly."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+        '{}'::jsonb,
+        TRUE, 0, '{}'::jsonb
+    ),
+    (
+        'ReadBook',
+        'Read_Book',
+        'Reads or resumes a book aloud for #PLAYER_NAME#. The server supplies the exact book text on a later turn, so reply with one short acknowledgement and nothing more. Never invent, summarize, or quote book content.',
+        '#HERIKA_NAME# starts reading book.',
+        TRUE, TRUE, TRUE, TRUE,
+        '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Pick only a readable book, note, letter, or journal. Use its exact BaseID:BookTitle if it appears in <inventory>; otherwise use only the closest title words from #PLAYER_NAME#''s request. Never substitute armor, food, another item, or the first inventory entry."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+        '{}'::jsonb,
+        TRUE, 0, '{}'::jsonb
+    )
+ON CONFLICT (code_name) DO NOTHING
+SQL
+    ) !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20260901001);
+        Logger::info("Applied patch core_action 20260901001");
+    } else {
+        Logger::error("Failed to apply patch core_action 20260901001");
+    }
+}
+
+if ($checkVersion("core_action") < 20260901002) {
+    Logger::debug("Applying core_action 20260901002 - clarify book reading handoff");
+
+    $migrationOk = $db->execQuery(<<<'SQL'
+UPDATE public.core_action_custom
+   SET description = 'Reads or resumes a book aloud for #PLAYER_NAME#. The server supplies the exact book text on a later turn, so reply with one short acknowledgement and nothing more. Never invent, summarize, or quote book content.',
+       parameters_json = '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from the <inventory> tag when the book is listed (e.g., 0x0001AFD5:The Real Barenziah). Otherwise send title words only, as close to the real title as #PLAYER_NAME#''s request allows, and the server will look it up in inventory."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+       updated_at = NOW()
+ WHERE code_name = 'ReadBook'
+   AND description = 'Initiate request to read a book. Reads (or continue reading) a book aloud for #PLAYER_NAME#. Book contents will be provided in next turn.'
+   AND parameters_json = '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from <inventory> when available. A title alone works only when the book is already cached by the server."},"target":{"type":"string","description":"leave empty"}}}'::jsonb
+SQL
+    ) !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20260901002);
+        Logger::info("Applied patch core_action 20260901002");
+    } else {
+        Logger::error("Failed to apply patch core_action 20260901002");
+    }
+}
+
+if ($checkVersion("core_action") < 20260902001) {
+    Logger::debug("Applying core_action 20260902001 - prevent invalid ReadBook item substitution");
+
+    $migrationOk = $db->execQuery(<<<'SQL'
+UPDATE public.core_action_custom
+   SET parameters_json = '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Pick only a readable book, note, letter, or journal. Use its exact BaseID:BookTitle if it appears in <inventory>; otherwise use only the closest title words from #PLAYER_NAME#''s request. Never substitute armor, food, another item, or the first inventory entry."},"target":{"type":"string","description":"leave empty"}}}'::jsonb,
+       updated_at = NOW()
+ WHERE code_name = 'ReadBook'
+   AND description = 'Reads or resumes a book aloud for #PLAYER_NAME#. The server supplies the exact book text on a later turn, so reply with one short acknowledgement and nothing more. Never invent, summarize, or quote book content.'
+   AND parameters_json = '{"type":"object","required":["item"],"properties":{"item":{"type":"string","description":"REQUIRED: Exact BaseID:BookTitle from the <inventory> tag when the book is listed (e.g., 0x0001AFD5:The Real Barenziah). Otherwise send title words only, as close to the real title as #PLAYER_NAME#''s request allows, and the server will look it up in inventory."},"target":{"type":"string","description":"leave empty"}}}'::jsonb
+SQL
+    ) !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20260902001);
+        Logger::info("Applied patch core_action 20260902001");
+    } else {
+        Logger::error("Failed to apply patch core_action 20260902001");
+    }
+}
+
 //----------------------------------------------------
 
 // Relationship Evaluation and Initialization Queues
@@ -7518,6 +7506,42 @@ if ($checkVersion("general_settings") < 20260825001) {
     if ($b_ok) {
         $updateVersion("general_settings", 20260825001);
         Logger::info("Applied patch general_settings 20260825001");
+    }
+}
+
+// Give SNQE independent assignments once, preserving saved choices on upgrades and retries.
+if ($checkVersion("general_settings") < 20260919001) {
+    $questConnectorSources = [
+        'CORE_CONNECTOR_QUEST_CREATION' => 'CORE_CONNECTOR_MEDIUMTERM',
+        'CORE_CONNECTOR_QUEST_ENGINE' => 'CORE_CONNECTOR_DIRECTOR',
+        'CORE_CONNECTOR_QUEST_CREATION_ENABLED' => 'CORE_CONNECTOR_MEDIUMTERM_ENABLED',
+        'CORE_CONNECTOR_QUEST_ENGINE_ENABLED' => 'CORE_CONNECTOR_DIRECTOR_ENABLED',
+    ];
+    $migrationOk = true;
+    foreach ($questConnectorSources as $settingId => $sourceId) {
+        $default = chimReadLegacyGlobalValue($sourceId, '');
+        $value = chimGetGeneralSetting($sourceId, chimSettingsStringifyValue($default));
+        // The complete engine pipeline previously required both legacy connectors.
+        if ($settingId === 'CORE_CONNECTOR_QUEST_ENGINE_ENABLED') {
+            $memoryAvailable = chimGetGeneralSettingBool('CORE_CONNECTOR_MEDIUMTERM_ENABLED',
+                (bool) chimReadLegacyGlobalValue('CORE_CONNECTOR_MEDIUMTERM_ENABLED', true));
+            $value = chimSettingsStringifyValue(
+                chimSettingsNormalizeScalar($value, ['type' => 'boolean']) && $memoryAvailable
+            );
+        }
+        $idSql = $db->escapeLiteral($settingId);
+        $valueSql = $db->escapeLiteral($value);
+        $descriptionSql = $db->escapeLiteral(chimGetSchemaDescription($settingId));
+        if ($db->execQuery("INSERT INTO public.general_settings (id, value, description, updated_at)
+            VALUES ($idSql, $valueSql, $descriptionSql, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO NOTHING") === false) {
+            $migrationOk = false;
+        }
+    }
+    if ($migrationOk) {
+        $updateVersion("general_settings", 20260919001);
+    } else {
+        Logger::error('Failed to initialize SNQE connector settings; retry the database update.');
     }
 }
 
@@ -8044,7 +8068,30 @@ if ($checkVersion("latest_diary_context") < 20260727001) {
 if ($checkVersion("faction_vanilla") < 20260803001) {
     Logger::debug("Applying faction_vanilla 20260803001 - some description fixes for vanilla factions");
 
-    $migrationOk = $db->execQuery(file_get_contents(__DIR__."/../data/factions_vanilla.sql")) !== false;
+    // Stage the canonical seed so existing faction tables can be updated without losing custom rows.
+    $factionSeed = file_get_contents(__DIR__."/../data/factions_vanilla.sql");
+    $migrationOk = false;
+    if ($factionSeed !== false) {
+        $factionSeed = str_replace('public.faction_vanilla', 'pg_temp.chim_faction_vanilla_seed', $factionSeed);
+        // One pg_query batch keeps seed changes atomic and releases the lock on failure.
+        $migrationOk = $db->execQuery($factionSeed . <<<'SQL'
+
+CREATE TABLE IF NOT EXISTS public.faction_vanilla (name text, formid text);
+ALTER TABLE public.faction_vanilla OWNER TO dwemer;
+LOCK TABLE public.faction_vanilla IN SHARE ROW EXCLUSIVE MODE;
+UPDATE public.faction_vanilla AS existing
+SET name = seed.name
+FROM pg_temp.chim_faction_vanilla_seed AS seed
+WHERE existing.formid = seed.formid AND existing.name IS DISTINCT FROM seed.name;
+INSERT INTO public.faction_vanilla (name, formid)
+SELECT seed.name, seed.formid FROM pg_temp.chim_faction_vanilla_seed AS seed
+WHERE NOT EXISTS (
+    SELECT 1 FROM public.faction_vanilla AS existing WHERE existing.formid = seed.formid
+);
+DROP TABLE pg_temp.chim_faction_vanilla_seed;
+SQL
+        ) !== false;
+    }
 
     if ($migrationOk) {
         $updateVersion("faction_vanilla", 20260803001);
@@ -8144,9 +8191,149 @@ if ($migrationOk) {
     Logger::error("Failed to apply eventlog_session_payload migration; existing views were preserved");
 }
 
+if ($checkVersion("default_npc_tags") < 20260814001) {
+    $migrationPath = __DIR__ . "/../data/canonical_npc_knowledge_tags_20260814.sql";
+    if (is_readable($migrationPath) && $db->execQuery(file_get_contents($migrationPath)) !== false) {
+        $updateVersion("default_npc_tags", 20260814001);
+        Logger::info("Applied patch default_npc_tags 20260814001");
+    } else {
+        Logger::error("Failed to apply patch default_npc_tags 20260814001");
+    }
+}
+
+if ($checkVersion("oghma_catalog") < 20260827001) {
+    require_once dirname(__DIR__) . "/lib/oghma_catalog.php";
+    try {
+        // Validate the package first, then upgrade schema and factory data atomically.
+        // Custom articles and edited legacy rows remain intact.
+        $oghmaCatalog = new ChimOghmaCatalogManager($db, dirname(__DIR__));
+        $oghmaCatalog->provisionActivePackage(false, true);
+        $updateVersion("oghma_catalog", 20260827001);
+        Logger::info("Applied Oghma catalog 20260827001");
+    } catch (Throwable $error) {
+        Logger::error("Oghma catalog update failed: " . $error->getMessage());
+    }
+}
+
+if ($checkVersion("core_tts_pronunciation") < 20260829003) {
+    Logger::debug("Applying core_tts_pronunciation 20260829003 - expand Skyrim pronunciation defaults");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260829003);
+        Logger::info("Applied patch core_tts_pronunciation 20260829003");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260829003");
+    }
+}
+
+if ($checkVersion("core_tts_pronunciation") < 20260829004) {
+    Logger::debug("Applying core_tts_pronunciation 20260829004 - retire selected Skyrim defaults");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+    if ($migrationOk) {
+        $migrationOk = $GLOBALS['db']->execQuery(
+            "DELETE FROM public.core_tts_pronunciation
+             WHERE is_builtin = TRUE
+               AND LOWER(BTRIM(source_text)) IN ('aetherius', 'balgruuf')"
+        ) !== false;
+    }
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260829004);
+        Logger::info("Applied patch core_tts_pronunciation 20260829004");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260829004");
+    }
+}
+
+if ($checkVersion("core_tts_pronunciation") < 20260901001) {
+    Logger::debug("Applying core_tts_pronunciation 20260901001 - unhyphenate built-in spoken values");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+    if ($migrationOk) {
+        $migrationOk = chimUnhyphenateBuiltinTtsPronunciations();
+    }
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260901001);
+        Logger::info("Applied patch core_tts_pronunciation 20260901001");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260901001");
+    }
+}
+
+if ($checkVersion("core_tts_pronunciation") < 20260901002) {
+    Logger::debug("Applying core_tts_pronunciation 20260901002 - preserve deleted built-in pronunciations");
+
+    $migrationOk = chimEnsureTtsPronunciationDictionary();
+
+    if ($migrationOk) {
+        $updateVersion("core_tts_pronunciation", 20260901002);
+        Logger::info("Applied patch core_tts_pronunciation 20260901002");
+    } else {
+        Logger::error("Failed to apply patch core_tts_pronunciation 20260901002");
+    }
+}
+
+if ($checkVersion('responselog_interaction') < 20260912001) {
+    if ($GLOBALS['db']->query('ALTER TABLE public.responselog ADD COLUMN IF NOT EXISTS interaction_generation bigint')) {
+        $updateVersion('responselog_interaction', 20260912001);
+    }
+}
+
 Logger::info(__FILE__." update file processed");
 
 //----------------------------------------------------
         
 Logger::info(__FILE__." update file processed. This file has ".__LINE__." lines.");
+
+// Add plugin storage before refreshing the schema used to upgrade older playthroughs.
+if ($checkVersion('npc_plugin_extended_data') < 20260919001) {
+    if (!$GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/core/database_schema/plugin_extended_data.sql'))) {
+        throw new RuntimeException('NPC plugin data migration failed.');
+    }
+    $updateVersion('npc_plugin_extended_data', 20260919001);
+}
+
+// Install durable event accounting before refreshing the snapshot schema.
+if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_profile_scheduler.sql')) === false) {
+    throw new RuntimeException('Dynamic profile migration failed.');
+}
+
+// Keep the installed snapshot functions and pgAdmin comments aligned with the current table policy.
+require_once dirname(__DIR__) . '/lib/playthrough_schema.php';
+require_once dirname(__DIR__) . '/lib/playthrough_preferences.php';
+require_once dirname(__DIR__) . '/lib/playthrough_retention.php';
+$playthroughPolicyConn = ptp_connect();
+if ($playthroughPolicyConn) {
+    try {
+        // Upgrade existing metadata before the first save/import; fresh setup also uses this helper.
+        ptr_ensure_schema($playthroughPolicyConn);
+        if (!pts_update_playthrough_policy($playthroughPolicyConn)) {
+            Logger::error('Playthrough Save table policy update failed; retry the database update.');
+        }
+    } finally { pg_close($playthroughPolicyConn); }
+} else {
+    Logger::error('Cannot connect to update the Playthrough Save table policy.');
+}
+
+
+// Retire Relax from existing catalogs as well as fresh seeds.
+if ($checkVersion('core_action_retire_relax') < 20260927001) {
+    $db->execQuery('BEGIN');
+    try {
+        if ($db->execQuery("DELETE FROM public.core_action_custom WHERE code_name='Relax'") === false
+            || $db->execQuery("DELETE FROM public.core_action WHERE code_name='Relax'") === false) {
+            throw new RuntimeException('Could not retire Relax');
+        }
+        $updateVersion('core_action_retire_relax', 20260927001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Relax retirement failed: ' . $e->getMessage());
+    }
+}
+
 ?>

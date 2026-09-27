@@ -9,6 +9,61 @@ function herikaActionGroupsGetSpecs()
     }
 
     $specs = [
+        'GroupedObserve' => [
+            'action_name' => 'Observe',
+            'description' => 'Inspect an actor, look around, or check your own inventory. Select the scope with mode.',
+            'selector' => 'mode',
+            'variants' => [
+                'actor' => 'Inspect',
+                'surroundings' => 'InspectSurroundings',
+                'inventory' => 'CheckInventory',
+            ],
+            'parameters' => [
+                'type' => 'object',
+                'required' => ['mode'],
+                'properties' => [
+                    'mode' => ['type' => 'string', 'description' => 'Behavior to perform.'],
+                    'target' => ['type' => 'string', 'description' => 'Required for actor mode: exact nearby actor name and reference when available. Otherwise leave blank.'],
+                    'item' => ['type' => 'string', 'description' => 'Optional inventory search text for inventory mode; blank lists all items.'],
+                ],
+                'additionalProperties' => false,
+            ],
+        ],
+        'GroupedRest' => [
+            'action_name' => 'Rest',
+            'description' => 'Sit on nearby seating or go to sleep. Select sit or sleep with mode.',
+            'selector' => 'mode',
+            'variants' => [
+                'sit' => 'TakeASeat',
+                'sleep' => 'GoToSleep',
+            ],
+            'parameters' => [
+                'type' => 'object',
+                'required' => ['mode'],
+                'properties' => [
+                    'mode' => ['type' => 'string', 'description' => 'Behavior to perform.'],
+                ],
+                'additionalProperties' => false,
+            ],
+        ],
+        'GroupedTravel' => [
+            'action_name' => 'Travel',
+            'description' => 'Travel to a recognised destination or return home. Select destination or home with mode.',
+            'selector' => 'mode',
+            'variants' => [
+                'destination' => 'TravelTo',
+                'home' => 'ReturnBackHome',
+            ],
+            'parameters' => [
+                'type' => 'object',
+                'required' => ['mode'],
+                'properties' => [
+                    'mode' => ['type' => 'string', 'description' => 'Behavior to perform.'],
+                    'target' => ['type' => 'string', 'description' => 'Required for destination mode: the recognised destination location name. Leave blank for home.'],
+                ],
+                'additionalProperties' => false,
+            ],
+        ],
         'GroupedHandleCrime' => [
             'action_name' => 'Handle_Crime',
             'description' => 'Choose one guard response to the player\'s crime with mode. For add_bounty, put the crime type in item and a Custom gold value in amount.',
@@ -364,7 +419,18 @@ function herikaActionGroupsResolveExecution($groupCode, $parameter)
     $selectedCode = '';
     $legacyParameter = '';
 
-    if ($groupCode === 'GroupedHandleCrime') {
+    if (in_array($groupCode, ['GroupedObserve', 'GroupedRest', 'GroupedTravel'], true)) {
+        $mode = herikaActionGroupsNormalizeChoice($payload['mode'] ?? '');
+        $selectedCode = strval($variants[$mode] ?? '');
+        if ($selectedCode === '') $missing[] = 'available mode';
+        if ($groupCode === 'GroupedObserve' && $mode === 'inventory') {
+            $legacyParameter = trim(strval($payload['item'] ?? ''));
+        }
+        if (($groupCode === 'GroupedObserve' && $mode === 'actor') || ($groupCode === 'GroupedTravel' && $mode === 'destination')) {
+            $legacyParameter = trim(strval($payload['target'] ?? ''));
+            if ($legacyParameter === '') $missing[] = 'target';
+        }
+    } elseif ($groupCode === 'GroupedHandleCrime') {
         $outcome = herikaActionGroupsNormalizeChoice($payload['mode'] ?? ($payload['outcome'] ?? ($payload['target'] ?? '')));
         if ($outcome === 'pay_bounty') {
             $outcome = 'collect_bounty_payment';
