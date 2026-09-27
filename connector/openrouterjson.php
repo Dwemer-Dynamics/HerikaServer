@@ -914,6 +914,11 @@ class openrouterjson
         return fopen($url, 'r', false, $context);
     }
 
+    public function getHttpStatusCode() {
+        return $this->recoveryStatus;
+    }
+    
+
     public function process()
     {
         global $alreadysent;
