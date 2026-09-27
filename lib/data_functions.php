@@ -5971,6 +5971,8 @@ function call_llm_internal() {
     }
 
     if (property_exists($connectionHandler, 'recoveryPoll')) $connectionHandler->recoveryPoll = $abortForSupersedingUserInput;
+    $diagnosticIndex = $GLOBALS['CHIM_PROVIDER_DIAGNOSTIC_INDEX'] ?? null;
+    if ($diagnosticIndex !== null) $GLOBALS['CHIM_REQUEST_PERFORMANCE']['providers'][$diagnosticIndex]['_handler'] = $connectionHandler;
     $connectionHandler->open($contextData,$overrideParameters);
     $connectionOpened = $connectionHandler->primary_handler !== false;
     snapshot_response_prompt_debug_data();

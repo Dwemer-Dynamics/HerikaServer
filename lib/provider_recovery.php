@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/request_performance.php';
 
 // Optional installation-wide health cache. Locks protect both updates and single recovery probes.
 final class ChimProviderHealth
@@ -6,6 +7,9 @@ final class ChimProviderHealth
     private string $key;
     private ?string $probe = null;
     private string $path;
+    private array $diagnostic = ['state' => 'ready', 'retry_in_s' => 0];
+
+    public function diagnostics(): array { return $this->diagnostic; }
 
     public function __construct(array $connector, ?string $path = null)
     {
@@ -39,7 +43,10 @@ final class ChimProviderHealth
             } finally { umask($mask); }
             if (!$handle) throw new RuntimeException('Cannot open provider health state');
             // Contention is not cache failure: skip this candidate rather than duplicate a probe.
-            if (!flock($handle, LOCK_EX | LOCK_NB)) return false;
+            if (!flock($handle, LOCK_EX | LOCK_NB)) {
+                $this->diagnostic = ['state' => 'busy', 'retry_in_s' => 0];
+                return false;
+            }
             $raw = stream_get_contents($handle);
             $state = $raw === '' ? [] : json_decode($raw, true);
             if (!is_array($state)) throw new RuntimeException('Invalid provider health state');
@@ -49,6 +56,12 @@ final class ChimProviderHealth
             }
             $entry = $state[$this->key] ?? ['failures' => 0, 'until' => 0, 'lease' => 0];
             $result = $change($entry, $now);
+            $this->diagnostic = ['state' => 'ready', 'retry_in_s' => 0];
+            if (($entry['until'] ?? 0) > $now) {
+                $this->diagnostic = ['state' => 'cooldown', 'retry_in_s' => $entry['until'] - $now];
+            } elseif (($entry['lease'] ?? 0) > $now) {
+                $this->diagnostic = ['state' => 'probe', 'retry_in_s' => $entry['lease'] - $now];
+            }
             $entry['updated'] = $now;
             unset($state[$this->key]);
             $state[$this->key] = $entry;
@@ -60,6 +73,7 @@ final class ChimProviderHealth
             }
             return $result;
         } catch (Throwable $e) {
+            $this->diagnostic = ['state' => 'unavailable', 'retry_in_s' => 0];
             error_log('[PROVIDER_RECOVERY] ' . $e->getMessage() . '; using ordinary fallback');
             return true;
         } finally { if (is_resource($handle)) fclose($handle); }
@@ -120,10 +134,13 @@ function chimCallWithProviderRecovery(callable $attempt): bool
     }
     $attempted = false;
     $success = false;
+    $selectionReason = null;
     $GLOBALS['CHIM_PROVIDER_RECOVERY_HANDLED'] = false;
     try {
         foreach (array_filter([$original, $fallback]) as $candidate) {
             chimInteractionRequire();
+            $diagnostic = chimProviderDiagnosticBegin($candidate, $candidate['id'] == $original['id'] ? 'primary' : 'fallback', $selectionReason);
+            $GLOBALS['CHIM_PROVIDER_DIAGNOSTIC_INDEX'] = $diagnostic;
             $GLOBALS['CHIM_CORE_CURRENT_CONNECTOR_DATA'] = $candidate;
             $connector->setOldGlobals($candidate);
             $supported = in_array($candidate['driver'], ['openaijson', 'openrouterjson'], true);
@@ -131,7 +148,10 @@ function chimCallWithProviderRecovery(callable $attempt): bool
             $health = null;
             if ($supported && $fallback) {
                 $health = new ChimProviderHealth([$candidate, $GLOBALS['CONNECTOR'][$candidate['driver']] ?? []]);
+                if ($diagnostic !== null) $GLOBALS['CHIM_REQUEST_PERFORMANCE']['providers'][$diagnostic]['_health'] = $health;
                 if (!$health->begin(max((int)($GLOBALS['HTTP_TIMEOUT'] ?? 30), !empty($candidate['reasoning_model']) ? 90 : 30))) {
+                    $selectionReason = $health->diagnostics()['state'];
+                    chimProviderDiagnosticEnd($diagnostic, 'skipped', $selectionReason);
                     error_log('[PROVIDER_RECOVERY] Connector ' . $candidate['id'] . ' cooling down');
                     continue;
                 }
@@ -146,8 +166,11 @@ function chimCallWithProviderRecovery(callable $attempt): bool
             $state = $GLOBALS['CHIM_PROVIDER_ATTEMPT'];
             $handler = $state['handler'];
             $status = $handler && method_exists($handler, 'getHttpStatusCode') ? (int)$handler->getHttpStatusCode() : 0;
+            if ($diagnostic !== null) $GLOBALS['CHIM_REQUEST_PERFORMANCE']['providers'][$diagnostic]['http_status'] = $status ?: null;
             $transient = $status === 0 || $status === 408 || $status === 429 || $status >= 500 || ($status < 300 && $supported);
             if ($health) $health->finish($success ? true : ($transient ? false : null), $handler && method_exists($handler, 'recoveryRetryAfter') ? $handler->recoveryRetryAfter() : 0);
+            $selectionReason = $status >= 300 ? 'http_' . $status : $state['failure'];
+            chimProviderDiagnosticEnd($diagnostic, $success ? 'success' : 'failed', $success ? null : $selectionReason);
             if ($success) return true;
             error_log('[PROVIDER_RECOVERY] Connector ' . ($candidate['id'] ?? '?') . ' failed: ' . $state['failure'] . ' HTTP ' . $status);
             if ($state['committed']) { $GLOBALS['ERROR_TRIGGERED'] = true; return false; }
@@ -170,5 +193,6 @@ function chimCallWithProviderRecovery(callable $attempt): bool
             if ($saved[$key][0]) $GLOBALS[$key] = $saved[$key][1]; else unset($GLOBALS[$key]);
         }
         unset($GLOBALS['CHIM_PROVIDER_ATTEMPT']);
+        unset($GLOBALS['CHIM_PROVIDER_DIAGNOSTIC_INDEX']);
     }
 }

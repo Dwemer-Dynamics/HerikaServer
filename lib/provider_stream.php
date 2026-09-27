@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/request_performance.php';
 
 // Bounded reads shared by the JSON dialogue connectors; fast_request keeps its own transport.
 trait ChimProviderStream
@@ -12,9 +13,19 @@ trait ChimProviderStream
     private bool $recoveryRefused = false;
     public ?string $recoveryFailure = null;
     public $recoveryPoll = null;
+    private float $diagnosticStart = 0;
+    private ?float $diagnosticFirstToken = null;
+    private ?float $diagnosticFirstContent = null;
+    private ?string $diagnosticProvider = null;
+    private ?string $diagnosticMode = null;
 
     private function recoveryStart(int $timeout): void
     {
+        $this->diagnosticStart = chimRequestPerformanceNow();
+        $this->diagnosticFirstToken = null;
+        $this->diagnosticFirstContent = null;
+        $this->diagnosticProvider = null;
+        $this->diagnosticMode = null;
         $this->recoveryDeadline = microtime(true) + $timeout;
         $this->recoveryNextPoll = 0;
         $this->recoveryStatus = 0;
@@ -89,13 +100,31 @@ trait ChimProviderStream
 
     private function recoveryObserve(string $line, bool $whole = false): void
     {
+        $this->diagnosticMode = $whole ? 'buffered' : 'streaming';
         $payload = trim($line);
         if (str_starts_with($payload, 'data:')) $payload = trim(substr($payload, 5));
         if ($payload === '[DONE]') { $this->recoveryCompleted = true; return; }
         $data = json_decode($payload, true);
         if (!is_array($data)) return;
+        // Only use a provider explicitly named by the response; never infer an upstream from the model.
+        if (is_string($data['provider'] ?? null) && preg_match('/^[\pL\pN ._\/-]{1,80}$/u', $data['provider'])) {
+            $this->diagnosticProvider = $data['provider'];
+        }
         if (isset($data['error'])) { $this->recoveryFailure = 'provider'; return; }
         $choice = $data['choices'][0] ?? [];
+        $delta = $choice['delta'] ?? $choice['message'] ?? [];
+        if (is_array($delta)) {
+            $content = (is_string($delta['content'] ?? null) && $delta['content'] !== '')
+                || (is_array($delta['content'] ?? null) && count($delta['content']) > 0);
+            $token = $content || !empty($delta['reasoning']) || !empty($delta['reasoning_content'])
+                || !empty($delta['reasoning_details']) || !empty($delta['tool_calls']) || !empty($delta['refusal']);
+            if (!$whole && $token && $this->diagnosticFirstToken === null) {
+                $this->diagnosticFirstToken = round(max(0, chimRequestPerformanceNow() - $this->diagnosticStart) * 1000, 2);
+            }
+            if ($content && $this->diagnosticFirstContent === null) {
+                $this->diagnosticFirstContent = round(max(0, chimRequestPerformanceNow() - $this->diagnosticStart) * 1000, 2);
+            }
+        }
         if (isset($choice['finish_reason']) || ($whole && isset($choice['message']))) $this->recoveryCompleted = true;
         if (!empty($choice['delta']['refusal']) || !empty($choice['message']['refusal'])
             || ($choice['finish_reason'] ?? '') === 'content_filter') $this->recoveryRefused = true;
@@ -105,6 +134,12 @@ trait ChimProviderStream
     {
         return $this->recoveryFailure !== null || ($this->recoveryPending === ''
             && ($this->recoveryCompleted || !is_resource($this->primary_handler) || feof($this->primary_handler)));
+    }
+
+    public function providerDiagnostics(): array
+    {
+        return ['ttft_ms' => $this->diagnosticFirstToken, 'first_content_ms' => $this->diagnosticFirstContent,
+            'upstream_provider' => $this->diagnosticProvider, 'response_mode' => $this->diagnosticMode];
     }
 
     public function recoveryUsable(): bool
