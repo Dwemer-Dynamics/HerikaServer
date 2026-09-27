@@ -22,6 +22,7 @@ require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPA
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "itt_connector.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "api_badge.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "local_llm_setup.php");
+require_once($enginePath . 'lib/connector_capability_test.php');
 
 if (!isset($GLOBALS["db"])) {
     $GLOBALS["db"] = new sql();
@@ -424,6 +425,9 @@ function profileConnectorTestsTestLlm(int $connectorId): array
 
     $run = profileConnectorTestsRunWithCapturedErrors(function () use ($llm, $connector, $driver) {
         $GLOBALS["HERIKA_NAME"] = 'CHIM Profile Test';
+        $GLOBALS["HERIKA_PERS"] = 'A connection test character.';
+        $GLOBALS['DIRECT_NARRATOR_DIALOGUE'] = false;
+        $GLOBALS['gameRequest'] = ['connector_test', 0, 0, ''];
         $GLOBALS["PLAYER_NAME"] = $GLOBALS["PLAYER_NAME"] ?? 'Dragonborn';
         $GLOBALS["DEBUG_DATA"] = [];
         $GLOBALS["FUNCTIONS_ARE_ENABLED"] = false;
@@ -432,35 +436,19 @@ function profileConnectorTestsTestLlm(int $connectorId): array
         $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"] = '';
 
         $llm->setOldGlobals($connector);
+        // Bound this diagnostic request without changing the saved connector configuration.
+        $GLOBALS['HTTP_TIMEOUT'] = min(120, max(1, intval($GLOBALS['HTTP_TIMEOUT'] ?? 30)));
         require_once($GLOBALS["ENGINE_PATH"] . "connector" . DIRECTORY_SEPARATOR . $driver . ".php");
         $handler = new $driver();
-        $contextData = [
-            ['role' => 'system', 'content' => 'You are a connection health check. Reply with OK.'],
-            ['role' => 'user', 'content' => 'Reply with exactly OK.'],
-        ];
-
-        $handler->open($contextData, []);
-        $accumulated = '';
-        $iterations = 0;
-        while (!$handler->isDone() && $iterations < 2000) {
-            $chunk = $handler->process();
-            if ($chunk === -1) {
-                break;
-            }
-            $accumulated .= strval($chunk);
-            $iterations++;
-        }
-
-        $closed = $handler->close('profile_connector_test');
-        return trim(strval($closed !== '' ? $closed : $accumulated));
+        return chimRunConnectorCapabilityTest($handler, $driver);
     });
 
     $elapsedMs = intval(round((microtime(true) - $started) * 1000));
-    $response = profileConnectorTestsString($run['value'] ?? '');
-    if ($response === '') {
+    $result = $run['value'] ?? null;
+    if (!is_array($result)) {
         $message = profileConnectorTestsFirstErrorMessage($run['errors']);
         if ($message === '') {
-            $message = 'LLM test returned an empty response';
+            $message = 'LLM test could not complete';
         }
 
         return [
@@ -478,9 +466,12 @@ function profileConnectorTestsTestLlm(int $connectorId): array
         'job_key' => 'llm:' . $connectorId,
         'type' => 'llm',
         'id' => $connectorId,
-        'status' => empty($run['errors']) ? 'pass' : 'warn',
-        'message' => empty($run['errors']) ? 'LLM responded successfully' : profileConnectorTestsFirstErrorMessage($run['errors']),
-        'details' => $details + ['response_preview' => mb_substr($response, 0, 180), 'errors' => $run['errors']],
+        'status' => $result['status'] === 'fail' ? 'fail' : (empty($run['errors']) ? $result['status'] : 'warn'),
+        'message' => implode(' | ', array_map(function ($name, $check) {
+            return ucfirst($name) . ': ' . $check['status'];
+        }, array_keys($result['checks']), $result['checks'])),
+        'details' => $details + ['checks' => $result['checks'], 'timings' => $result['timings'],
+            'response_preview' => $result['response_preview'], 'errors' => $run['errors']],
         'elapsed_ms' => $elapsedMs,
     ];
 }
@@ -635,7 +626,7 @@ function profileConnectorTestsTestItt(int $connectorId): array
         }
     }
 
-    $sampleImage = $GLOBALS["ENGINE_PATH"] . "debug" . DIRECTORY_SEPARATOR . "data" . DIRECTORY_SEPARATOR . "sample.jpg";
+    $sampleImage = $GLOBALS["ENGINE_PATH"] . 'debug/data/connector_vision_test.png';
     if (!file_exists($sampleImage)) {
         return profileConnectorTestsProblemResult('itt', $connectorId, 'fail', 'Sample image for ITT test was not found', $details);
     }
@@ -643,7 +634,7 @@ function profileConnectorTestsTestItt(int $connectorId): array
     $run = profileConnectorTestsRunWithCapturedErrors(function () use ($itt, $connector, $driverFile, $sampleImage) {
         $itt->setOldGlobals($connector);
         require_once($driverFile);
-        return profileConnectorTestsString(itt($sampleImage, 'Health check. Reply briefly.'));
+        return profileConnectorTestsString(itt($sampleImage, 'Image recognition test. What colour is the left shape, and what colour is the right shape? Answer in English with only the two colour names, separated by a comma.'));
     });
 
     $elapsedMs = intval(round((microtime(true) - $started) * 1000));
@@ -669,9 +660,12 @@ function profileConnectorTestsTestItt(int $connectorId): array
         'job_key' => 'itt:' . $connectorId,
         'type' => 'itt',
         'id' => $connectorId,
-        'status' => empty($run['errors']) ? 'pass' : 'warn',
-        'message' => empty($run['errors']) ? 'ITT returned a description successfully' : profileConnectorTestsFirstErrorMessage($run['errors']),
-        'details' => $details + ['response_preview' => mb_substr($response, 0, 180), 'errors' => $run['errors']],
+        'status' => empty($run['errors']) ? chimValidateConnectorVision($response)['status'] : 'warn',
+        'message' => empty($run['errors']) ? chimValidateConnectorVision($response)['message'] : profileConnectorTestsFirstErrorMessage($run['errors']),
+        'details' => $details + ['checks' => [
+            'connection' => ['status' => 'pass', 'message' => 'Image request returned text'],
+            'vision' => chimValidateConnectorVision($response),
+        ], 'response_preview' => mb_substr($response, 0, 180), 'errors' => $run['errors']],
         'elapsed_ms' => $elapsedMs,
     ];
 }
