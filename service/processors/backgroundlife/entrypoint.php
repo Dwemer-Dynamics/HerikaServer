@@ -36,9 +36,6 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
         $results = $GLOBALS["db"]->fetchAll("select max(gamets) as gamets from eventlog"); // faster
         $maxRow = intval($results[0]["gamets"]);
 
-        // Share one ownership lookup across tracking, recovery and action selection.
-        $scheduledNpcIds = array_flip(array_column($GLOBALS['db']->fetchAll("SELECT DISTINCT t.npc_id FROM npc_schedule_runs r JOIN npc_commitments t ON t.id=r.task_id WHERE r.phase IN ('travelling','waiting','active','releasing') OR r.pending_op IN ('travel','ensure')"), 'npc_id'));
-
         // BgL tracking coords, on NPCs marked with gps_track. in-game hourly
         $oneDayAgoGamets = $maxRow - ((24) / 0.0000024);
         $oneHourAgoGamets = $maxRow - ((1) / 0.0000024);
@@ -51,6 +48,9 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
         $bglTriggerDays = $bglTriggerHours / 24;
         $bglTriggerDaysAgoGamets = $maxRow - ((24 * $bglTriggerDays) / 0.0000024);
 
+
+        // Share one ownership lookup across tracking, recovery and action selection.
+        $scheduledNpcIds = array_flip(array_column($GLOBALS['db']->fetchAll("SELECT DISTINCT t.npc_id FROM npc_schedule_runs r JOIN npc_commitments t ON t.id=r.task_id WHERE r.phase IN ('travelling','waiting','active','releasing') OR r.pending_op IN ('travel','ensure')"), 'npc_id'));
 
         // BgL tracking coords, in-game daily
 
