@@ -36,6 +36,9 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
         $results = $GLOBALS["db"]->fetchAll("select max(gamets) as gamets from eventlog"); // faster
         $maxRow = intval($results[0]["gamets"]);
 
+        // Share one ownership lookup across tracking, recovery and action selection.
+        $scheduledNpcIds = array_flip(array_column($GLOBALS['db']->fetchAll("SELECT DISTINCT t.npc_id FROM npc_schedule_runs r JOIN npc_commitments t ON t.id=r.task_id WHERE r.phase IN ('travelling','waiting','active','releasing') OR r.pending_op IN ('travel','ensure')"), 'npc_id'));
+
         // BgL tracking coords, on NPCs marked with gps_track. in-game hourly
         $oneDayAgoGamets = $maxRow - ((24) / 0.0000024);
         $oneHourAgoGamets = $maxRow - ((1) / 0.0000024);
@@ -51,8 +54,9 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
 
         // BgL tracking coords, in-game daily
 
-        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE NOT EXISTS (SELECT 1 FROM npc_schedule_runs sr JOIN npc_commitments st ON st.id=sr.task_id WHERE st.npc_id=core_npc_master.id AND (sr.phase IN ('travelling','waiting','active','releasing') OR sr.pending_op IN ('travel','ensure'))) AND extended_data->>'background_life_enabled' = 'true' AND metadata->>'last_coords' IS NOT NULL AND metadata->'last_coords'->>'pending' IS NULL ");
+        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND metadata->>'last_coords' IS NOT NULL AND metadata->'last_coords'->>'pending' IS NULL ");
         foreach ($allEnabledBgLNpc as $npc) {
+            if (isset($scheduledNpcIds[$npc['id']])) continue;
             $mwdata = json_decode($npc["metadata"], true);
             if (!isset($mwdata["last_coords"]["last_updated"]) || !$mwdata["last_coords"]["last_updated"] || $mwdata["last_coords"]["last_updated"] < ($oneDayAgoGamets)) {
                 logger::info("[BGL] Daily Tracking {$npc["npc_name"]}");
@@ -75,9 +79,10 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
 
         error_log("[BGL] Checking tracked NPCs");
 
-        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE NOT EXISTS (SELECT 1 FROM npc_schedule_runs sr JOIN npc_commitments st ON st.id=sr.task_id WHERE st.npc_id=core_npc_master.id AND (sr.phase IN ('travelling','waiting','active','releasing') OR sr.pending_op IN ('travel','ensure'))) AND extended_data->>'background_life_enabled' = 'true' AND metadata->'gps_track' = 'true' AND metadata->'last_coords'->>'pending' IS NULL AND (metadata->'last_coords'->>'last_updated')::numeric < $oneHourAgoGamets ");
+        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND metadata->'gps_track' = 'true' AND metadata->'last_coords'->>'pending' IS NULL AND (metadata->'last_coords'->>'last_updated')::numeric < $oneHourAgoGamets ");
 
         foreach ($allEnabledBgLNpc as $npc) {
+            if (isset($scheduledNpcIds[$npc['id']])) continue;
             $mwdata = json_decode($npc["metadata"], true);
             if (
                 !isset($mwdata["last_coords"]["last_updated"]) || !$mwdata["last_coords"]["last_updated"]
@@ -98,8 +103,9 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
         // In-game based on configured days
 
         error_log("[BGL] Checking passive events NPCs");
-        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE NOT EXISTS (SELECT 1 FROM npc_schedule_runs sr JOIN npc_commitments st ON st.id=sr.task_id WHERE st.npc_id=core_npc_master.id AND (sr.phase IN ('travelling','waiting','active','releasing') OR sr.pending_op IN ('travel','ensure'))) AND extended_data->>'background_life_enabled' = 'true' AND (extended_data->>'background_life_commands' = 'false' or extended_data->>'background_life_commands'  IS NULL)");
+        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND (extended_data->>'background_life_commands' = 'false' or extended_data->>'background_life_commands'  IS NULL)");
         foreach ($allEnabledBgLNpc as $npc) {
+            if (isset($scheduledNpcIds[$npc['id']])) continue;
 
             $npcIsNearToPlayer = $GLOBALS["db"]->fetchOne("SELECT count(*) as n from eventlog where 
             type='infonpc' and data like '%" . ($GLOBALS["db"]->escape($npc["npc_name"])) . "%' and gamets > $oneHourAgoGamets");
@@ -156,8 +162,9 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
         error_log("[BGL] Checking active events NPCs");
 
         // BgL commands
-        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE NOT EXISTS (SELECT 1 FROM npc_schedule_runs sr JOIN npc_commitments st ON st.id=sr.task_id WHERE st.npc_id=core_npc_master.id AND (sr.phase IN ('travelling','waiting','active','releasing') OR sr.pending_op IN ('travel','ensure'))) AND extended_data->>'background_life_enabled' = 'true' AND extended_data->>'background_life_commands' = 'true' order by random() ");
+        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND extended_data->>'background_life_commands' = 'true' order by random() ");
         foreach ($allEnabledBgLNpc as $npc) {
+            if (isset($scheduledNpcIds[$npc['id']])) continue;
             $mwdata = json_decode($npc["extended_data"], true);
             $metadata = json_decode($npc["metadata"], true);
             $mustInstructBypassBgl = false;
@@ -226,7 +233,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                 );
                                 $skyrimCmd->send(cmd: $json);
 
-                                error_log("[BGL RUN] {$npc["npc_name"]} â€” Early Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
+                                error_log("[BGL RUN] {$npc["npc_name"]} — Early Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
 
                                 $lastGameTsRow = $GLOBALS["db"]->fetchAll('SELECT max(gamets) AS last_gamets FROM eventlog');
                                 $lastTsRow = $GLOBALS["db"]->fetchAll("SELECT max(ts) AS ts FROM eventlog WHERE gamets='{$lastGameTsRow[0]['last_gamets']}'");
@@ -273,7 +280,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                         "0x{$npcTarget['refid']}"
                                     );
                                     $skyrimCmd->send(cmd: $json);
-                                    error_log("[BGL RUN] {$npc["npc_name"]} â€” 275  Teleported to {$row['destination']} (formid: {$npcTarget['refid']})");
+                                    error_log("[BGL RUN] {$npc["npc_name"]} — 275  Teleported to {$row['destination']} (formid: {$npcTarget['refid']})");
 
                                     $lastGameTsRow = $GLOBALS["db"]->fetchAll('SELECT max(gamets) AS last_gamets FROM eventlog');
                                     $lastTsRow = $GLOBALS["db"]->fetchAll("SELECT max(ts) AS ts FROM eventlog WHERE gamets='{$lastGameTsRow[0]['last_gamets']}'");
