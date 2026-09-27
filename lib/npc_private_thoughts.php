@@ -43,9 +43,22 @@ function chimPrivateThoughtResponseEnabled(): bool
         && in_array($GLOBALS['CHIM_CORE_CURRENT_CONNECTOR_DATA']['driver'] ?? '', ['openrouterjson', 'openaijson'], true);
 }
 
+const CHIM_PRIVATE_THOUGHT_DEFAULT_PROMPT = 'Write message first. After all dialogue and action fields, write internal_thought: one or two brief sentences in your own character voice, at most 600 characters. Reflect on an observation, motive or decision grounded in your available knowledge. Keep uncertainty explicit; do not invent facts or speak to another person. Use an empty string when no useful reflection arises. Never put private thoughts or thought tags in message.';
+
+// Resolve Prompt Manager edits on each generation; an empty override restores the default.
 function chimPrivateThoughtInstructions(): string
 {
-    return 'Write message first. After all dialogue and action fields, write internal_thought: one or two brief sentences in your own character voice, at most 600 characters. Reflect on an observation, motive or decision grounded in your available knowledge. Keep uncertainty explicit; do not invent facts or speak to another person. Use an empty string when no useful reflection arises. Never put private thoughts or thought tags in message.';
+    try {
+        if (isset($GLOBALS['db'])) {
+            $row = $GLOBALS['db']->fetchOne("SELECT custom_prompt, default_prompt FROM prompts WHERE prompt_key = 'private_npc_thoughts'");
+            foreach (['custom_prompt', 'default_prompt'] as $field) {
+                if (is_string($row[$field] ?? null) && trim($row[$field]) !== '') return $row[$field];
+            }
+        }
+    } catch (Throwable $e) {
+        Logger::warn('[PRIVATE_THOUGHTS] Managed prompt unavailable; using default instructions.');
+    }
+    return CHIM_PRIVATE_THOUGHT_DEFAULT_PROMPT;
 }
 
 // Resolve current profile policy for the requested reader, never a previous worker's globals.
