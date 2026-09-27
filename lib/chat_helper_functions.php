@@ -1,6 +1,5 @@
 <?php
 require_once __DIR__ . '/chim_interaction.php';
-require_once __DIR__ . '/sentence_boundaries.php';
 
 define("_MINIMAL_DISTANCE_TO_BE_THE_SAME", 0.0);
 define("_MAXIMAL_DISTANCE_TO_BE_RELATED", 0.8);
@@ -397,6 +396,8 @@ function cleanResponse($rawResponse)
 
 // replace findDotPosition with first EOS split detection - same logic as split_at_end_of_sentence
 // This sentence will never be splitted: "It is, my Thane. The crisp air here is better than the soot of Whiterun. I've been honing my blade since dawn."
+
+require_once __DIR__ . '/sentence_boundaries.php';
 
 function findFastSentencePosition($s_string,$min_sentence_size=0) {
     foreach (chimSentenceBoundaries($s_string) as $end) {
