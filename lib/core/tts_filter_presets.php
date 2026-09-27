@@ -396,9 +396,9 @@ function applyActiveTtsFilterPresetToOutput($ttsOutput)
     }
 
     $audioPath = resolveTtsFilterAudioPath($ttsOutput);
+    $filterGraph = ttsFilterPresetGraph($presetId);
     $filterStarted = hrtime(true);
     chimSpeechTrace('filter_started', ['preset' => $presetId]);
-    $filterGraph = ttsFilterPresetGraph($presetId);
     if ($audioPath === null || $filterGraph === '') {
         chimSpeechTrace('filter_failed', ['preset' => $presetId]);
         logTtsFilterPresetMessage('error', "[TTS FILTER] Cannot process preset '{$presetId}': connector output is not a readable soundcache WAV.");
