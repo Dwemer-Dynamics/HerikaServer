@@ -65,7 +65,7 @@ function chimBglEncounterNearbyCandidates(array $currentNpcData, float $gameTs, 
             $actorList = $candidateActors;
         }
     }
-    if ($snapshotTs <= 0 || chimBglEncounterGameHours($gameTs, $snapshotTs) > CHIM_BGL_COMBAT_NEARBY_HOURS) {
+    if ($snapshotTs <= 0 || $snapshotTs > $gameTs || chimBglEncounterGameHours($gameTs, $snapshotTs) > CHIM_BGL_COMBAT_NEARBY_HOURS) {
         return [];
     }
 
@@ -111,10 +111,15 @@ function chimBglEncounterSnapshotFresh(array $npc, NpcMaster $npcMaster, float $
 {
     $metadata = $npcMaster->getMetadata($npc);
     foreach (['last_inventory_update_gamets', 'last_equipment_update_gamets', 'last_stats_update_gamets'] as $key) {
-        if (!isset($metadata[$key]) || !is_numeric($metadata[$key])) {
+        if (!isset($metadata[$key]) || !is_numeric($metadata[$key]) || (float)$metadata[$key] <= 0 || (float)$metadata[$key] > $gameTs) {
             return false;
         }
         if (chimBglEncounterGameHours($gameTs, (float)$metadata[$key]) > CHIM_BGL_COMBAT_SNAPSHOT_HOURS) {
+            return false;
+        }
+    }
+    foreach (['is_dead', 'is_essential', 'is_protected'] as $flag) {
+        if (!array_key_exists($flag, $metadata['stats'] ?? [])) {
             return false;
         }
     }
@@ -255,7 +260,10 @@ function chimBglValidateCombatResolution(array $resolution, array $candidateSnap
     }
 
     $participants = [];
-    foreach (($resolution['participants'] ?? []) as $participant) {
+    if (!is_array($resolution['participants'] ?? null)) {
+        return null;
+    }
+    foreach ($resolution['participants'] as $participant) {
         if (!is_array($participant)) {
             return null;
         }
@@ -492,6 +500,7 @@ function chimBglFinalizeCombatEncounter($db, int $encounterId): void
             'data' => $encounter['narrative'] . ' Outcome: ' . $participant['applied_outcome'] . '.',
             'category' => 'combat',
         ]);
+        chimBglQueueCombatSnapshot($db, $participant);
     }
 }
 

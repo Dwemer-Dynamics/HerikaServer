@@ -92,7 +92,7 @@ INSERT INTO public.core_llm_connector (
     (4, 'DeepSeek V4 Pro',          '{}', 'https://openrouter.ai/api/v1/chat/completions', 'deepseek/deepseek-v4-pro', 'openrouter', 'openrouterjson', NULL, 750, 1, 0, 1, 1, 0.6, 'openrouter'),
     (5, 'Mistral Small 3.2 24B', '{}', 'https://openrouter.ai/api/v1/chat/completions', 'mistralai/mistral-small-3.2-24b-instruct', 'openrouter', 'openrouterjson', NULL, 750, 1, 0, 1, 1, 1, 'openrouter'),
     (6, 'Ministral 8B',   '{}', 'https://openrouter.ai/api/v1/chat/completions', 'mistralai/ministral-8b-2512', 'openrouter', 'openrouterjson', NULL, 750, 1, 0, 1, 1, 1, 'openrouter'),
-    (7, 'Gemma 3N E4B', '{}', 'https://openrouter.ai/api/v1/chat/completions', 'google/gemma-3n-e4b-it', 'openrouter', 'openrouterjson', NULL, 128, 1, 0, 1, 1, 0.2, 'openrouter');
+    (7, 'Gemma 3 4B', '{}', 'https://openrouter.ai/api/v1/chat/completions', 'google/gemma-3-4b-it', 'openrouter', 'openrouterjson', NULL, 128, 1, 0, 1, 1, 0.2, 'openrouter');
 
 
 --

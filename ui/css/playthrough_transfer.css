@@ -1,0 +1,17 @@
+.ptx-dialog { box-sizing:border-box; width:min(600px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; border:1px solid #59708a; border-radius:12px; padding:24px; background:#19212d; color:#eef3fa; font:15px/1.5 system-ui,sans-serif; }
+.ptx-dialog::backdrop { background:rgba(0,0,0,.7); }
+.ptx-dialog h2 { margin:0 0 12px; font-size:23px; color:inherit; }
+.ptx-dialog p { margin:12px 0; }
+.ptx-dialog label { display:block; margin:12px 0 5px; font-weight:600; }
+.ptx-dialog input,.ptx-dialog select { box-sizing:border-box; width:100%; max-width:100%; padding:10px; color:#eef3fa; background:#101722; border:1px solid #718196; border-radius:5px; }
+.ptx-dialog button,.ptx-dialog a,.ptx-import,.ptx-download { padding:8px 12px; border-radius:5px; border:1px solid #718196; background:#263a53; color:#fff; cursor:pointer; font:inherit; text-decoration:none; }
+.ptx-dialog button:disabled { opacity:.55; cursor:default; }
+.ptx-dialog :focus-visible,.ptx-import:focus-visible,.ptx-download:focus-visible { outline:3px solid #87caff; outline-offset:3px; }
+.ptx-dialog [hidden] { display:none!important; }
+.ptx-dialog progress { width:100%; margin-top:16px; accent-color:#87caff; }
+.ptx-dialog dl { display:grid; grid-template-columns:90px minmax(0,1fr); gap:8px; padding:14px; background:#101722; border-radius:6px; }
+.ptx-dialog dt { color:#b9c7d9; } .ptx-dialog dd { margin:0; overflow-wrap:anywhere; }
+.ptx-actions { display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap; margin-top:20px; }
+#ptx-error { color:#ffb7ad; } #ptx-check { margin-top:12px; }
+.pth-save-table .ptx-download { margin-top:8px; }
+@media(max-width:480px) { .ptx-dialog { padding:18px; } .ptx-actions>* { flex:1; text-align:center; } }

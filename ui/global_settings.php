@@ -49,9 +49,9 @@ $tabControlPanels = [
 
 $connectorAvailabilityToggles = chimGlobalLlmConnectorAvailabilityMap();
 
-// Paired toggles stay beside their connector instead of appearing twice. OGHMA_CUSTOM picks
-// the Oghma extraction backend rather than gating a slot, so it keeps its plain checkbox.
-$pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_CUSTOM']);
+// Paired toggles stay beside their connector instead of appearing twice. OGHMA_EXTRACTOR_FALLBACK
+// gates the Oghma extractor connector, so it renders next to it rather than as its own card.
+$pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_EXTRACTOR_FALLBACK']);
 foreach ($gsSections as $sectionName => $fields) {
     $gsSections[$sectionName] = array_values(array_filter($fields, static function (array $field) use ($pairedConnectorToggles): bool {
         return !in_array($field['name'] ?? '', $pairedConnectorToggles, true);
@@ -97,8 +97,10 @@ function pretty_label(string $flatName): string
         'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
         'CORE_CONNECTOR_PROFILES' => 'Profile Tasks',
         'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
+        'CORE_CONNECTOR_QUEST_CREATION' => 'Quest Creation Connector',
+        'CORE_CONNECTOR_QUEST_ENGINE' => 'Quest Engine Connector',
         'CORE_CONNECTOR_BGL' => 'Background Life',
-        'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Custom Oghma LLM',
+        'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Extractor Fallback',
         'RELLLM_CONNECTOR' => 'Relationship Management',
         'RELATIONSHIP_UPDATE_CHANCE' => 'Relationship Update Chance',
         'NEVER_CLEAR_RELATIONSHIP_DATA' => 'Never Clear Relationship Data',
@@ -106,8 +108,10 @@ function pretty_label(string $flatName): string
         'PROMPT_HEAD_MARKDOWN_ENABLED' => 'Compact Prompt Info',
         'PLAYER_WORST_MEMORY_GAME_DAYS' => 'Worst Memory Lifespan',
         'EMOTEMOODS' => 'Emote Moods',
-        'OGHMA_INFINIUM' => 'Oghma Infinium',
-        'OGHMA_AMOUNT' => 'Oghma Articles Amount',
+        'OGHMA_INFINIUM' => 'Enable Oghma',
+        'OGHMA_AMOUNT' => 'Oghma Topic Count',
+        'OGHMA_RESULT_LIMIT' => 'Oghma Result Limit',
+        'OGHMA_EXTRACTOR_TIMEOUT_MS' => 'Extractor Timeout (ms)',
         'RACIAL_OGHMA' => 'Force Racial Oghma',
         'LOCATION_OGHMA' => 'Force Location Oghma',
         'ENFORCE_STRICT_RECHAT_RESPONSE' => 'Strict Rechat Targeting',
@@ -662,6 +666,15 @@ body .settings-tabs .settings-tab.is-active {
     width: 100%;
     min-width: 0;
 }
+
+.event-type-toggles { display: grid; width: 100%; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 12px; margin-bottom: 10px; }
+.event-type-toggles label { display: flex; min-height: 30px; align-items: center; gap: 7px; color: #ddd; cursor: pointer; overflow-wrap: anywhere; min-width: 0; }
+.event-type-toggles label:focus-within { outline: 2px solid #d4a44a; outline-offset: 2px; }
+.event-type-toggles input { flex-shrink: 0; accent-color: #d4a44a; }
+.event-type-editor { flex: 1; min-width: 0; width: 100%; }
+.event-type-editor > label { display: block; margin-bottom: 5px; }
+.provider-body .event-type-editor textarea { min-height: 60px; }
+.event-type-editor p { font-size: 12px; color: #bbb; margin: 6px 0; }
 
 .filter-setting-card {
     grid-template-columns: minmax(180px, 0.65fr) minmax(420px, 1.7fr) minmax(180px, 0.65fr);
@@ -1781,8 +1794,8 @@ body .settings-tabs .settings-tab.is-active {
                                         <?php endif; ?>
                                         <?php if ($fieldName === 'CORE_CONNECTOR_OGHMA_CUSTOM'): ?>
                                             <div class="provider-toggle">
-                                                <input type="hidden" name="OGHMA_CUSTOM" value="false">
-                                                <input type="checkbox" name="OGHMA_CUSTOM" value="true" <?php echo (current_value('OGHMA_CUSTOM') ? 'checked' : ''); ?> title="Enable/Disable Custom Oghma LLM">
+                                                <input type="hidden" name="OGHMA_EXTRACTOR_FALLBACK" value="false">
+                                                <input type="checkbox" name="OGHMA_EXTRACTOR_FALLBACK" value="true" <?php echo (current_value('OGHMA_EXTRACTOR_FALLBACK') ? 'checked' : ''); ?> title="Allow one bounded connector fallback after deterministic Oghma abstains">
                                             </div>
                                         <?php endif; ?>
                                     </div>
@@ -1833,14 +1846,14 @@ body .settings-tabs .settings-tab.is-active {
                                     <?php elseif ($fieldType === 'apikey'): ?>
                                         <input type="password" name="<?php echo htmlspecialchars($fieldName); ?>" value="<?php echo htmlspecialchars(strval($current)); ?>" placeholder="Paste API key" <?php echo $readonlyAttr; ?>>
                                     <?php elseif ($fieldType === 'select'): ?>
-                                        <select name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
+                                        <select aria-label="<?php echo htmlspecialchars($label); ?>" name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             <?php foreach (($field['values'] ?? []) as $option): ?>
                                                 <option value="<?php echo htmlspecialchars(strval($option)); ?>" <?php echo (strval($current) === strval($option) ? 'selected' : ''); ?>><?php echo htmlspecialchars(select_option_label($fieldName, strval($option))); ?></option>
                                             <?php endforeach; ?>
                                         </select>
                                     <?php elseif (strpos($fieldType, 'foreign:') === 0): ?>
                                         <?php $parts = explode(':', $fieldType); $fkKey = implode(':', array_slice($parts, 1)); $rows = $foreignOptions[$fkKey] ?? []; ?>
-                                        <select name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
+                                        <select aria-label="<?php echo htmlspecialchars($label); ?>" name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             <option value="" <?php echo (empty($current) ? 'selected' : ''); ?>>None</option>
                                             <?php foreach ($rows as $row): ?>
                                                 <option value="<?php echo htmlspecialchars(strval($row[$parts[2]] ?? '')); ?>" <?php echo (strval($current) === strval($row[$parts[2]] ?? '') ? 'selected' : ''); ?>>
@@ -2253,6 +2266,64 @@ document.addEventListener('DOMContentLoaded', function () {
 const filterBrowseConfigs = <?php echo json_encode($filterBrowseFieldConfigs, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
 const filterBrowseEndpoint = <?php echo json_encode($webRoot . '/ui/api/filter_candidates.php', JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
 
+// Enhance the existing CSV field so saves, presets and the recent-values picker share one value.
+document.querySelectorAll('textarea[name="EVENT_TYPE_FILTER"]').forEach((storage, index) => {
+    const choices = <?php echo json_encode(array_column($gsSections['Context Selections'], null, 'name')['EVENT_TYPE_FILTER']['event_type_choices']); ?>;
+    const parse = (value) => [...new Set(String(value).split(',').map((type) => type.trim().toLowerCase()).filter(Boolean))];
+    const editor = document.createElement('div');
+    editor.className = 'event-type-editor';
+    const hint = document.createElement('p');
+    hint.id = 'event-type-help-' + index;
+    hint.textContent = 'Checked types are excluded from AI context. Uncheck to include them. Save All applies your changes.';
+    const toggles = document.createElement('div');
+    toggles.className = 'event-type-toggles';
+    toggles.setAttribute('role', 'group');
+    toggles.setAttribute('aria-label', 'Event types to exclude');
+    toggles.setAttribute('aria-describedby', hint.id);
+    const customLabel = document.createElement('label');
+    customLabel.htmlFor = 'event-type-custom-' + index;
+    customLabel.textContent = 'Custom event types to exclude';
+    const custom = document.createElement('textarea');
+    custom.id = customLabel.htmlFor;
+    custom.rows = 2;
+    custom.placeholder = 'my_custom_event, another_event';
+    custom.readOnly = storage.readOnly;
+    const customHint = document.createElement('p');
+    customHint.id = 'event-type-custom-help-' + index;
+    customHint.textContent = 'Separate names with commas. Types do not need to appear in the log first.';
+    custom.setAttribute('aria-describedby', customHint.id);
+    const checkboxes = choices.map((type) => {
+        const label = document.createElement('label');
+        const labels = {chat: 'Dialogue', chat_background: 'Background Dialogue', itemfound: 'Item Pickups', spellcast: 'Spellcasting', npcspellcast: 'NPC Spellcasting', contentbook: 'Book Content', infoaction: 'Actions', rpg_word: 'Words of Power', rpg_lvl: 'Level Up', rpg_shout: 'Shouts', welcome: 'Arrival', waitstart: 'Wait Started', waitstop: 'Wait Finished', reanimate: 'Reanimation', info_timeforward: 'Time Passed', backgroundaction: 'Background Actions', innerchat: 'Background Life Dialogue', ext_held_item_pickup: 'Held Item Pickup', ext_held_item_drop: 'Held Item Drop'};
+        label.title = type;
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = type;
+        checkbox.disabled = storage.readOnly;
+        label.append(checkbox, document.createTextNode(labels[type] || type.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())));
+        toggles.append(label);
+        return checkbox;
+    });
+    const readStorage = () => {
+        const selected = parse(storage.value);
+        checkboxes.forEach((checkbox) => { checkbox.checked = selected.includes(checkbox.value); });
+        custom.value = selected.filter((type) => !choices.includes(type)).join(', ');
+    };
+    const writeStorage = () => {
+        storage.value = parse([...checkboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value), custom.value].join(', ')).join(', ');
+    };
+    toggles.addEventListener('change', writeStorage);
+    custom.addEventListener('input', writeStorage);
+    // Move a manually entered built-in name to its checkbox after editing.
+    custom.addEventListener('change', () => { writeStorage(); readStorage(); });
+    storage.addEventListener('change', readStorage);
+    storage.form?.addEventListener('reset', () => setTimeout(readStorage, 0));
+    readStorage();
+    editor.append(hint, toggles, customLabel, custom, customHint);
+    storage.before(editor);
+    storage.hidden = true;
+});
+
 (function () {
     const modal = document.getElementById('filterBrowseModal');
     const modalTitle = document.getElementById('filterBrowseModalTitle');
@@ -2539,6 +2610,7 @@ const filterBrowseEndpoint = <?php echo json_encode($webRoot . '/ui/api/filter_c
         });
 
         state.activeTextarea.value = nextValues.join(', ');
+        state.activeTextarea.dispatchEvent(new Event('change', { bubbles: true }));
 
         closeModal();
     });

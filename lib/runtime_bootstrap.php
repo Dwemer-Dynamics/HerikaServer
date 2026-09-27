@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/chim_interaction.php';
 
 require_once(__DIR__ . DIRECTORY_SEPARATOR . "settings.php");
 
@@ -53,13 +54,15 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
         }
 
         $requiredVersions = [
-            'general_settings' => 20260720002,
+            'responselog_interaction' => 20260912001,
+            'general_settings' => 20260919001,
             'core_stt_connector' => 20260502002,
             'core_itt_connector' => 20260502002,
             'descriptions_defaults' => 20260611005,
             'prompts' => 20260615001,
             'skyrim_quest_definitions' => 20260628003,
             'core_tts_connector_omnivoice' => 20260708001,
+            'oghma_catalog' => 20260827001,
             'core_tts_pronunciation' => 20260829003,
         ];
 
@@ -67,7 +70,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             $versionRows = $db->fetchAll(
                 "SELECT tablename, version
                  FROM public.database_versioning
-                 WHERE tablename IN ('general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation')"
+                 WHERE tablename IN ('responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog')"
             );
         } catch (\Throwable $e) {
             $decision = true;
@@ -193,11 +196,13 @@ if (!function_exists('chimRuntimeBootstrap')) {
         $confPath = $enginePath . "conf" . DIRECTORY_SEPARATOR . "conf.php";
         $confSamplePath = $enginePath . "conf" . DIRECTORY_SEPARATOR . "conf.sample.php";
 
+        // Preflight may have included these files in a private scope. Load them here
+        // so their variables can be imported, with saved settings overriding defaults.
         if (file_exists($confSamplePath)) {
-            require_once($confSamplePath);
+            require($confSamplePath);
         }
         if (file_exists($confPath)) {
-            require_once($confPath);
+            require($confPath);
         }
 
         chimRuntimeImportConfigVariables(get_defined_vars());

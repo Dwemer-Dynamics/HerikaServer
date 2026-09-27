@@ -154,6 +154,22 @@ $showVisual = ($currentScript === 'core_profiles.php');
 $visualKeysLookup = array_flip($visualKeys);
 $nonVisualCurrent = $showVisual ? array_diff_key($metadataCurrent, $visualKeysLookup) : $metadataCurrent;
 
+// Optional keys provided by the including page ($managedMetadataKeys) that are owned by a
+// dedicated form control. They are hidden from the raw JSON editor and stripped from the
+// consolidated JSON so the control stays the only UI source of truth.
+$managedMetadataKeysList = [];
+if (isset($managedMetadataKeys) && is_array($managedMetadataKeys)) {
+    foreach ($managedMetadataKeys as $managedKey) {
+        $managedKey = (string)$managedKey;
+        if ($managedKey !== '' && !in_array($managedKey, $managedMetadataKeysList, true)) {
+            $managedMetadataKeysList[] = $managedKey;
+        }
+    }
+}
+if (!empty($managedMetadataKeysList)) {
+    $nonVisualCurrent = array_diff_key($nonVisualCurrent, array_flip($managedMetadataKeysList));
+}
+
 function renderMetaInput($key, $schema, $value, $controlOnly = false) {
     $type = $schema["type"] ?? 'string';
     $desc = htmlspecialchars($schema["description"] ?? '');
@@ -405,6 +421,7 @@ function metaClamp(rangeId, numberId, min, max){
 function consolidation() {
     const SHOW_VISUAL = <?= $showVisual ? 'true' : 'false' ?>;
     const VISUAL_KEYS = <?= json_encode($visualKeys, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE) ?>;
+    const MANAGED_KEYS = <?= json_encode($managedMetadataKeysList, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE) ?>;
     const content = jsonEditor.get()
     let base = {}
     try {
@@ -427,6 +444,8 @@ function consolidation() {
     if ('PLAYER_AUTOCHAT_ASTERISKS_ENABLED' in base) delete base['PLAYER_AUTOCHAT_ASTERISKS_ENABLED']
     if ('PRESERVE_ASTERISKS_IN_CONTEXT' in base) delete base['PRESERVE_ASTERISKS_IN_CONTEXT']
     if ('ENFORCE_ACTIONS_PROMPT' in base) delete base['ENFORCE_ACTIONS_PROMPT']
+    // Keys owned by a dedicated page control are merged server-side, never from this editor.
+    MANAGED_KEYS.forEach(k => { if (k in base) delete base[k] })
 
     // Collect visual fields (explicitly iterate over known keys to capture false for checkboxes)
     const form = document.getElementById('core_profile_form') || document.forms[0]

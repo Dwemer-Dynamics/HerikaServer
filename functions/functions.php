@@ -3769,9 +3769,24 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     }
                 }
 
+                $readerName = function_exists('chimGetPromptCharacterName')
+                    ? chimGetPromptCharacterName()
+                    : ($GLOBALS["HERIKA_NAME"] ?? '');
+
                 if ($bookIdentifier === '') {
                     error_log("[ACTION POSTFILTER ReadBook] Missing book name and request text");
                     unset($actionsCopy[$n]);
+                    $GLOBALS["db"]->insert(
+                    'responselog',
+                        [
+                            'localts' => time(),
+                            'sent' => 0,
+                            'actor' => "rolemaster",
+                            'text' => "",
+                            'action' => "rolecommand|Instruction@{$readerName}@Could not find the book in the library, complaint about this.@0",
+                            'tag' => "",
+                        ]
+                    );
                     continue;
                 }
 
@@ -3788,9 +3803,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 $bookCandidate = $GLOBALS["db"]->fetchOne(
                     "SELECT * FROM books WHERE LOWER(title)=LOWER('{$cnBookName}') AND content IS NOT NULL AND BTRIM(content) <> '' ORDER BY rowid DESC LIMIT 1"
                 );
-                $readerName = function_exists('chimGetPromptCharacterName')
-                    ? chimGetPromptCharacterName()
-                    : ($GLOBALS["HERIKA_NAME"] ?? '');
+               
 
                 if ($bookCandidate) {
                     error_log("[ACTION POSTFILTER ReadBook] Book found: '{$bookCandidate['title']}'");

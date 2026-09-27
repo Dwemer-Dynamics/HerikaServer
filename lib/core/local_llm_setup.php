@@ -340,6 +340,8 @@ function herikaLocalLlmRouteConnector(int $connectorId, string $scope): void
         'CORE_CONNECTOR_SCENECLASSIFIER',
         'CORE_CONNECTOR_PROFILES',
         'CORE_CONNECTOR_DIRECTOR',
+        'CORE_CONNECTOR_QUEST_CREATION',
+        'CORE_CONNECTOR_QUEST_ENGINE',
         'RELLLM_CONNECTOR',
         'CORE_CONNECTOR_OGHMA_CUSTOM',
     ];

@@ -339,7 +339,7 @@
         $inlineNarrationEnabled = $inlineNarrationMode !== 'disabled';
         $messageDescription = "lines of dialogue";
         if (chimIsVisionRequest()) {
-            $messageDescription = "{$promptCharacterName}'s spoken Soulgaze explanation of the current scene. Describe only what is visibly present right now through {$GLOBALS["PLAYER_NAME"]}'s eyes, focusing on people, environment, objects, and immediate activity. Do not continue unrelated conversation, do not answer stale dialogue, and do not invent unseen details.";
+            $messageDescription = "{$promptCharacterName}'s spoken response to the current Soulgaze vision, in their own personality and speech style. Use the final Soulgaze scene description for visible details and conversation context for natural reactions. Do not invent unseen details or answer an older conversation turn.";
         } elseif ($inlineNarrationEnabled) {
             $messageDescription = "If needed, start with one brief third-person narration block in single asterisks, then put {$promptCharacterName}'s spoken text after it. Example: *She smiles* It's good to see you again, my friend! Do not wrap the entire reply in asterisks, and keep spoken dialogue outside the asterisks.";
         } elseif (chimIsDirectNarratorDialogue()) {
@@ -447,7 +447,7 @@
         $inlineNarrationEnabled = $inlineNarrationMode !== 'disabled';
         $messageDescription = "lines of {$promptCharacterName}'s dialogue";
         if (chimIsVisionRequest()) {
-            $messageDescription = "{$promptCharacterName}'s spoken Soulgaze explanation of the current scene. Describe only what is visibly present right now through {$GLOBALS["PLAYER_NAME"]}'s eyes, focusing on people, environment, objects, and immediate activity. Do not continue unrelated conversation, do not answer stale dialogue, and do not invent unseen details.";
+            $messageDescription = "{$promptCharacterName}'s spoken response to the current Soulgaze vision, in their own personality and speech style. Use the final Soulgaze scene description for visible details and conversation context for natural reactions. Do not invent unseen details or answer an older conversation turn.";
         } elseif ($inlineNarrationEnabled) {
             $messageDescription = "If needed, start with one brief third-person narration block in single asterisks, then put {$promptCharacterName}'s spoken text after it. Example: *She smiles* It's good to see you again, my friend! Do not wrap the entire reply in asterisks, and keep spoken dialogue outside the asterisks.";
         } elseif (chimIsDirectNarratorDialogue()) {

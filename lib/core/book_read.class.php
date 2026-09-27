@@ -1,5 +1,7 @@
 <?php
 
+require_once(__DIR__ . DIRECTORY_SEPARATOR . 'tts_filter_presets.php');
+
 define('BOOK_READ_STATE_KEY', 'book_reading_state');
 define('BOOK_READ_PENDING_TIMEOUT_SECONDS', 90);
 define('BOOK_READ_CHUNK_SIZE', 512);       // characters per LLM formatting chunk
@@ -998,25 +1000,9 @@ class BookReader
     {
         $GLOBALS["HERIKA_NAME"] = $this->narratorName;
 
-        // Ensure the TTS filter array is initialized before assigning filters.
-        // Some connectors check is_array() and skip processing when it is missing.
-        if (!isset($GLOBALS["TTS_FFMPEG_FILTERS"]) || !is_array($GLOBALS["TTS_FFMPEG_FILTERS"])) {
-            $GLOBALS["TTS_FFMPEG_FILTERS"] = [];
-        }
-
-
-        if ($this->bookReadingVoice) {
-            // Audiobook-style EQ, compression, slight reverb, and speed adjustment.
-            $GLOBALS["TTS_FFMPEG_FILTERS"]['highpass'] = 'highpass=f=70';
-            $GLOBALS["TTS_FFMPEG_FILTERS"]['lowpass'] = 'lowpass=f=14500';
-            $GLOBALS["TTS_FFMPEG_FILTERS"]['warmth'] = 'equalizer=f=120:t=q:w=0.8:g=1.5';
-            $GLOBALS["TTS_FFMPEG_FILTERS"]['clarity_cut'] = 'equalizer=f=320:t=q:w=1.0:g=-1.5';
-            $GLOBALS["TTS_FFMPEG_FILTERS"]['presence'] = 'equalizer=f=3000:t=q:w=0.9:g=2.0';
-            $GLOBALS["TTS_FFMPEG_FILTERS"]['compressor'] = 'acompressor=threshold=-18dB:ratio=2.5:attack=8:release=120:makeup=2';
-            $GLOBALS["TTS_FFMPEG_FILTERS"]['aecho'] = 'aecho=1.0:0.92:55:0.16';
-            $GLOBALS["TTS_FFMPEG_FILTERS"]['speed'] = 'atempo=0.85';
-            $GLOBALS["TTS_FFMPEG_FILTERS"]['loudnorm'] = 'loudnorm=I=-16:TP=-1.5:LRA=7';
-            $GLOBALS["TTS_FFMPEG_FILTERS"]['aresample'] = 'aresample=24000';
+        if ($this->bookReadingVoice && getActiveTtsFilterPresetId() === 'none') {
+            // An explicit NPC preset wins; otherwise preserve the existing audiobook treatment.
+            setActiveTtsFilterPreset('book_reading', true);
         }
         $GLOBALS["SCRIPTLINE_ANIMATION_SENT"] = true;  // To avoid returnlines from sending any animation.
         $GLOBALS["AVOID_TTS_CACHE"] = true;
@@ -1109,6 +1095,7 @@ class BookReader
             || strcasecmp((string) $narratorName, $configuredNarratorName) === 0;
 
         if ($isNarrator) {
+            clearActiveTtsFilterPreset();
             $narrator = new Narrator();
             $narratorData = $narrator->getNarratorData();
             $narrator->loadIntoGlobals();

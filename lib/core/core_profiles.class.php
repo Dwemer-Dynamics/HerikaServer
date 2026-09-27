@@ -114,6 +114,14 @@ class CoreProfile
         return $GLOBALS["db"]->fetchOne($query);
     }
 
+    public function getByLabel($name)
+    {
+        $name  = strval($name);
+        $query = "SELECT * FROM {$this->table} WHERE label = '{$name}' LIMIT 1";
+        return $GLOBALS["db"]->fetchOne($query);
+    }
+
+
     public function getById($id)
     {
         return $this->readOne($id);
