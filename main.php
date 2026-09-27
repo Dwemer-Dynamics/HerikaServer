@@ -2434,11 +2434,11 @@ if ($currentHold) {
     $rumorHoldClauses = ["hold='Skyrim'"];
     foreach (getCanonicalHoldAliases($currentHold) as $holdAlias) {
         $holdAliasEsc = $db->escape($holdAlias);
-        $rumorHoldClauses[] = "hold ILIKE '{$holdAliasEsc}'";
+        $rumorHoldClauses[] = "hold ILIKE '%{$holdAliasEsc}%'";
 
         if ($currentLoc !== "") {
             $currentLocEsc = $db->escape($currentLoc);
-            $rumorLocationHoldClauses[] = "hold ILIKE '{$currentLocEsc}%{$holdAliasEsc}%'";
+            $rumorLocationHoldClauses[] = "hold ILIKE '%{$currentLocEsc}%{$holdAliasEsc}%'";
         }
     }
 
