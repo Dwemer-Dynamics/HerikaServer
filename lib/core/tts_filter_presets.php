@@ -1,5 +1,4 @@
 <?php
-require_once dirname(__DIR__) . "/speech_trace.php";
 
 const CHIM_TTS_FILTER_PRESET_VERSION = 2;
 
@@ -390,6 +389,7 @@ function logTtsFilterPresetMessage($level, $message)
  */
 function applyActiveTtsFilterPresetToOutput($ttsOutput)
 {
+    require_once dirname(__DIR__) . "/speech_trace.php";
     $presetId = getActiveTtsFilterPresetId();
     if ($presetId === 'none' || !$ttsOutput) {
         return $ttsOutput;

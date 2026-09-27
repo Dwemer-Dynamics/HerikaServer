@@ -33,6 +33,8 @@ An HTTP success does not prove that an actor spoke or an action completed. Corre
 
 HerikaServer, StobeServer, DialecticServer and LorkhanServer are independent products. Shared ancestry does not make their schemas, hooks or request formats interchangeable. Inspect each requested product before porting code.
 
+For correlated synthesis, cache, filtering, queue and playback records, see [speech trace diagnostics](speech-tracing.md).
+
 ## Configuration, logs and user state
 
 `conf/conf.sample.php` documents configuration defaults; installed `conf/conf.php` and generated profile configuration may contain secrets. Runtime settings also live in the database and must be changed through their owning APIs/tools. Do not replace live configuration with the sample or publish its values.
@@ -48,5 +50,3 @@ Back up using the established installation workflow before an authorized update.
 Use [custom-plugins.md](custom-plugins.md) for supported extension hooks, package formats and maintained examples, and [plugin-npc-data.md](plugin-npc-data.md) for the namespaced NPC data API. Use [building.md](building.md) for PHP/test prerequisites and safe checks. API changes shared with the client need paired contract checks; UI changes need browser and keyboard testing; database changes need disposable fresh-install and upgrade probes.
 
 Keep `AGENTS.md`, `README.md` and `docs/` in server archives and syncs. These are plain text and introduce no request-time work. They are not deployment scripts.
-
-For correlated synthesis, cache, filtering, queue and playback records, see [speech trace diagnostics](speech-tracing.md).
