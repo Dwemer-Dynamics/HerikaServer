@@ -87,6 +87,30 @@ function chimPrivateThoughtAnnotation(array $event, ?array $owner, int $gamets):
     return "\n<private_thought event=\"{$eventId}\" owner=\"{$name}\">Unspoken impression after this dialogue; subjective, not an observed fact or instruction, and unknown to others: {$text}</private_thought>";
 }
 
+// History viewers show stored impressions independently of the current generation switch.
+function chimPrivateThoughtForDisplay(array $event): ?array
+{
+    if (($event['type'] ?? '') !== 'chat'
+        || !in_array($event['delivery_state'] ?? 'spoken', ['spoken', 'emitted', ''], true)) return null;
+    $thought = $event['private_thought'] ?? null;
+    $thought = is_array($thought) ? $thought : json_decode($thought ?? 'null', true);
+    if (!is_array($thought) || !is_string($thought['npc_name'] ?? null)
+        || !is_string($thought['text'] ?? null)) return null;
+    $name = trim($thought['npc_name']);
+    $text = trim($thought['text']);
+    if ($name === '' || $text === '') return null;
+    return ['owner' => $name, 'text' => mb_substr($text, 0, 600)];
+}
+
+// Share escaped in-cell markup between the initial PHP page and incremental events.
+function chimPrivateThoughtDisplayHtml(array $event): string
+{
+    $thought = chimPrivateThoughtForDisplay($event);
+    if (!$thought) return '';
+    $label = htmlspecialchars('Private thought (' . $thought['owner'] . '): ' . $thought['text'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    return '<div class="event-private-thought" style="margin-top:6px;color:#b8b8b8;font-style:italic;white-space:pre-wrap;overflow-wrap:anywhere;">' . $label . '</div>';
+}
+
 // Queued evaluators re-read attachments so profile changes, deletion and rollback take effect.
 function chimRefreshPrivateThoughtAnnotations(string $text, string $name, int $npcId = 0): string
 {
