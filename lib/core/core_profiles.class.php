@@ -51,7 +51,6 @@ class CoreProfile
                 'COMBAT_BARK_COOLDOWN'   => $this->configuredInt('COMBAT_BARK_COOLDOWN', 30, 10, 600),
                 'LATEST_DIARY_CONTEXT_ENABLED' => false,
                 'PRIVATE_NPC_THOUGHTS_ENABLED' => false,
-                'PRIVATE_NPC_THOUGHTS_COUNT' => 3,
             ];
             $data['metadata'] = json_encode($defaultMeta, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         }

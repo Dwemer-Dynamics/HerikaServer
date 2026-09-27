@@ -8302,11 +8302,11 @@ if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_pro
     throw new RuntimeException('Dynamic profile migration failed.');
 }
 
-if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/core/database_schema/npc_private_thoughts.sql')) === false) {
+if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/core/database_schema/eventlog_private_thought.sql')) === false) {
     throw new RuntimeException('Private NPC thoughts migration failed.');
 }
 
-$updateVersion('npc_private_thoughts', 20260926001);
+$updateVersion('eventlog_private_thought', 20260926002);
 
 // Keep the installed snapshot functions and pgAdmin comments aligned with the current table policy.
 require_once dirname(__DIR__) . '/lib/playthrough_schema.php';

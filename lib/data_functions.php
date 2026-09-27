@@ -2581,7 +2581,7 @@ function herikaShouldExcludeEventFromPromptContext(array $row): bool
     return false;
 }
 
-function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
+function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="", int $thoughtNpcId = 0) {
 
     global $db;
 
@@ -2643,9 +2643,9 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
       when type='ext_held_item_pickup' or type='ext_held_item_drop' then 'HELD_ITEM' 
       when type like 'ext_%' then 'PLUGIN'
       else '' 
-    end as subtype,a.data  as data , gamets,localts,type,location
+    end as subtype,a.data as data, a.private_thought, a.delivery_state, a.rowid, gamets,localts,type,location
     FROM  eventlog a WHERE
-    type<>'combatend'
+    type<>'combatend' AND type<>'prechat'
     and type<>'bored' and type<>'init' and type<>'infoloc' and type<>'info' and type<>'funcret' and type<>'book'
     and type<>'addnpc' and type<>'infonpc' and type<>'infoitems'
     and type<>'updateprofile' and type<>'rechat' and type<>'setconf' and  type<>'status_msg'  and type<>'user_input'
@@ -2741,6 +2741,8 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
     }
 
     $orderedData = array_reverse($rawDataReFiltered);
+    require_once __DIR__ . '/npc_private_thoughts.php';
+    $thoughtOwner = chimPrivateThoughtOwner($actor, $thoughtNpcId);
 
     //$orderedData = array_slice($orderedData, $lastNelements);
 
@@ -2982,6 +2984,7 @@ New setting: $currentLocation
             $lastTimeCategory = $currentTimeCategory;
         }
         
+        $rowData .= chimPrivateThoughtAnnotation($row, $thoughtOwner, $currentGameTs);
         $row= array('role' => $lastSpeaker, 'content' => trim($rowData),'subtype'=>$row["subtype"]?:strtoupper($lastSpeaker),'type'=>$row["type"],'gamets'=>$row["gamets"]);
         $lastDialogFull[] = $row;
         $previousRow=$row;
@@ -3318,12 +3321,12 @@ function replaceRoles($lastDialogFull,$actor,$lastNelements) {
 
 }
 
-function DataLastDataExpandedFor($actor, $lastNelements = -10,$sqlfilter="")
+function DataLastDataExpandedFor($actor, $lastNelements = -10,$sqlfilter="", int $thoughtNpcId = 0)
 {
 
     $localStartTime=microtime(true);
 
-    $ctx1=buildHistoricContext($actor, $lastNelements ,$sqlfilter);    
+    $ctx1=buildHistoricContext($actor, $lastNelements ,$sqlfilter, $thoughtNpcId);
     error_log("[buildHistoricContext] Elapsed time: " . (microtime(true) - $localStartTime) . " seconds");
 
 
@@ -5907,6 +5910,7 @@ function call_llm() {
 }
 
 function call_llm_internal() {
+    if (isset($GLOBALS['CHIM_PRIVATE_THOUGHT_TURN'])) $GLOBALS['CHIM_PRIVATE_THOUGHT_TURN']['event_id'] = 0;
     chimInteractionRequire();
     global $contextData, $gameRequest, $receivedData, $startTime, $db;
     global $ERROR_TRIGGERED, $talkedSoFar, $alreadysent, $FUNCTIONS_ARE_ENABLED;

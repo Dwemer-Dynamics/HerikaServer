@@ -162,8 +162,7 @@ function chimPrismaProfileMetadataCatalog(): array
 {
     return [
         'Private Thoughts' => [
-            ['name' => 'PRIVATE_NPC_THOUGHTS_ENABLED', 'type' => 'boolean', 'default' => false, 'description' => 'Generate private NPC reflections and include them in the Character prompt. Off preserves stored thoughts.'],
-            ['name' => 'PRIVATE_NPC_THOUGHTS_COUNT', 'type' => 'integer', 'default' => 3, 'min' => 1, 'max' => 10, 'description' => 'Recent thoughts included in context, not the number retained.'],
+            ['name' => 'PRIVATE_NPC_THOUGHTS_ENABLED', 'type' => 'boolean', 'default' => false, 'description' => 'Generate private NPC reflections and show them after their dialogue in the NPC\'s own history. Off preserves stored thoughts.'],
         ],
         'Profiles & Memories' => [
             ['name' => 'DYNAMIC_PROFILE_ENABLED', 'type' => 'boolean', 'web_only' => true],

@@ -129,7 +129,6 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
     if (!empty($GLOBALS['pgr_skip_rollback'])) { $MUST_END = true; return; }
     $db->delete("eventlog", "gamets>={$gameRequest[2]}  ");
     $db->delete("eventlog", "localts>$now ");
-    $db->delete("npc_private_thoughts", "gamets>=" . intval($gameRequest[2]) . " OR localts>" . intval($now));
     //$db->delete("eventlog", "type='playerinfo'");
     //$db->delete("quests", "1=1");
     $db->delete("speech", "gamets>={$gameRequest[2]}  ");
@@ -1246,12 +1245,11 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
     if (!empty($GLOBALS['pgr_skip_rollback'])) { $MUST_END = true; return; }
     $lastSaveHistory = $db->fetchAll("select gamets from eventlog where type='infosave' order by ts desc limit 1 offset 0");
-    if (isset($lastSaveHistory[0]["ts"])) {
-        $lastSave = $lastSaveHistory[0]["ts"];
+    if (isset($lastSaveHistory[0]["gamets"])) {
+        $lastSave = $lastSaveHistory[0]["gamets"];
 
         $db->delete("eventlog", "gamets>$lastSave ");
 
-        $db->delete("npc_private_thoughts", "gamets>" . intval($lastSave));
         $db->delete("speech", "gamets>$lastSave  ");
         $db->delete("currentmission", "gamets>$lastSave  ");
         $db->delete("diarylog", "gamets>$lastSave  ");
