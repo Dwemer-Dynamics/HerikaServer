@@ -270,7 +270,7 @@ function herikaLocalLlmUpsertConnector(array $setup): int
         'model' => $setup['model'],
         'provider' => 'local',
         'driver' => 'openaijson',
-        'service' => 'custom',
+        'service' => $setup['server_type'] === 'dwemerdistro' ? 'dwemerdistro' : 'custom',
         'reasoning_model' => 0,
         'max_tokens' => 512,
         'enforce_json' => 1,

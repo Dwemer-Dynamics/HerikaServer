@@ -64,6 +64,8 @@ class LLMConnector
 
     private function normalizeConnectorRecord(array $data, bool $forWrite = false): array
     {
+        require_once dirname(__DIR__) . "/dwemerdistro_llm.php";
+        $data = DwemerDistroLlm::connector($data, $forWrite);
         if (array_key_exists("url", $data)) {
             $normalizedUrl = $this->normalizeConnectorUrlValue($data["url"]);
             if (!$forWrite && $normalizedUrl === null) {

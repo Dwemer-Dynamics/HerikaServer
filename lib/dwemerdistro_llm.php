@@ -4,6 +4,28 @@ final class DwemerDistroLlm
 {
     public const ENDPOINT = 'http://127.0.0.1:1234/v1/chat/completions';
 
+    /** Normalize the explicit service and recognize older Quickstart-owned connectors. */
+    public static function connector(array $data, bool $forWrite = false): array
+    {
+        $metadata = json_decode((string)($data['metadata'] ?? '{}'), true) ?: [];
+        $service = $data['service'] ?? '';
+        if (!$forWrite && ($metadata['quickstart_server_type'] ?? '') === 'dwemerdistro'
+            && in_array($service, ['', 'custom'], true) && ($data['url'] ?? '') === self::ENDPOINT) {
+            $service = 'dwemerdistro';
+        }
+        if ($service === 'dwemerdistro') {
+            $data['service'] = 'dwemerdistro';
+            $data['url'] = self::ENDPOINT;
+            $data['driver'] = 'openaijson';
+            $data['provider'] = 'local';
+            $data['api_badge_id'] = null;
+        } elseif ($forWrite && isset($data['service']) && ($metadata['quickstart_server_type'] ?? '') === 'dwemerdistro') {
+            $metadata['quickstart_server_type'] = 'other';
+            $data['metadata'] = json_encode($metadata);
+        }
+        return $data;
+    }
+
     public static function status(): array
     {
         $result = ['state' => 'not_installed', 'models' => [], 'message' => 'Install LLM Studio from the DwemerDistro launcher Components page.'];
