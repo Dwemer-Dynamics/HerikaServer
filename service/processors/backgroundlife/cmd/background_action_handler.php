@@ -786,6 +786,59 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
 
     if ($targetNpc === null) {
         error_log("[handleFindNPCAction] Target NPC not found: $targetNpcName");
+
+        if ($targetNpcName==$GLOBALS["PLAYER_NAME"]) {
+
+            $resolvedName = $GLOBALS["PLAYER_NAME"];
+            $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData['refid']));
+            $targetRefHexString = "0x00000014";
+
+            $db->insert('responselog', [
+                'localts' => time(),
+                'sent' => 0,
+                'actor' => 'rolemaster',
+                'text' => '',
+                'action' => "rolecommand|BackgroundCmd@$refHexString@MoveTo/$targetRefHexString",
+                'tag' => '',
+            ]);
+
+            $db->insert('eventlog', [
+                'ts' => $last_ts + 1,
+                'gamets' => $last_gamets + 20,
+                'type' => 'innerchat',
+                'data' => "The Narrator: $npcName locates $resolvedName at $lastReportedLocation, and walks towards him/her.",
+                'sess' => $momentum,
+                'localts' => time(),
+                'people' => $npcName,
+                'location' => null,
+                'party' => '',
+            ]);
+
+            $db->insert('actions_issued', [
+                'action' => 'MoveTo',
+                'fullcall' => "MoveTo:$targetRefHexString:$resolvedName",
+                'actorname' => $npcName,
+                'ts' => $last_ts,
+                'gamets' => $last_gamets,
+                'localts' => time(),
+                'original' => 'backgroundaction',
+            ]);
+
+            // Insert bgl_history log entry
+            $db->insert(
+                'bgl_history',
+                [
+                    'npc' => $npcName,
+                    'ts' => $last_ts,
+                    'gamets' => $last_gamets,
+                    'localts' => time(),
+                    'data' => "$npcName moves toward $resolvedName. Reason: {$GLOBALS["LAST_REASON"]}",
+                    'category' => 'move',
+                ]
+            );
+            return true;
+        }
+
         $db->insert('eventlog', [
             'ts' => $last_ts,
             'gamets' => $last_gamets + 10,
