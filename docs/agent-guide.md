@@ -45,6 +45,13 @@ For missing output, trace ingress, selected connector, provider result, response
 
 Back up using the established installation workflow before an authorized update. Preserve credentials, database contents, voice samples, generated media, installed extensions and mutable configuration. Never run the unit-test database setup, schema cleanup or factory reset against the user's runtime.
 
+## Provider diagnostics
+
+With trace logging enabled, the existing `[PERF]` entry in `log/chim.log` includes a `providers` list for dialogue recovery requests. Each row identifies the connector, driver and configured model, primary/fallback role, selection reason, success/failure/skip/interruption status, elapsed milliseconds, HTTP status and health snapshot. `retry_in_s` is the remaining cooldown or recovery-probe lease at the last health update, not a live countdown. Busy or unavailable cache states are identified separately. At most eight rows are retained per request.
+
+For OpenAI/OpenRouter JSON streams, `ttft_ms` measures from opening the provider request to the first observed content, reasoning, tool-call or refusal chunk; heartbeat and role-only chunks do not count. `first_content_ms` measures the first content chunk, which may still contain JSON framing rather than speakable dialogue. Buffered responses report no streaming TTFT. `upstream_provider` is populated only when the response explicitly supplies a provider name; otherwise it is null. These fields are retained on failed attempts too. They do not measure audible playback latency.
+
+The added diagnostics contain no prompt, response text, credentials or endpoint URL and add no provider requests or health-file reads. Existing logs may contain other request data; these fields do not redact the rest of the log. Background `fast_request()` calls are outside this dialogue diagnostic path.
 ## Speech sentence boundaries
 
 `lib/sentence_boundaries.php` supplies byte offsets to both streaming and full-text splitters. It preserves titles and initials, decimal/version tokens, ellipses, open narration spans, and closing quotes/brackets. CJK sentence punctuation supports adjacent characters without whitespace. Language-specific abbreviations use `CORE_LANG`; English titles are also recognized.
