@@ -1204,7 +1204,11 @@ class NpcMaster
 
         // Decode metadata and extended_data if available
         $metadata = json_decode($currentNpcData['metadata'] ?? '{}', true);
-        $presetId = is_array($metadata) ? ($metadata['tts_filter_preset'] ?? '') : '';
+        $presetId = resolveActorTtsFilterPreset(
+            is_array($metadata) ? $metadata : [],
+            chimGetGeneralSettingBool('AUTOMATIC_ACTOR_VOICE_EFFECTS', true),
+            chimGetGeneralSettingBool('TRANSFORMATION_DETECTION', true)
+        );
         setActiveTtsFilterPreset($presetId);
         $narratorManagedKeys = [
             'REMOVE_ASTERISKS_FROM_OUTPUT',
