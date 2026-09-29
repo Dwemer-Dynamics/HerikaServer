@@ -151,6 +151,7 @@ Format:
   \"action\": [
     \"Consume:itemid:qty\",
     \"Produced:itemid:qty\",
+    \"Manufactured:input_itemid:input_qty:output_itemid:output_qty\",
     \"DoNothing\"
   ],
   \"reasoning\": \"optional one-sentence explanation\"
@@ -161,7 +162,10 @@ Rules:
 - Only include valid actions in this exact string format:
   Consume:itemid:qty
   Produced:itemid:qty
+  Manufactured:input_itemid:input_qty:output_itemid:output_qty
   DoNothing
+- Manufactured removes input_qty of input_itemid and adds output_qty of output_itemid.
+- If no source materials for a Manufactured action are available, the action should be skipped (->DoNothing)
 - itemid must match in-game inventory identifiers.
 - qty must be an integer.
 - You may include multiple actions if needed.
@@ -201,20 +205,47 @@ Rules:
     if ($action) {
         $actionTextDescription = [];
         foreach ($action as $singleAction) {
+            if ($singleAction === 'DoNothing') {
+                continue;
+            }
+
             error_log("[BGL RUN] $npcNameEsc — Idle production/consumption detected: $singleAction. Reasoning: $reasoning");
 
             $skyrimCmd = new SkyrimCommandBuilder();
             $sourceRefHexString = strtolower(convertSignedToUnsignedHex(hexdec($currentNpcData['refid'])));
             // Parse action string
-            list($actionType, $itemId, $count) = explode(':', $singleAction);
-            $itemId = strtr(strtolower($itemId), ["0x" => ""]); // Remove 0x prefix if present
+            $actionParts = explode(':', $singleAction);
+            $actionType = $actionParts[0] ?? '';
+            $itemId = strtr(strtolower($actionParts[1] ?? ''), ["0x" => ""]); // Remove 0x prefix if present
+            $count = (int) ($actionParts[2] ?? 0);
 
-            $count = (int) $count;
             if ($actionType === 'Consume') {
+                if ($itemId === '' || $count <= 0) {
+                    error_log("[BGL RUN] $npcNameEsc — Ignoring malformed Consume action: $singleAction");
+                    continue;
+                }
                 $json = $skyrimCmd->ObjectReference->RemoveItem($sourceRefHexString, "0x$itemId", $count, true);
                 $skyrimCmd->send(cmd: $json);
             } elseif ($actionType === 'Produced') {
+                if ($itemId === '' || $count <= 0) {
+                    error_log("[BGL RUN] $npcNameEsc — Ignoring malformed Produced action: $singleAction");
+                    continue;
+                }
                 $json = $skyrimCmd->ObjectReference->AddItem($sourceRefHexString, "0x$itemId", $count, true);
+                $skyrimCmd->send(cmd: $json);
+            } elseif ($actionType === 'Manufactured') {
+                $outputItemId = strtr(strtolower($actionParts[3] ?? ''), ["0x" => ""]);
+                $outputCount = (int) ($actionParts[4] ?? 0);
+
+                if ($itemId === '' || $count <= 0 || $outputItemId === '' || $outputCount <= 0) {
+                    error_log("[BGL RUN] $npcNameEsc — Ignoring malformed Manufactured action: $singleAction");
+                    continue;
+                }
+
+                $json = $skyrimCmd->ObjectReference->RemoveItem($sourceRefHexString, "0x$itemId", $count, true);
+                $skyrimCmd->send(cmd: $json);
+
+                $json = $skyrimCmd->ObjectReference->AddItem($sourceRefHexString, "0x$outputItemId", $outputCount, true);
                 $skyrimCmd->send(cmd: $json);
             }
 
@@ -224,6 +255,13 @@ Rules:
                 $itemNameResolved = "($count {$itemName})";
             } else {
                 $itemNameResolved = "";
+            }
+
+            if ($actionType === 'Manufactured') {
+                $outputItemName = getNameForItemReference(strtoupper($outputItemId));
+                $itemNameResolved = $outputItemName
+                    ? "($count {$itemName} -> $outputCount {$outputItemName})"
+                    : "($count {$itemName} -> $outputCount $outputItemId)";
             }
 
             $actionText[] = $singleAction;
@@ -422,7 +460,7 @@ function requestForaction(
         $lastActionsSummary[$action['gamets']] = "$actionParts[0] $actionParts[1] ($hoursAgo hours ago)";
     }
     
-    $step2Content .= "<text>\nLast actions issued:\n" . implode("\n", array_reverse($lastActionsSummary)) . "\n</text>\n\n";
+    $step2Content .= "<last_actions_history>\nLast actions issued:\n" . implode("\n", array_reverse($lastActionsSummary)) . "\n</last_actions_history>\n\n";
     $step2Content .= "<text>\n$innerThoughtBuffer\n</text>\n\n";
     $step2Content .= $innerThoughtStyle . "\n\n";
 
@@ -436,7 +474,7 @@ Decision rules (highest priority first):
 2. If the NPC has an active goal, choose the action that makes the most progress toward that goal.
 3. Avoid unnecessary movement or repetitive conversations.
 4. Do not invent information that is not present in the context.
-
+5. Check <last_actions_history> to avoid repeating recent actions.
 Available actions:
 
 StayAtPlace:<Place>:<intent>
