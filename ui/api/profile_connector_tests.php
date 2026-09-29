@@ -313,7 +313,7 @@ function profileConnectorTestsBuildGlobalPlan(): array
         ['field' => 'CORE_CONNECTOR_QUEST_ENGINE', 'type' => 'llm', 'label' => 'Quest Engine Connector', 'enabled_by' => 'CORE_CONNECTOR_QUEST_ENGINE_ENABLED'],
         ['field' => 'CORE_CONNECTOR_BGL', 'type' => 'llm', 'label' => 'Background Life', 'enabled_by' => 'CORE_CONNECTOR_BGL_ENABLED'],
         ['field' => 'RELLLM_CONNECTOR', 'type' => 'llm', 'label' => 'Relationship Management', 'enabled_by' => 'RELATIONSHIP_SYSTEM_ENABLED', 'enabled_label' => 'Relationship Management'],
-        ['field' => 'CORE_CONNECTOR_OGHMA_CUSTOM', 'type' => 'llm', 'label' => 'Oghma Extractor Fallback', 'enabled_by' => 'OGHMA_EXTRACTOR_FALLBACK', 'enabled_label' => 'Oghma Extractor Fallback'],
+        ['field' => 'CORE_CONNECTOR_OGHMA_CUSTOM', 'type' => 'llm', 'label' => 'Oghma Routing', 'enabled_by' => 'OGHMA_EXTRACTOR_FALLBACK', 'enabled_label' => 'Oghma routing'],
     ];
 
     $jobs = [];
@@ -321,7 +321,9 @@ function profileConnectorTestsBuildGlobalPlan(): array
 
     foreach ($slotDefinitions as $definition) {
         $enabledBy = profileConnectorTestsString($definition['enabled_by'] ?? '');
-        if ($enabledBy !== '' && !profileConnectorTestsBoolish(profileConnectorTestsGlobalValue($enabledBy, false))) {
+        $multilingualOghma = $definition['field'] === 'CORE_CONNECTOR_OGHMA_CUSTOM'
+            && profileConnectorTestsBoolish(profileConnectorTestsGlobalValue('OGHMA_MULTILINGUAL_ROUTING', false));
+        if ($enabledBy !== '' && !$multilingualOghma && !profileConnectorTestsBoolish(profileConnectorTestsGlobalValue($enabledBy, false))) {
             $slots[] = [
                 'field' => $definition['field'],
                 'type' => $definition['type'],

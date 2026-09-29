@@ -50,7 +50,7 @@ $tabControlPanels = [
 $connectorAvailabilityToggles = chimGlobalLlmConnectorAvailabilityMap();
 
 // Paired toggles stay beside their connector instead of appearing twice. OGHMA_EXTRACTOR_FALLBACK
-// gates the Oghma extractor connector, so it renders next to it rather than as its own card.
+// controls native fallback; multilingual routing can independently use the same connector.
 $pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_EXTRACTOR_FALLBACK']);
 foreach ($gsSections as $sectionName => $fields) {
     $gsSections[$sectionName] = array_values(array_filter($fields, static function (array $field) use ($pairedConnectorToggles): bool {
@@ -100,7 +100,7 @@ function pretty_label(string $flatName): string
         'CORE_CONNECTOR_QUEST_CREATION' => 'Quest Creation Connector',
         'CORE_CONNECTOR_QUEST_ENGINE' => 'Quest Engine Connector',
         'CORE_CONNECTOR_BGL' => 'Background Life',
-        'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Extractor Fallback',
+        'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Connector',
         'RELLLM_CONNECTOR' => 'Relationship Management',
         'RELATIONSHIP_UPDATE_CHANCE' => 'Relationship Update Chance',
         'NEVER_CLEAR_RELATIONSHIP_DATA' => 'Never Clear Relationship Data',
@@ -112,6 +112,7 @@ function pretty_label(string $flatName): string
         'OGHMA_AMOUNT' => 'Oghma Topic Count',
         'OGHMA_RESULT_LIMIT' => 'Oghma Result Limit',
         'OGHMA_EXTRACTOR_TIMEOUT_MS' => 'Extractor Timeout (ms)',
+        'OGHMA_MULTILINGUAL_ROUTING' => 'Multilingual Oghma Routing',
         'RACIAL_OGHMA' => 'Force Racial Oghma',
         'LOCATION_OGHMA' => 'Force Location Oghma',
         'ENFORCE_STRICT_RECHAT_RESPONSE' => 'Strict Rechat Targeting',
@@ -1786,7 +1787,7 @@ body .settings-tabs .settings-tab.is-active {
                                         <?php if ($fieldType === 'boolean'): ?>
                                             <div class="provider-toggle">
                                                 <input type="hidden" name="<?php echo htmlspecialchars($fieldName); ?>" value="false">
-                                                <input type="checkbox" name="<?php echo htmlspecialchars($fieldName); ?>" value="true" <?php echo ($current ? 'checked' : ''); ?> <?php echo $isReadonly ? 'disabled' : ''; ?>>
+                                                <input type="checkbox" name="<?php echo htmlspecialchars($fieldName); ?>" aria-label="<?php echo htmlspecialchars($label); ?>" value="true" <?php echo ($current ? 'checked' : ''); ?> <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             </div>
                                         <?php endif; ?>
                                         <?php if (isset($connectorAvailabilityToggles[$fieldName])): ?>
@@ -1795,7 +1796,7 @@ body .settings-tabs .settings-tab.is-active {
                                         <?php if ($fieldName === 'CORE_CONNECTOR_OGHMA_CUSTOM'): ?>
                                             <div class="provider-toggle">
                                                 <input type="hidden" name="OGHMA_EXTRACTOR_FALLBACK" value="false">
-                                                <input type="checkbox" name="OGHMA_EXTRACTOR_FALLBACK" value="true" <?php echo (current_value('OGHMA_EXTRACTOR_FALLBACK') ? 'checked' : ''); ?> title="Allow one bounded connector fallback after deterministic Oghma abstains">
+                                                <label><input type="checkbox" name="OGHMA_EXTRACTOR_FALLBACK" value="true" <?php echo (current_value('OGHMA_EXTRACTOR_FALLBACK') ? 'checked' : ''); ?> title="Used when Multilingual Oghma Routing is off"> Extractor Fallback</label>
                                             </div>
                                         <?php endif; ?>
                                     </div>
