@@ -11,6 +11,7 @@ trait ChimProviderStream
     private string $recoveryPending = '';
     private bool $recoveryCompleted = false;
     private bool $recoveryRefused = false;
+    private ?string $testFinishReason = null;
     public ?string $recoveryFailure = null;
     public $recoveryPoll = null;
     private float $diagnosticStart = 0;
@@ -33,6 +34,7 @@ trait ChimProviderStream
         $this->recoveryPending = '';
         $this->recoveryCompleted = false;
         $this->recoveryRefused = false;
+        $this->testFinishReason = null;
         $this->recoveryFailure = null;
     }
 
@@ -112,6 +114,7 @@ trait ChimProviderStream
         }
         if (isset($data['error'])) { $this->recoveryFailure = 'provider'; return; }
         $choice = $data['choices'][0] ?? [];
+        if (is_string($choice['finish_reason'] ?? null)) $this->testFinishReason = $choice['finish_reason'];
         $delta = $choice['delta'] ?? $choice['message'] ?? [];
         if (is_array($delta)) {
             $content = (is_string($delta['content'] ?? null) && $delta['content'] !== '')
@@ -134,6 +137,13 @@ trait ChimProviderStream
     {
         return $this->recoveryFailure !== null || ($this->recoveryPending === ''
             && ($this->recoveryCompleted || !is_resource($this->primary_handler) || feof($this->primary_handler)));
+    }
+
+    // Read-only completion evidence for explicit connector tests; no recovery or health mutation.
+    public function providerTestCompletion(): array
+    {
+        return ['complete' => $this->recoveryCompleted, 'refused' => $this->recoveryRefused,
+            'failure' => $this->recoveryFailure, 'finish_reason' => $this->testFinishReason];
     }
 
     public function providerDiagnostics(): array

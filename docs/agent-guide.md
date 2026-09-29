@@ -64,6 +64,13 @@ Use [custom-plugins.md](custom-plugins.md) for supported extension hooks, packag
 
 Keep `AGENTS.md`, `README.md` and `docs/` in server archives and syncs. These are plain text and introduce no request-time work. They are not deployment scripts.
 
+## Connector capability tests
+
+The individual LLM Test button and profile/global connector batches share the same isolated test endpoint. They call the selected connector directly with a synthetic greeting; they do not run fallback, update provider recovery health, execute actions, synthesize dialogue or generate memories. Existing connector audit/log writes still apply. Tests incur the selected provider's normal usage charges.
+
+Results separate connection, completion, dialogue JSON and the harmless Talk action fields. JSON drivers must return a complete object; plain-text drivers are not required to emit JSON and native tool calls are reported as untested. Provider completion/refusal/token-limit evidence and first-token timing are available for openaijson/openrouterjson. Older drivers report a warning when provider finish status is unavailable. The loop caps iterations, returned text and elapsed time; blocking legacy calls remain subject to their driver's transport timeout.
+
+The image test sends a fixed two-shape fixture and checks the left/right colours. A nonempty but incorrect answer is a recognition warning, not proof of vision support. Batch jobs still deduplicate connector IDs; this is not a test of every diary/formatter prompt or every game action.
 ## Automatic actor voice effects
 
 Automatic Actor Voice Effects is a global setting under Memory & Others / Misc in PHP and Prisma, enabled by default. It temporarily selects Werewolf for werewolf form, Vampire Lord for vampire-lord form, Combat for combat/attacking, or Sneaking for sneaking, in that priority order. Transformation effects also respect Transformation Detection. The NPC's saved filter is never overwritten. Normal, missing, future or older-than-one-minute observations fall back to the saved filter. Effects are selected with NPC voice setup and remain fixed for that response; narrator and book-reading filters keep their existing paths.
