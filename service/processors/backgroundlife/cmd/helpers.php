@@ -162,9 +162,10 @@ Rules:
 - Only include valid actions in this exact string format:
   Consume:itemid:qty
   Produced:itemid:qty
-    Manufactured:input_itemid:input_qty:output_itemid:output_qty
+  Manufactured:input_itemid:input_qty:output_itemid:output_qty
   DoNothing
 - Manufactured removes input_qty of input_itemid and adds output_qty of output_itemid.
+- If no source materials for a Manufactured action are available, the action should be skipped (->DoNothing)
 - itemid must match in-game inventory identifiers.
 - qty must be an integer.
 - You may include multiple actions if needed.
