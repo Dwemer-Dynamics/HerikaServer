@@ -513,6 +513,16 @@ if ($fullMode) {
 
 $promptContent .= "<text>\n$buffer\n</text>\n\n";
 
+// Player letters waiting for an answer. When present, the notification letter is the reply.
+require_once $enginePath . 'lib/bgl_letters.php';
+$unansweredLetters = $lettersEnabled ? chimLetterUnansweredFromPlayer($GLOBALS["HERIKA_NAME"]) : [];
+$replyToLetterId = $unansweredLetters ? (int)end($unansweredLetters)['id'] : 0;
+if ($unansweredLetters) {
+    $promptContent .= chimLetterUnansweredPromptBlock($unansweredLetters)
+        . "{$GLOBALS["HERIKA_NAME"]} has received the letters above from {$GLOBALS["PLAYER_NAME"]} by courier. "
+        . "If {$GLOBALS["HERIKA_NAME"]} writes a <notification>, it is the reply to them.\n\n";
+}
+
 $promptContent .= $innerThoughtStyle . "\n\n";
 
 // Hardcoded action definitions
@@ -624,7 +634,8 @@ if (is_array($parsed)) {
 
     if ($parsed["notification"] && $lettersEnabled) {
         $dateStringSK = convert_gamets2skyrim_long_date(DataLastKnownGameTS());
-        $fullTitle = "A letter from {$GLOBALS["HERIKA_NAME"]} ($dateStringSK)";
+        // Unique, because the note image and the books row are both keyed by title.
+        $fullTitle = chimLetterUniqueTitle("A letter from {$GLOBALS["HERIKA_NAME"]} ($dateStringSK)");
 
         // This is going to create a picture with the letter.
         createLetter($fullTitle, $parsed["notification"]);
@@ -749,6 +760,8 @@ if (is_array($parsed)) {
                 'title' => $fullTitle
             )
         );
+
+        chimLetterRecordToPlayer($GLOBALS["HERIKA_NAME"], (string)$currentNpcData["refid"], $fullTitle, $parsed["notification"], $replyToLetterId);
     }
 
     if ($parsed["rumor"]) {

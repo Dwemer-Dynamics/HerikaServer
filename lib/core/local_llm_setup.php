@@ -1,11 +1,14 @@
 <?php
 
+require_once dirname(__DIR__) . '/dwemerdistro_llm.php';
+
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'llm_connector.class.php';
 require_once __DIR__ . DIRECTORY_SEPARATOR . 'api_badge.class.php';
 
 function herikaLocalLlmServerCatalog(): array
 {
     return [
+        'dwemerdistro' => ['label' => 'DwemerDistro LLM Studio', 'port' => 1234],
         'lm_studio' => ['label' => 'LM Studio', 'port' => 1234],
         'ollama' => ['label' => 'Ollama', 'port' => 11434],
         'llama_cpp' => ['label' => 'llama.cpp', 'port' => 8080],
@@ -136,6 +139,10 @@ function herikaLocalLlmNormalizeSetup(array $raw): array
         throw new InvalidArgumentException('Choose a supported local LLM server.');
     }
 
+    if ($serverType === 'dwemerdistro') {
+        $raw['url'] = DwemerDistroLlm::ENDPOINT;
+        $raw['api_key'] = '';
+    }
     $scope = strtolower(trim(strval($raw['scope'] ?? $raw['qs_local_llm_scope'] ?? 'conversations')));
     if (!in_array($scope, ['conversations', 'all'], true)) {
         throw new InvalidArgumentException('Choose a valid Local LLM routing option.');
@@ -248,7 +255,7 @@ function herikaLocalLlmUpsertConnector(array $setup): int
 {
     $connectors = new LLMConnector();
     $existing = herikaLocalLlmManagedConnector();
-    $apiBadgeId = herikaLocalLlmUpsertApiBadge($existing, $setup['api_key']);
+    $apiBadgeId = $setup['server_type'] === 'dwemerdistro' ? null : herikaLocalLlmUpsertApiBadge($existing, $setup['api_key']);
     $metadata = [
         'quickstart_managed' => true,
         'quickstart_server_type' => $setup['server_type'],
@@ -263,7 +270,7 @@ function herikaLocalLlmUpsertConnector(array $setup): int
         'model' => $setup['model'],
         'provider' => 'local',
         'driver' => 'openaijson',
-        'service' => 'custom',
+        'service' => $setup['server_type'] === 'dwemerdistro' ? 'dwemerdistro' : 'custom',
         'reasoning_model' => 0,
         'max_tokens' => 512,
         'enforce_json' => 1,
@@ -355,6 +362,14 @@ function herikaLocalLlmRouteConnector(int $connectorId, string $scope): void
 function herikaLocalLlmApplySetup(array $raw): array
 {
     $setup = herikaLocalLlmNormalizeSetup($raw);
+    if ($setup['server_type'] === 'dwemerdistro') {
+        if (session_status() !== PHP_SESSION_ACTIVE) session_start();
+        $tested = $_SESSION['dwemerdistro_llm_test'] ?? [];
+        if (($tested['hash'] ?? '') !== hash('sha256', json_encode($setup)) || time() - ($tested['time'] ?? 0) > 600) {
+            throw new InvalidArgumentException('Test these LLM Studio settings successfully before applying them.');
+        }
+    }
+    if ($setup['server_type'] === 'dwemerdistro') DwemerDistroLlm::requireModel($setup['model']);
     $connectorId = herikaLocalLlmUpsertConnector($setup);
     herikaLocalLlmRouteConnector($connectorId, $setup['scope']);
 
@@ -370,6 +385,11 @@ function herikaLocalLlmTestDraft(array $raw): array
     $started = microtime(true);
     try {
         $setup = herikaLocalLlmNormalizeSetup($raw);
+        if ($setup['server_type'] === 'dwemerdistro') {
+            if (session_status() !== PHP_SESSION_ACTIVE) session_start();
+            unset($_SESSION['dwemerdistro_llm_test']);
+            DwemerDistroLlm::requireModel($setup['model']);
+        }
     } catch (Throwable $e) {
         return [
             'status' => 'fail',
@@ -379,7 +399,7 @@ function herikaLocalLlmTestDraft(array $raw): array
         ];
     }
 
-    if ($setup['api_key'] === '') {
+    if ($setup['server_type'] !== 'dwemerdistro' && $setup['api_key'] === '') {
         $managedConnector = herikaLocalLlmManagedConnector();
         $badgeId = intval($managedConnector['api_badge_id'] ?? 0);
         if ($badgeId > 0) {
@@ -476,6 +496,10 @@ function herikaLocalLlmTestDraft(array $raw): array
         ];
     }
 
+    if ($setup['server_type'] === 'dwemerdistro') {
+        if (session_status() !== PHP_SESSION_ACTIVE) session_start();
+        $_SESSION['dwemerdistro_llm_test'] = ['hash' => hash('sha256', json_encode($setup)), 'time' => time()];
+    }
     return [
         'status' => 'pass',
         'message' => 'Local LLM responded successfully.',

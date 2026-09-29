@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . '/lib/speech_trace.php';
 
 // Generate reference-conditioned speech through the isolated Higgs audio.cpp service.
 $GLOBALS['TTS_IN_USE'] = function ($textString, $mood, $stringforhash) {
@@ -21,7 +22,7 @@ $GLOBALS['TTS_IN_USE'] = function ($textString, $mood, $stringforhash) {
     $hash = md5('higgs|' . $endpoint . '|' . $model . '|' . $voice . '|' . trim($stringforhash) . '|' . $text);
     $cache = dirname(__DIR__) . '/soundcache/';
     $output = $cache . $hash . '.wav';
-    if (($GLOBALS['AVOID_TTS_CACHE'] ?? true) === false && is_file($output) && filesize($output) > 44) return 'soundcache/' . $hash . '.wav';
+    if (($GLOBALS['AVOID_TTS_CACHE'] ?? true) === false && is_file($output) && filesize($output) > 44) return chimTraceCachedTts('soundcache/' . $hash . '.wav', 'higgs');
     $request = ['model' => $model, 'input' => $text, 'voice' => $voice];
     $host = strtolower(strval(parse_url($endpoint, PHP_URL_HOST)));
     if (!in_array(strtolower(strval(parse_url($endpoint, PHP_URL_SCHEME))), ['http', 'https'], true)) return false;
