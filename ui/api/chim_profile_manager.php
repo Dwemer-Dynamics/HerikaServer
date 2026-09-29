@@ -59,7 +59,7 @@ function chimProfileManagerLabel(string $name): string
         'BORED_EVENT' => 'Bored Event',
         'CONTEXT_HISTORY' => 'Context History', 'CONTEXT_HISTORY_DIARY' => 'Diary Context History',
         'CONTEXT_HISTORY_DYNAMIC_PROFILE' => 'Dynamic Profile Context History', 'MAX_WORDS_LIMIT' => 'Maximum Words',
-        'QUEST_COMMENT' => 'Quest Commentary', 'QUEST_COMMENT_CHANCE' => 'Quest Commentary Chance',
+        'QUEST_COMMENT' => 'NPC Quest Comments', 'QUEST_COMMENT_CHANCE' => 'NPC Quest Comment Chance',
         'COMBAT_BARK_COOLDOWN' => 'Combat Bark Cooldown', 'DIARY_PROMPT' => 'Diary Prompt',
         'DIARY_COOLDOWN' => 'Diary Cooldown', 'RPG_COMMENTS' => 'RPG Comments',
         'RPG_COMMENTS_CHANCE' => 'RPG Comments Chance',
