@@ -403,6 +403,7 @@ function requestForaction(
     $db,
     $startGamets,
     $last_gamets,
+    string $encounterActions = '',
 ): string {
     $step2Content = "You are responsible for deciding a single action"
         . " based on the character's inner thoughts and the provided context.\n"
@@ -536,6 +537,15 @@ PROMPT2;
 SendLetter
 - Send a letter to {$GLOBALS["PLAYER_NAME"]}.
 ";
+
+        // Player letters waiting for an answer. Replying is encouraged, not forced.
+        require_once dirname(__DIR__, 4) . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'bgl_letters.php';
+        $unansweredLetters = chimLetterUnansweredFromPlayer($GLOBALS["HERIKA_NAME"]);
+        if ($unansweredLetters) {
+            $step2Content .= "- {$GLOBALS["HERIKA_NAME"]} has received letters from {$GLOBALS["PLAYER_NAME"]} by courier that are not answered yet.\n"
+                . "  Choosing SendLetter writes the reply. Prefer it unless {$GLOBALS["HERIKA_NAME"]} would rather wait and answer in person.\n"
+                . chimLetterUnansweredPromptBlock($unansweredLetters);
+        }
     }
 
     if ($npcIsTravelling) {
@@ -550,6 +560,8 @@ Note:
 PROMPT3;
     }
 
+
+    $step2Content .= $encounterActions;
 
     // Hinter
 

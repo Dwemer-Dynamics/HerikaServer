@@ -33,6 +33,8 @@ An HTTP success does not prove that an actor spoke or an action completed. Corre
 
 HerikaServer, StobeServer, DialecticServer and LorkhanServer are independent products. Shared ancestry does not make their schemas, hooks or request formats interchangeable. Inspect each requested product before porting code.
 
+For correlated synthesis, cache, filtering, queue and playback records, see [speech trace diagnostics](speech-tracing.md).
+
 ## Configuration, logs and user state
 
 `conf/conf.sample.php` documents configuration defaults; installed `conf/conf.php` and generated profile configuration may contain secrets. Runtime settings also live in the database and must be changed through their owning APIs/tools. Do not replace live configuration with the sample or publish its values.
@@ -42,6 +44,12 @@ HerikaServer, StobeServer, DialecticServer and LorkhanServer are independent pro
 For missing output, trace ingress, selected connector, provider result, response delivery and client playback. For memory/profile issues, confirm the active server playthrough before inspecting its records. Follow `lib/playthrough_policy.php` for table ownership: clearing event history or switching all tables can damage NPC memory or reusable settings.
 
 Back up using the established installation workflow before an authorized update. Preserve credentials, database contents, voice samples, generated media, installed extensions and mutable configuration. Never run the unit-test database setup, schema cleanup or factory reset against the user's runtime.
+
+## Speech sentence boundaries
+
+`lib/sentence_boundaries.php` supplies byte offsets to both streaming and full-text splitters. It preserves titles and initials, decimal/version tokens, ellipses, open narration spans, and closing quotes/brackets. CJK sentence punctuation supports adjacent characters without whitespace. Language-specific abbreviations use `CORE_LANG`; English titles are also recognized.
+
+Streaming waits for a following non-whitespace character before committing a boundary. The existing end-of-response flush releases the final fragment. Existing minimum/maximum chunk-size behavior is retained. These are conservative text rules, not a linguistic model: ambiguous abbreviations may keep adjacent sentences together. No extra model call or settings page is involved.
 
 ## Extend and validate
 
@@ -59,3 +67,12 @@ Travel starts three game hours early. Routine progress checks run hourly; the wo
 CHIM Off blocks new schedule commands. An already installed travel package can continue until it is released. Cancellation/deletion waits for the game's release acknowledgement; Retry resends a stalled operation. Timeline changes invalidate old occurrences after release. Load the corresponding game and server saves together. Dynamic references and ambiguous same-name AI duties are rejected. A valid marker does not prove navmesh reachability: verify travel, waiting, teleport and package restoration in Skyrim before release.
 
 The paired protocol uses `BackgroundCmd@actor@Schedule/run/token/operation/destination/issuedDays` and `util_npc_schedule` replies containing `run/token/actor/operation/result/marker`. Operations are validate, travel, check, ensure and release. The client restores only its owned travel override and link, and the server accepts only the pending operation's matching token, actor and clock epoch. Compile CHIMSchedule.psc alongside AIAgentAIMind.psc when building the client payload.
+## Automatic actor voice effects
+
+Automatic Actor Voice Effects is a global setting under Memory & Others / Misc in PHP and Prisma, enabled by default. It temporarily selects Werewolf for werewolf form, Vampire Lord for vampire-lord form, Combat for combat/attacking, or Sneaking for sneaking, in that priority order. Transformation effects also respect Transformation Detection. The NPC's saved filter is never overwritten. Normal, missing, future or older-than-one-minute observations fall back to the saved filter. Effects are selected with NPC voice setup and remain fixed for that response; narrator and book-reading filters keep their existing paths.
+
+The setting is reusable general_settings configuration and stays global across playthrough restores. Transformation/activity updates record server receipt time because client timestamps may use a monotonic nanosecond clock. Existing transformation/activity metadata remains NPC playthrough data; there is no new table or migration. Current client updates identify NPCs by name and arrive periodically, so effect switching is not instantaneous and inherits existing same-name routing limitations.
+
+Automatic effects use the existing FFmpeg WAV path. Filter failure preserves the generated audio. Filtered requests keep the existing TTS-cache bypass, so default-on combat/sneaking effects can increase synthesis work and latency. No new provider request, polling or model prompt is introduced by effect selection itself. A small .wav.ttsfilter marker prevents a normal voice from reusing previously filtered audio at the same dialogue-text hash; fresh unfiltered generation removes the marker. If a marker cannot be created, filtering is skipped and speech stays available.
+
+The four actor effects are also selectable voice-filter presets in the PHP NPC editor and Prisma, through the shared preset catalog. Werewolf lowers pitch by about six semitones and adds rough modulation; Vampire Lord lowers pitch by about three semitones with chorus and echo; Combat increases pace, presence and loudness; Sneaking reduces brightness and loudness with slightly slower delivery. These are audio effects, not new expressive TTS performances: Sneaking does not synthesize a true whisper. Existing Deep, Sinister, Commanding and Soft-Spoken presets are unchanged.

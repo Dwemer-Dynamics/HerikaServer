@@ -46,6 +46,7 @@ BEGIN
         IF NOT (table_name=ANY(source_names)) THEN
             SELECT v.version_key, v.version INTO version_key, required_version FROM (VALUES
                 ('bgl_history','bgl_history',20260623001::bigint),
+                ('bgl_letters','bgl_letters',20260924001::bigint),
                 ('bgl_encounters','bgl_encounters',20260810001::bigint),
                 ('bgl_encounter_participants','bgl_encounters',20260810001::bigint),
                 ('bgl_encounter_loot','bgl_encounters',20260810001::bigint),
@@ -83,7 +84,7 @@ BEGIN
                     RAISE EXCEPTION 'Snapshot is missing table %, which already existed when it was saved',table_name;
                 END IF;
                 -- Either feature may be installed first. Missing pre-install state starts empty.
-                IF table_name=ANY(ARRAY['bgl_encounters','bgl_encounter_participants','bgl_encounter_loot','npc_commitments','npc_schedule_runs']) THEN
+                IF table_name=ANY(ARRAY['bgl_encounters','bgl_encounter_participants','bgl_encounter_loot','npc_commitments','npc_schedule_runs','bgl_letters']) THEN
                     empty_tables := array_append(empty_tables,table_name);
                 END IF;
             END IF;
@@ -182,7 +183,7 @@ BEGIN
     ) THEN RAISE EXCEPTION 'Snapshot sequence defaults still reference another schema'; END IF;
 
     EXECUTE format('COMMENT ON SCHEMA %I IS %L',stage_schema,
-        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',6,
+        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',8,
             'tables',live_names,'missing_tables',missing_tables,'empty_tables',empty_tables,'source_schema',source_schema,
             'upgrade_version',2)::text);
     RETURN stage_schema;
@@ -222,4 +223,4 @@ END;
 $$ LANGUAGE plpgsql SET lock_timeout = '10s';
 
 CREATE OR REPLACE FUNCTION chim_meta.playthrough_api_version()
-RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 9';
+RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 11';

@@ -5,6 +5,7 @@ require_once($GLOBALS["ENGINE_PATH"] . "/lib/dynamic_update_util.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/utils_game_timestamp.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/playthrough_autosave.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/core/game_plugins.php");
+require_once($GLOBALS["ENGINE_PATH"] . "/lib/background_life_encounters.php");
 
 $MUST_END = false;
 if (($gameRequest[0] ?? '') === 'util_npc_schedule') {
@@ -154,6 +155,7 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
     $db->delete("named_cell", "gamets<=({$gameRequest[2]} - 30000000) "); //((24 * 3) / 0.0000024)
     $db->delete("sneq_quests_saved", "gamets>={$gameRequest[2]}  ");
     $db->delete("bgl_history", "gamets>={$gameRequest[2]}  ");
+    $db->delete("bgl_encounters", "gamets>={$gameRequest[2]}  ");
     $db->delete("conf_opts", "id='book_reading_state'");
 
 
@@ -552,6 +554,18 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
     Logger::warn("[DEPRECATED] updateskills event - use gamedata.php endpoint instead");
     $MUST_END = true;
 
+} elseif ($gameRequest[0] == "backgroundcombat_result") {
+    if (!chimBglHandleCombatResultAck($db, (string)$gameRequest[3])) {
+        Logger::warn("[BGL COMBAT] Ignored invalid combat result acknowledgement");
+    }
+    $MUST_END = true;
+
+} elseif ($gameRequest[0] == "backgroundloot_result") {
+    if (!chimBglHandleLootResultAck($db, (string)$gameRequest[3])) {
+        Logger::warn("[BGL LOOT] Ignored invalid loot result acknowledgement");
+    }
+    $MUST_END = true;
+
 } elseif ($gameRequest[0] == "updatestats") {
     // Live stats update (combat-aware, every 3s in combat or on hit)
     $updateData = explode("@", $gameRequest[3]);
@@ -610,6 +624,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 if ($utteranceId === "") {
                     continue;
                 }
+                chimSpeechTrace('client_aborted', [], $utteranceId);
                 $utteranceIds[$utteranceId] = $db->escape($utteranceId);
             }
         }
@@ -645,6 +660,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         $speechSpeaker = isset($speech["speaker"]) ? trim((string) $speech["speaker"]) : "";
         $speechListener = isset($speech["listener"]) ? trim((string) $speech["listener"]) : "";
         $speechUtteranceId = isset($speech["utterance_id"]) ? trim((string) $speech["utterance_id"]) : "";
+        chimSpeechTrace('client_acknowledged', [], $speechUtteranceId);
         $audiblePeople = [];
         if (isset($speech["companions"]) && is_array($speech["companions"])) {
             foreach ($speech["companions"] as $companionName) {
@@ -1054,97 +1070,11 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
     $MUST_END = true;
 
-} elseif ($gameRequest[0] == "quest") {
-    //13333334
-    if (($gameRequest[2] > 13333334) || ($gameRequest[2] < 13333332)) {  // ?? How this works.
-
-        if (strpos($gameRequest[3], 'New quest ""')) {
-            // plugin couldn't get quest name  
-            $MUST_END = true;
-        } else if (stripos($gameRequest[3], 'Storyline Tracker') !== false) {
-            // AIAgent quests - ignore
-            $MUST_END = true;
-
-        } else {
-            logEvent($gameRequest);
-
-        }
-    } else
-        $MUST_END = true;
-    /*
-    if (isset($GLOBALS["FEATURES"]["MISC"]["QUEST_COMMENT"]))
-        if ($GLOBALS["FEATURES"]["MISC"]["QUEST_COMMENT"]===false)
-            $MUST_END=true;
-    */
-    // Check if quest comments are enabled for narrator
-    try {
-        require_once(__DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
-        $narrator = new Narrator();
-
-        if ($narrator->getBool('enabled', true) && $narrator->getBool('quest_comment_enabled', false)) {
-            $questCommentChance = $narrator->getInt('quest_comment_chance', 10);
-            $randomChance = random_int(1, 100);
-
-            if ($randomChance > $questCommentChance) {
-                $MUST_END = true;
-            } else {
-                // Chance check passed, now check cooldown
-                $cooldownMinutes = $narrator->getInt('quest_comment_cooldown', 3);
-                $cooldownSeconds = $cooldownMinutes * 60;
-
-                // Fetch last quest comment timestamp
-                $lastQuestCommentTs = $db->fetchOne("SELECT value FROM conf_opts WHERE id='QUEST_COMMENT_LAST_TIMESTAMP'");
-                $currentTime = time();
-
-                $canTrigger = true;
-                if ($lastQuestCommentTs && isset($lastQuestCommentTs['value'])) {
-                    $timeSinceLastComment = $currentTime - intval($lastQuestCommentTs['value']);
-                    if ($timeSinceLastComment < $cooldownSeconds) {
-                        $canTrigger = false;
-                        Logger::info("Quest comment on cooldown. {$timeSinceLastComment}s since last, need {$cooldownSeconds}s");
-                    }
-                }
-
-                if (!$canTrigger) {
-                    $MUST_END = true;
-                } else {
-                    // Queue the event in eventlog so it shows up in context
-                    $db->insert(
-                        'eventlog',
-                        array(
-                            'ts' => $gameRequest[1],
-                            'gamets' => $gameRequest[2],
-                            'type' => 'narrator_quest_comment',
-                            'data' => $gameRequest[3],
-                            'sess' => 'complete', // Mark as complete so it doesn't get processed again
-                            'localts' => $currentTime,
-                            'people' => resolvePeopleForIncomingEvent('narrator_quest_comment', $gameRequest[3] ?? "")
-                        )
-                    );
-
-                    // Update timestamp for successful quest comment
-                    $db->upsertRowOnConflict(
-                        "conf_opts",
-                        array(
-                            "id" => "QUEST_COMMENT_LAST_TIMESTAMP",
-                            "value" => $currentTime
-                        ),
-                        'id'
-                    );
-
-                    // Store flag to trigger narrator after init processing
-                    $GLOBALS["TRIGGER_NARRATOR_QUEST_COMMENT"] = true;
-
-                    Logger::info("Narrator quest comment will be triggered");
-                }
-            }
-        } else {
-            $MUST_END = true;
-        }
-    } catch (Exception $e) {
-        Logger::warn("Could not check narrator quest comment settings: " . $e->getMessage());
-        $MUST_END = true;
-    }
+} elseif (in_array($gameRequest[0], ['quest', 'narrator_quest_comment'], true)) {
+    // Selection and exclusions were resolved before loading the speaker profile.
+    // Keep the observation even when settings/chance/cooldown suppress dialogue.
+    logEvent($gameRequest);
+    $MUST_END = empty($GLOBALS['QUEST_COMMENT_SELECTED']);
 } elseif ($gameRequest[0] == "location") {
     $GLOBALS["CACHE_LOCATION"] = $gameRequest[3];
     logEvent($gameRequest);
@@ -2780,34 +2710,6 @@ if (isset($GLOBALS["TRIGGER_NARRATOR_WELCOME"]) && $GLOBALS["TRIGGER_NARRATOR_WE
         $_GET["profile"] = $narratorProfileId;
     } else {
         Logger::warn("[NARRATOR_WELCOME] Could not find narrator profile, welcome message cancelled");
-        $MUST_END = true;
-    }
-}
-
-// Trigger narrator quest comment if flagged during quest event
-if (isset($GLOBALS["TRIGGER_NARRATOR_QUEST_COMMENT"]) && $GLOBALS["TRIGGER_NARRATOR_QUEST_COMMENT"]) {
-    // Change the request type to narrator_quest_comment so main.php processes it
-    $gameRequest[0] = "narrator_quest_comment";
-    $MUST_END = false; // Don't end, continue to main.php
-
-    // Load narrator profile
-    require_once(__DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
-    $narrator = new Narrator();
-
-    // Get narrator profile ID
-    $narratorProfileId = $narrator->getProfileId();
-    if (!$narratorProfileId) {
-        // Try to find The Narrator profile
-        $narratorProfile = $db->fetchOne("SELECT id FROM core_profiles WHERE name = 'The Narrator' LIMIT 1");
-        if ($narratorProfile && isset($narratorProfile['id'])) {
-            $narratorProfileId = $narratorProfile['id'];
-        }
-    }
-
-    if ($narratorProfileId) {
-        $_GET["profile"] = $narratorProfileId;
-    } else {
-        Logger::warn("[NARRATOR_QUEST_COMMENT] Could not find narrator profile, quest comment cancelled");
         $MUST_END = true;
     }
 }

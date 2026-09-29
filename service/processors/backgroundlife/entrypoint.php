@@ -36,6 +36,14 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
         $results = $GLOBALS["db"]->fetchAll("select max(gamets) as gamets from eventlog"); // faster
         $maxRow = intval($results[0]["gamets"]);
 
+        require_once $enginePath . 'lib/background_life_encounters.php';
+        $pendingEncounters = $GLOBALS["db"]->fetchAll(
+            "SELECT initiator_npc_id FROM bgl_encounters WHERE state IN ('applying', 'loot_pending') ORDER BY id LIMIT 100"
+        );
+        foreach ($pendingEncounters as $encounter) {
+            chimBglRetryPendingEncounterCommands($GLOBALS["db"], (int)$encounter['initiator_npc_id']);
+        }
+
         // BgL tracking coords, on NPCs marked with gps_track. in-game hourly
         $oneDayAgoGamets = $maxRow - ((24) / 0.0000024);
         $oneHourAgoGamets = $maxRow - ((1) / 0.0000024);
@@ -54,7 +62,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
 
         // BgL tracking coords, in-game daily
 
-        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND metadata->>'last_coords' IS NOT NULL AND metadata->'last_coords'->>'pending' IS NULL ");
+        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND COALESCE(metadata->'stats'->>'is_dead','false') <> 'true' AND metadata->>'last_coords' IS NOT NULL AND metadata->'last_coords'->>'pending' IS NULL ");
         foreach ($allEnabledBgLNpc as $npc) {
             if (isset($scheduledNpcIds[$npc['id']])) continue;
             $mwdata = json_decode($npc["metadata"], true);
@@ -79,7 +87,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
 
         error_log("[BGL] Checking tracked NPCs");
 
-        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND metadata->'gps_track' = 'true' AND metadata->'last_coords'->>'pending' IS NULL AND (metadata->'last_coords'->>'last_updated')::numeric < $oneHourAgoGamets ");
+        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND COALESCE(metadata->'stats'->>'is_dead','false') <> 'true' AND metadata->'gps_track' = 'true' AND metadata->'last_coords'->>'pending' IS NULL AND (metadata->'last_coords'->>'last_updated')::numeric < $oneHourAgoGamets ");
 
         foreach ($allEnabledBgLNpc as $npc) {
             if (isset($scheduledNpcIds[$npc['id']])) continue;
@@ -103,7 +111,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
         // In-game based on configured days
 
         error_log("[BGL] Checking passive events NPCs");
-        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND (extended_data->>'background_life_commands' = 'false' or extended_data->>'background_life_commands'  IS NULL)");
+        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND COALESCE(metadata->'stats'->>'is_dead','false') <> 'true' AND (extended_data->>'background_life_commands' = 'false' or extended_data->>'background_life_commands'  IS NULL)");
         foreach ($allEnabledBgLNpc as $npc) {
             if (isset($scheduledNpcIds[$npc['id']])) continue;
 
@@ -162,7 +170,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
         error_log("[BGL] Checking active events NPCs");
 
         // BgL commands
-        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND extended_data->>'background_life_commands' = 'true' order by random() ");
+        $allEnabledBgLNpc = $GLOBALS["db"]->fetchAll("SELECT * FROM core_npc_master WHERE extended_data->>'background_life_enabled' = 'true' AND COALESCE(metadata->'stats'->>'is_dead','false') <> 'true' AND extended_data->>'background_life_commands' = 'true' order by random() ");
         foreach ($allEnabledBgLNpc as $npc) {
             if (isset($scheduledNpcIds[$npc['id']])) continue;
             $mwdata = json_decode($npc["extended_data"], true);

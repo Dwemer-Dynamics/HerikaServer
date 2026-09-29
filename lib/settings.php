@@ -232,6 +232,7 @@ if (!function_exists('chimGetManagedGeneralSettingIds')) {
             'END_CONVERSATION_COOLDOWN',
             'BOOK_READ_LINES_PER_BATCH',
             'BOOK_READING_VOICE',
+            'AUTOMATIC_ACTOR_VOICE_EFFECTS',
             'FEATURES@MEMORY_EMBEDDING@ENABLED',
             'FEATURES@MEMORY_EMBEDDING@USE_TEXT2VEC',
             'FEATURES@MEMORY_EMBEDDING@AUTO_CREATE_SUMMARY_INTERVAL',
@@ -242,6 +243,7 @@ if (!function_exists('chimGetManagedGeneralSettingIds')) {
             'OGHMA_AMOUNT',
             'OGHMA_RESULT_LIMIT',
             'OGHMA_EXTRACTOR_FALLBACK',
+            'OGHMA_MULTILINGUAL_ROUTING',
             'OGHMA_EXTRACTOR_TIMEOUT_MS',
             'RACIAL_OGHMA',
             'LOCATION_OGHMA',
@@ -368,7 +370,7 @@ if (!function_exists('chimPrettySettingLabel')) {
             'CORE_CONNECTOR_QUEST_CREATION_ENABLED' => 'Quest Creation Connector Available',
             'CORE_CONNECTOR_QUEST_ENGINE_ENABLED' => 'Quest Engine Connector Available',
             'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
-            'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Extractor Fallback',
+            'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Connector',
             'PLAYER_RESPEECH' => 'Player Respeech Available',
             'CORE_CONNECTOR_SUMMARY_ENABLED' => 'Summaries Available',
             'CORE_CONNECTOR_MEDIUMTERM_ENABLED' => 'Background & Memory Tasks Available',
@@ -383,6 +385,7 @@ if (!function_exists('chimPrettySettingLabel')) {
             'OGHMA_AMOUNT' => 'Oghma Topic Count',
             'OGHMA_RESULT_LIMIT' => 'Oghma Result Limit',
             'OGHMA_EXTRACTOR_FALLBACK' => 'Oghma Extractor Fallback',
+            'OGHMA_MULTILINGUAL_ROUTING' => 'Multilingual Oghma Routing',
             'OGHMA_EXTRACTOR_TIMEOUT_MS' => 'Oghma Extractor Timeout',
             'RACIAL_OGHMA' => 'Force Racial Oghma',
             'LOCATION_OGHMA' => 'Force Location Oghma',
@@ -416,6 +419,7 @@ if (!function_exists('chimGetOverrideableGeneralSettingCategory')) {
         if (in_array($flatId, [
             'OGHMA_INFINIUM', 'OGHMA_AMOUNT', 'OGHMA_RESULT_LIMIT',
             'OGHMA_EXTRACTOR_FALLBACK', 'OGHMA_EXTRACTOR_TIMEOUT_MS',
+            'OGHMA_MULTILINGUAL_ROUTING',
             'RACIAL_OGHMA', 'LOCATION_OGHMA', 'OGHMA_CUSTOM', 'CORE_CONNECTOR_OGHMA_CUSTOM',
         ], true)) {
             return 'Oghma';

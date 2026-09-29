@@ -33,7 +33,7 @@ BEGIN
         RAISE EXCEPTION 'Snapshot manifest does not match the saved tables';
     END IF;
     IF manifest->>'format'='chim_selected_tables_v2' AND
-        (coalesce(manifest->>'table_policy_version','') NOT IN ('1','2','3','4','5','6') OR coalesce((manifest->>'upgrade_version')::int,2)>2) THEN
+        (coalesce(manifest->>'table_policy_version','') NOT IN ('1','2','3','4','5','6','7','8') OR coalesce((manifest->>'upgrade_version')::int,2)>2) THEN
         RAISE EXCEPTION 'Snapshot format is newer than this server';
     END IF;
 END;
@@ -98,7 +98,7 @@ BEGIN
         END IF;
     END LOOP;
     EXECUTE format('COMMENT ON SCHEMA %I IS %L', dest_schema,
-        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',6,
+        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',8,
             'tables',names,'migrations',versions,'upgrade_version',2,
             'player_identity',chim_meta.playthrough_identity(dest_schema))::text);
 END;
