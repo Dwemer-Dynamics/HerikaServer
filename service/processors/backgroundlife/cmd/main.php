@@ -68,6 +68,7 @@ require_once $enginePath . 'lib/lazy_xml.php';
 
 require_once 'background_action_handler.php';
 require_once 'helpers.php';
+require_once $enginePath . 'lib/background_life_encounters.php';
 // ─── Database ─────────────────────────────────────────────────────────────────
 
 $db = $GLOBALS["db"];
@@ -126,6 +127,10 @@ $npcMaster = new NpcMaster();
 $connector = new LLMConnector();
 
 $currentNpcData = $npcMaster->getByName($npcName);
+if (!$currentNpcData) {
+    error_log("[BGL RUN] NPC not found: {$npcName}");
+    return;
+}
 $currentConnectorData = $connector->getById($GLOBALS['CORE_CONNECTOR_BGL']);
 
 $profile = new CoreProfile();
@@ -136,6 +141,10 @@ $npcMaster->setOldGlobalsFromCurrentNpcData($currentNpcData);
 
 $extdata = $npcMaster->getExtendedData($currentNpcData);
 $metadata = $npcMaster->getMetadata($currentNpcData);
+if (chimBglBoolean($metadata['stats']['is_dead'] ?? false)) {
+    error_log("[BGL RUN] {$npcName} is dead, skipping Background Life processing.");
+    return;
+}
 
 $connectionHandler = $connector->getConnector($currentConnectorData);
 
@@ -162,6 +171,10 @@ $momentum = time();
 
 $gameRequest = ['inputtext', '0', $last_gamets, $npcName];
 $npcNameEsc = $db->escape($npcName);
+chimBglRetryPendingEncounterCommands($db, (int)$currentNpcData['id']);
+if (chimBglEncounterIsActiveForNpc($db, (int)$currentNpcData['id'])) {
+    return;
+}
 
 
 // Guard: Avoid running if game is paused.
@@ -864,6 +877,14 @@ if (isset($metadata['last_inventory_update_gamets'])) {
     ];
 }
 
+foreach (chimBglEncounterContextEvents($db, (int)$currentNpcData['id'], (float)$lastItGamets) as $encounterEvent) {
+    $bgEvents[] = [
+        'gamets' => $encounterEvent['gamets'],
+        'content' => $encounterEvent['narrative'] . ' Personal outcome: ' . $encounterEvent['applied_outcome'] . '.',
+        'type' => 'background_combat',
+    ];
+}
+
 // ─── Rumors Near Current Location ────────────────────────────────────────────
 
 if ($LAST_REPORTED_LOCATION) {
@@ -1311,7 +1332,9 @@ $decisionBuffer = requestForaction(
     $npcNameEsc,
     $GLOBALS["db"],
     $fortyEightHoursAgo,
-    $last_gamets
+    $last_gamets,
+    chimBglCombatActionPrompt($currentNpcData, (float)$last_gamets, $npcMaster, $db)
+        . chimBglLootActionPrompt($currentNpcData, $npcMaster, $db)
 );
 
 echo $decisionBuffer . PHP_EOL;
@@ -1429,6 +1452,36 @@ if (!empty($parsed['action'])) {
             unset($parsed['notification']);
             unset($parsed['rumor']);
 
+            break;
+        case 'AttackNPC':
+            if (!chimBglHandleAttackNpcAction(
+                (string)$actionArg,
+                $currentNpcData,
+                (string)$parsed['reason'],
+                (float)$last_gamets,
+                (int)$last_ts,
+                (string)$LAST_REPORTED_LOCATION,
+                $npcMaster,
+                $db,
+                $connectionHandler
+            )) {
+                $recordDiaryEntry = false;
+            }
+            unset($parsed['notification'], $parsed['rumor']);
+            break;
+        case 'LootEncounter':
+            if (!chimBglHandleLootEncounterAction(
+                (int)$actionArg,
+                $currentNpcData,
+                (float)$last_gamets,
+                (int)$last_ts,
+                $npcMaster,
+                $db,
+                $connectionHandler
+            )) {
+                $recordDiaryEntry = false;
+            }
+            unset($parsed['notification'], $parsed['rumor']);
             break;
         case 'Continue':
             error_log("[BGL RUN] Chosen action: Continue. No new action will be issued. Reason: {$parsed['reason']}");
