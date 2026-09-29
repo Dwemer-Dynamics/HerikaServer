@@ -89,12 +89,10 @@ trait ChimProviderStream
                 return '';
             }
             if ($chunk !== '') { $this->recoveryPending .= $chunk; continue; }
-            $read = [$this->primary_handler];
-            $write = $except = [];
-            if (@stream_select($read, $write, $except, 0, 100000) === false) {
-                $this->recoveryFailure = 'read';
-                return '';
-            }
+            // Chunked HTTP streams use a decoding filter and cannot be selected.
+            // Reads are nonblocking; pause only when empty, retaining deadline/cancellation checks.
+            $remaining = $this->recoveryDeadline - microtime(true);
+            if ($remaining > 0) usleep((int)min(100000, $remaining * 1000000));
         }
         $this->recoveryFailure = 'connection';
         return '';
