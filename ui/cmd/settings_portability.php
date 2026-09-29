@@ -70,6 +70,7 @@ function chimPortableGlobalFields(): array
         'HIDE_AMBIENT_COMBAT' => 'boolean',
         'DISABLE_REANIMATION_TRACKING' => 'boolean',
         'TRANSFORMATION_DETECTION' => 'boolean',
+        'AUTOMATIC_ACTOR_VOICE_EFFECTS' => 'boolean',
         'POWER_AWARENESS_ENABLED' => 'boolean',
         'CHIM_ITEM_PICKUP_EVENTLOG_MIN_VALUE' => 'integer',
         'PROMPT_TIMESTAMP' => 'boolean',
@@ -101,6 +102,7 @@ function chimPortableGlobalFields(): array
         'SCENE_CLASSIFIER_ENABLED' => 'boolean',
         'OGHMA_CUSTOM' => 'boolean',
         'OGHMA_EXTRACTOR_FALLBACK' => 'boolean',
+        'OGHMA_MULTILINGUAL_ROUTING' => 'boolean',
         'OGHMA_EXTRACTOR_TIMEOUT_MS' => 'integer',
         'OGHMA_RESULT_LIMIT' => 'integer',
     ];

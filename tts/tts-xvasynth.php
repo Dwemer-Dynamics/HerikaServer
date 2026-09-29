@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . '/lib/speech_trace.php';
 
 
 $GLOBALS["TTS_IN_USE"]=function($textString, $mood = "default", $stringforhash)
@@ -6,7 +7,7 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood = "default", $stringforhash)
     // Cache check
     if (isset($GLOBALS["AVOID_TTS_CACHE"]) && $GLOBALS["AVOID_TTS_CACHE"] === false) {
         if (file_exists(dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "soundcache/" . md5(trim($stringforhash)) . ".wav")) {
-            return dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "soundcache/" . md5(trim($stringforhash)) . ".wav";
+            return chimTraceCachedTts(dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "soundcache/" . md5(trim($stringforhash)) . ".wav", 'xvasynth');
         }
     }
 

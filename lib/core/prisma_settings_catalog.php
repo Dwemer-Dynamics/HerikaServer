@@ -34,6 +34,7 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'LOCATION_OGHMA', 'type' => 'boolean'],
             ['name' => 'CORE_CONNECTOR_OGHMA_CUSTOM', 'type' => 'foreign:core_llm_connector:id:label'],
             ['name' => 'OGHMA_EXTRACTOR_FALLBACK', 'type' => 'boolean'],
+            ['name' => 'OGHMA_MULTILINGUAL_ROUTING', 'type' => 'boolean'],
             ['name' => 'OGHMA_EXTRACTOR_TIMEOUT_MS', 'type' => 'integer', 'min' => 250, 'max' => 3000],
         ],
         'Memory' => [
@@ -65,6 +66,8 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'END_CONVERSATION_COOLDOWN', 'type' => 'integer', 'min' => 0, 'max' => 300],
             ['name' => 'BOOK_READ_LINES_PER_BATCH', 'label' => 'Lines Before Book Comment', 'type' => 'integer', 'min' => 1, 'default' => 8],
             ['name' => 'BOOK_READING_VOICE', 'label' => 'Book Reading Voice', 'type' => 'boolean', 'default' => true],
+            ['name' => 'AUTOMATIC_ACTOR_VOICE_EFFECTS', 'label' => 'Automatic Actor Voice Effects', 'type' => 'boolean', 'default' => true,
+                'help' => 'Automatically adjust NPC voices for werewolf form, vampire lord form, combat and sneaking. Uses fresh game state and keeps the saved voice filter. Filtered speech may take longer to generate.'],
         ],
         'Quests' => [
             ['name' => 'CHIM_AI_QUEST_PROGRESSION', 'type' => 'boolean'],

@@ -35,6 +35,7 @@ function chimGlobalSettingsRespond(array $payload, int $status = 200): void
 function chimGlobalSettingsLabel(string $name): string
 {
     $custom = [
+        'AUTOMATIC_ACTOR_VOICE_EFFECTS' => 'Automatic Actor Voice Effects',
         'PROMPT_HEAD' => 'Prompt Head', 'EMOTEMOODS' => 'Emote Moods', 'RECHAT_MODE' => 'Rechat Mode',
         'CORE_CONNECTOR_PLAYER' => 'Player Respeech', 'CORE_CONNECTOR_SUMMARY' => 'Summaries',
         'CORE_CONNECTOR_MEDIUMTERM' => 'Background & Memory Tasks', 'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier',
@@ -52,6 +53,8 @@ function chimGlobalSettingsLabel(string $name): string
         'BGL_TRIGGER_HOURS' => 'Background Life Trigger Time', 'OGHMA_INFINIUM' => 'Enable Oghma',
         'OGHMA_AMOUNT' => 'Oghma Topic Count', 'OGHMA_RESULT_LIMIT' => 'Oghma Result Limit',
         'OGHMA_EXTRACTOR_FALLBACK' => 'Oghma Extractor Fallback',
+        'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Connector',
+        'OGHMA_MULTILINGUAL_ROUTING' => 'Multilingual Oghma Routing',
         'OGHMA_EXTRACTOR_TIMEOUT_MS' => 'Extractor Timeout (ms)', 'RACIAL_OGHMA' => 'Force Racial Oghma',
         'LOCATION_OGHMA' => 'Force Location Oghma', 'DETECT_MAGIC_EVENT' => 'Detect Magic Events',
         'COMPACT_CHAT_ENABLED' => 'Compact Chat',
