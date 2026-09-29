@@ -134,6 +134,7 @@ if (!$currentNpcData) {
 $currentConnectorData = $connector->getById($GLOBALS['CORE_CONNECTOR_BGL']);
 
 $profile = new CoreProfile();
+if ($db->fetchOne("SELECT r.id FROM npc_schedule_runs r JOIN npc_commitments t ON t.id=r.task_id WHERE t.npc_id=" . (int)($currentNpcData['id'] ?? 0) . " AND (r.phase IN ('travelling','waiting','active','releasing') OR r.pending_op IN ('travel','ensure')) LIMIT 1")) return;
 $currentProfileData = $profile->getById($currentNpcData['profile_id']);
 
 $connector->setOldGlobals($currentConnectorData);
@@ -1276,6 +1277,10 @@ if ($wasSocializeIntentAction && !$bypassInnerThoughts) {
     error_log(date("YMd H:i:s") . " [BGL RUN] HINT inner thoughts: enforced socialize/conversation prompt");
 } else
     $innerThoughtEnforceSocialice = "";
+
+// Keep persistent duties visible to both Background Life prompt stages.
+require_once $enginePath . 'lib/core/npc_commitments.php';
+$lastMinuteNotes .= "\n" . chimCommitmentFormatContext($npcName, $last_gamets);
 
 $innerThoughtBuffer = requestForInnerThought(
     $npcName,

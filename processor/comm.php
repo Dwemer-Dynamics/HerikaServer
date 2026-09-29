@@ -8,6 +8,12 @@ require_once($GLOBALS["ENGINE_PATH"] . "/lib/core/game_plugins.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/background_life_encounters.php");
 
 $MUST_END = false;
+if (($gameRequest[0] ?? '') === 'util_npc_schedule') {
+    require_once $GLOBALS['ENGINE_PATH'] . '/lib/core/npc_schedules.php';
+    chimScheduleReply((string)($gameRequest[3] ?? ''));
+    $MUST_END = true;
+    return;
+}
 
 if (!isset($gameRequest[3])) {
     $gameRequest[3] = '';
