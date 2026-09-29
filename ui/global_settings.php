@@ -2143,6 +2143,9 @@ document.addEventListener('DOMContentLoaded', function () {
         if (details.url) chunks.push('url: ' + details.url);
         if (Number(result.elapsed_ms || 0) > 0) chunks.push(String(result.elapsed_ms) + 'ms');
         if (details.response_preview) chunks.push('response: ' + details.response_preview);
+                if (details.checks) Object.entries(details.checks).forEach(([name, check]) => chunks.push(name + ': ' + check.status + ' — ' + check.message));
+                if (details.timings && details.timings.ttft_ms != null) chunks.push('first token: ' + details.timings.ttft_ms + 'ms');
+                if (details.errors && details.errors.length) chunks.push('warnings: ' + details.errors.map(error => error.message).join('; '));
         return chunks.join(' | ');
     }
 
