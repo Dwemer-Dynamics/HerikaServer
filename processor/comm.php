@@ -5,6 +5,7 @@ require_once($GLOBALS["ENGINE_PATH"] . "/lib/dynamic_update_util.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/utils_game_timestamp.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/playthrough_autosave.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/core/game_plugins.php");
+require_once($GLOBALS["ENGINE_PATH"] . "/lib/background_life_encounters.php");
 
 $MUST_END = false;
 
@@ -148,6 +149,7 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
     $db->delete("named_cell", "gamets<=({$gameRequest[2]} - 30000000) "); //((24 * 3) / 0.0000024)
     $db->delete("sneq_quests_saved", "gamets>={$gameRequest[2]}  ");
     $db->delete("bgl_history", "gamets>={$gameRequest[2]}  ");
+    $db->delete("bgl_encounters", "gamets>={$gameRequest[2]}  ");
     $db->delete("conf_opts", "id='book_reading_state'");
 
 
@@ -544,6 +546,18 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 } elseif ($gameRequest[0] == "updateskills") {
     // DEPRECATED: Skills updates now handled by gamedata.php with JSON POST
     Logger::warn("[DEPRECATED] updateskills event - use gamedata.php endpoint instead");
+    $MUST_END = true;
+
+} elseif ($gameRequest[0] == "backgroundcombat_result") {
+    if (!chimBglHandleCombatResultAck($db, (string)$gameRequest[3])) {
+        Logger::warn("[BGL COMBAT] Ignored invalid combat result acknowledgement");
+    }
+    $MUST_END = true;
+
+} elseif ($gameRequest[0] == "backgroundloot_result") {
+    if (!chimBglHandleLootResultAck($db, (string)$gameRequest[3])) {
+        Logger::warn("[BGL LOOT] Ignored invalid loot result acknowledgement");
+    }
     $MUST_END = true;
 
 } elseif ($gameRequest[0] == "updatestats") {

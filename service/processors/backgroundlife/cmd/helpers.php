@@ -403,6 +403,7 @@ function requestForaction(
     $db,
     $startGamets,
     $last_gamets,
+    string $encounterActions = '',
 ): string {
     $step2Content = "You are responsible for deciding a single action"
         . " based on the character's inner thoughts and the provided context.\n"
@@ -559,6 +560,8 @@ Note:
 PROMPT3;
     }
 
+
+    $step2Content .= $encounterActions;
 
     // Hinter
 
