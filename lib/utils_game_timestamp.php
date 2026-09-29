@@ -147,6 +147,37 @@ function convert_dow_gregorian2dow_skyrim($s_dow_name_gregorian = "") {
 // convert_gamets2... functions mimic corresponding SQL functions:
 //----------------------------------------------------------------
 
+// Render recall age from game time; summaries may span events, so ages are approximate.
+function chimMemoryAgeLabel($memoryGamets, $currentGamets): ?string {
+    if (!is_numeric($memoryGamets) || !is_numeric($currentGamets)
+        || !is_finite((float)$memoryGamets) || !is_finite((float)$currentGamets)
+        || $memoryGamets <= 0 || $currentGamets <= 0) {
+        return 'Date unknown';
+    }
+    if ($memoryGamets > $currentGamets) return null;
+
+    $days = ($currentGamets - $memoryGamets) * 0.0000001;
+    if ($days < 1) {
+        $count = (int)floor($days * 24);
+        $age = $count < 1 ? 'Less than an hour ago' : 'About ' . $count . ' hour' . ($count === 1 ? '' : 's') . ' ago';
+    } else {
+        $unit = 'day';
+        $count = (int)floor($days);
+        if ($days >= 365) {
+            $unit = 'year';
+            $count = (int)floor($days / 365);
+        } elseif ($days >= 30) {
+            $unit = 'month';
+            $count = (int)floor($days / 30);
+        } elseif ($days >= 7) {
+            $unit = 'week';
+            $count = (int)floor($days / 7);
+        }
+        $age = 'About ' . $count . ' ' . $unit . ($count === 1 ? '' : 's') . ' ago';
+    }
+    return $age . ', around ' . convert_gamets2skyrim_long_date_no_time($memoryGamets);
+}
+
 function convert_gamets2days($gamets) {
     $i_res = 0;
     $f_input = floatval($gamets) * 0.0000001; 

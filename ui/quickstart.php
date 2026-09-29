@@ -892,6 +892,10 @@ foreach ($quickstartConf as $pname => $parms) {
             }
         ));
         echo "<select class='form-control' id='$fieldName' name='" . htmlspecialchars($fieldName) . "' $FORCE_DISABLED>";
+        // Preserve an existing retired provider when Quickstart saves unrelated settings.
+        if ($pname === 'TTSFUNCTION' && in_array($quickstartActiveTtsDriver, ['mimic3', 'melotts'], true)) {
+            echo "<option value='" . htmlspecialchars($quickstartActiveTtsDriver, ENT_QUOTES) . "' selected>" . htmlspecialchars($quickstartTtsConnector->getDisplayName($quickstartActiveTtsDriver)) . " (deprecated)</option>";
+        }
         if (count($recommendedValues) > 0) {
             echo "<optgroup label='Recommended'>";
             foreach ($recommendedValues as $item) {
