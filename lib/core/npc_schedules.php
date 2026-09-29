@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/npc_commitments.php';
 require_once __DIR__ . '/game_plugins.php';
+require_once __DIR__ . '/../background_life_encounters.php';
 
 // Database failures must abort the transaction instead of reporting a saved schedule.
 function chimScheduleExec(string $sql) {
@@ -146,6 +147,8 @@ function chimScheduleTick(): void {
                 elseif ($r['phase']==='validate') $op='validate';
                 elseif ($r['phase']==='blocked') continue;
                 elseif ($r['phase']==='ready' && $now >= (int)$r['due_gamets']-chimCommitmentHoursToGamets(3)) {
+                    // The dispatch lock also protects encounter creation and loot application.
+                    if (chimBglEncounterIsActiveForNpc($db, (int)$r['npc_id'])) continue;
                     $busy=$db->fetchOne("SELECT r.id FROM npc_schedule_runs r JOIN npc_commitments t ON t.id=r.task_id WHERE t.npc_id=".(int)$r['npc_id']." AND r.id<>{$id} AND (r.phase IN ('travelling','waiting','active','releasing') OR r.pending_op IN ('travel','ensure')) LIMIT 1");
                     if ($busy) continue;
                     $op=$now >= (int)$r['due_gamets'] ? 'ensure' : 'travel';

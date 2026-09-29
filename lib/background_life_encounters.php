@@ -48,6 +48,16 @@ function chimBglEncounterIsActiveForNpc($db, int $npcId): bool
     return !empty($row);
 }
 
+// Pending travel reserves the actor before the game acknowledges its package.
+function chimBglEncounterNpcHasSchedule($db, int $npcId): bool
+{
+    return !empty($db->fetchOne(
+        "SELECT r.id FROM npc_schedule_runs r JOIN npc_commitments t ON t.id=r.task_id
+         WHERE t.npc_id={$npcId} AND (r.phase IN ('travelling','waiting','active','releasing')
+             OR r.pending_op IN ('travel','ensure')) LIMIT 1"
+    ));
+}
+
 // Read the newest nearby-actor telemetry and resolve it to stable NPC records.
 function chimBglEncounterNearbyCandidates(array $currentNpcData, float $gameTs, NpcMaster $npcMaster, $db): array
 {
@@ -94,7 +104,8 @@ function chimBglEncounterNearbyCandidates(array $currentNpcData, float $gameTs, 
         if (!$settings['enabled'] || !$settings['participation'] || chimBglBoolean($candidateMetadata['stats']['is_dead'] ?? false)) {
             continue;
         }
-        if (chimBglEncounterIsActiveForNpc($db, (int)$npc['id'])) {
+        if (chimBglEncounterIsActiveForNpc($db, (int)$npc['id'])
+            || chimBglEncounterNpcHasSchedule($db, (int)$npc['id'])) {
             continue;
         }
         $npc['_bgl_combat_settings'] = $settings;
@@ -357,12 +368,19 @@ function chimBglHandleAttackNpcAction(string $actionArg, array $currentNpcData, 
     $scene = chimBglEncounterSnapshot($currentNpcData, $npcMaster)['last_coords'];
     $db->execQuery('BEGIN');
     try {
+        // Share the scheduler's dispatch lock; provider calls stay outside the transaction.
+        if ($db->execQuery('SELECT pg_advisory_xact_lock(7419,0)') === false) {
+            throw new RuntimeException('Could not lock NPC activity dispatch');
+        }
         foreach ($participantIds as $npcId) {
             if ($db->execQuery("SELECT pg_advisory_xact_lock({$npcId})") === false) {
                 throw new RuntimeException('Could not lock encounter participant');
             }
             if (chimBglEncounterIsActiveForNpc($db, $npcId)) {
                 throw new RuntimeException('A participant entered another active encounter');
+            }
+            if (chimBglEncounterNpcHasSchedule($db, $npcId)) {
+                throw new RuntimeException('A participant started scheduled travel');
             }
         }
         $encounterId = $db->insertReturningId('bgl_encounters', [
@@ -652,6 +670,16 @@ function chimBglHandleLootEncounterAction(int $encounterId, array $currentNpcDat
 
     $db->execQuery('BEGIN');
     try {
+        if ($db->execQuery('SELECT pg_advisory_xact_lock(7419,0)') === false) {
+            throw new RuntimeException('Could not lock NPC activity dispatch');
+        }
+        foreach ($participants as $participant) {
+            $participantId = (int)$participant['npc_id'];
+            if (chimBglEncounterNpcHasSchedule($db, $participantId)
+                || chimBglEncounterIsActiveForNpc($db, $participantId)) {
+                throw new RuntimeException('A loot participant entered another activity');
+            }
+        }
         $locked = $db->fetchOne("SELECT state,loot_status FROM bgl_encounters WHERE id={$encounterId} FOR UPDATE");
         if (!$locked || $locked['state'] !== 'applied' || $locked['loot_status'] !== 'available') {
             throw new RuntimeException('Encounter is no longer available for loot');
