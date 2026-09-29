@@ -7,6 +7,18 @@ require_once __DIR__ . '/../../lib/chat_helper_functions.php';
 
 final class DiaryMemoryRecallTest extends TestCase
 {
+    public function testRecallAgeUsesCurrentGameTimeAndRejectsFutureMemories(): void
+    {
+        $memory = 1000000000;
+        foreach ([3 => 'About 3 days', 18 => 'About 2 weeks', 75 => 'About 2 months', 365 => 'About 1 year'] as $days => $label) {
+            $this->assertStringStartsWith($label, chimMemoryAgeLabel($memory, $memory + $days * 10000000));
+        }
+        $this->assertStringContainsString('4E ', chimMemoryAgeLabel($memory, $memory + 30000000));
+        $this->assertNull(chimMemoryAgeLabel($memory, $memory - 1));
+        $this->assertSame('Date unknown', chimMemoryAgeLabel(null, $memory));
+        $this->assertSame('Date unknown', chimMemoryAgeLabel(0, $memory));
+    }
+
     protected function setUp(): void
     {
         $GLOBALS['db'] = new class {

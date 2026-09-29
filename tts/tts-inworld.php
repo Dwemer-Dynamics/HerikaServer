@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . '/lib/speech_trace.php';
 
 require_once(__DIR__.DIRECTORY_SEPARATOR."..".DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."emote_moods.php");
 require_once(__DIR__.DIRECTORY_SEPARATOR."..".DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."voice_sample_metadata.php");
@@ -1287,7 +1288,7 @@ $GLOBALS["TTS_IN_USE"] = function($textString, $mood, $stringforhash) {
         $cacheFile = dirname(__FILE__) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . 
                     "soundcache/" . md5(trim($stringforhash)) . ".wav";
         if (file_exists($cacheFile)) {
-            return $cacheFile;
+            return chimTraceCachedTts($cacheFile, 'inworld');
         }
     }
     

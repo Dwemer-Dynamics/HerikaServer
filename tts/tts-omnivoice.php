@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . '/lib/speech_trace.php';
 
 if (!function_exists('omnivoice_normalize_endpoint_url')) {
     function omnivoice_normalize_endpoint_url($url) {
@@ -155,7 +156,7 @@ $GLOBALS["TTS_IN_USE"] = function($textString, $mood, $stringforhash) {
     if (isset($GLOBALS["AVOID_TTS_CACHE"]) && $GLOBALS["AVOID_TTS_CACHE"] === false) {
         $cachedFile = $cachePath . $cacheHash . ".wav";
         if (file_exists($cachedFile)) {
-            return $cachedFile;
+            return chimTraceCachedTts($cachedFile, 'omnivoice');
         }
     }
 

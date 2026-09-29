@@ -35,6 +35,7 @@ function chimGlobalSettingsRespond(array $payload, int $status = 200): void
 function chimGlobalSettingsLabel(string $name): string
 {
     $custom = [
+        'AUTOMATIC_ACTOR_VOICE_EFFECTS' => 'Automatic Actor Voice Effects',
         'PROMPT_HEAD' => 'Prompt Head', 'EMOTEMOODS' => 'Emote Moods', 'RECHAT_MODE' => 'Rechat Mode',
         'CORE_CONNECTOR_PLAYER' => 'Player Respeech', 'CORE_CONNECTOR_SUMMARY' => 'Summaries',
         'CORE_CONNECTOR_MEDIUMTERM' => 'Background & Memory Tasks', 'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier',
