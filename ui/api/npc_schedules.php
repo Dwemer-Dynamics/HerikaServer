@@ -22,6 +22,12 @@ try {
         }
     }
     $rows=$db->fetchAll("SELECT t.*,r.phase,r.result,r.pending_op FROM npc_commitments t LEFT JOIN LATERAL (SELECT phase,result,pending_op FROM npc_schedule_runs WHERE task_id=t.id ORDER BY id DESC LIMIT 1) r ON true WHERE t.npc_id={$npcId} AND t.schedule IS NOT NULL ORDER BY t.due_gamets,t.id LIMIT 100");
-    foreach($rows as &$row) { $row['schedule']=json_decode($row['schedule'],true); $row['departure_gamets']=(int)$row['due_gamets']-chimCommitmentHoursToGamets(3); } unset($row);
+    foreach($rows as &$row) {
+        $row['schedule']=json_decode($row['schedule'],true);
+        $row['departure_gamets']=(int)$row['due_gamets']-chimCommitmentHoursToGamets(3);
+        // Resolve the saved destination against the current load order for editing.
+        $destination=chimResolveStableFormReferenceToRuntimeFormId($row['schedule']['destination'] ?? '');
+        $row['location_id']=$destination ? (int)hexdec($destination) : null;
+    } unset($row);
     echo json_encode(['success'=>true,'clock'=>chimScheduleClock(),'schedules'=>$rows,'locations'=>$operation==='locations'?chimScheduleLocations((string)($input['search']??'')):[]],JSON_THROW_ON_ERROR);
 } catch(Throwable $e) { http_response_code($e instanceof InvalidArgumentException?400:409); echo json_encode(['success'=>false,'error'=>$e->getMessage()]); }

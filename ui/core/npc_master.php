@@ -2590,9 +2590,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
                 button.addEventListener('click', async function(){
                     const action = button.dataset.npcAction;
 
-                    busy = true;
-                refresh.disabled = true;
-                list.querySelectorAll('button').forEach(item => item.disabled = true);
+                    button.disabled = true;
                     actionStatus.textContent = 'Sending action...';
                     actionStatus.classList.remove('is-error');
                     try {
@@ -2795,9 +2793,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
             settingButtons.forEach(function(button){
                 button.addEventListener('click', async function(){
                     const value = button.dataset.enabled !== '1';
-                    busy = true;
-                refresh.disabled = true;
-                list.querySelectorAll('button').forEach(item => item.disabled = true);
+                    button.disabled = true;
                     setBglMessage('Saving Background Life rule...', false);
                     try {
                         const payload = await npcBglPost('../api/background_life_npc.php', {
@@ -2820,9 +2816,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
 
             requestButtons.forEach(function(button){
                 button.addEventListener('click', async function(){
-                    busy = true;
-                refresh.disabled = true;
-                list.querySelectorAll('button').forEach(item => item.disabled = true);
+                    button.disabled = true;
                     setBglMessage('Processing Background Life request...', false);
                     try {
                         const payload = await npcBglPost('../api/background_life_request.php', {
