@@ -48,7 +48,7 @@ require_once $enginePath . 'lib/core/core_profiles.class.php';
 require_once $enginePath . 'lib/core/llm_connector.class.php';
 require_once $enginePath . 'lib/core/tts_connector.class.php';
 require_once $enginePath . 'lib/lazy_xml.php';
-require_once $enginePath . 'debug/background_action_handler.php';
+require_once $enginePath . 'service/processors/backgroundlife/cmd/background_action_handler.php';
 
 // ─── Database ─────────────────────────────────────────────────────────────────
 
