@@ -1237,7 +1237,9 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         $targetNpcDataBasicProfile .= "Skills: {$targetNpcData['skills']}\n";
         $targetNpcDataBasicProfile .= "Speechstyle: {$targetNpcData['speechstyle']}\n";
         $targetNpcDataBasicProfile .= "Goals: {$targetNpcData['goals']}\n";
-        $targetNpcDataBasicProfile .= "Memories: {$middleTermMemory}\n";
+        if (isset($middleTermMemory)) {
+            $targetNpcDataBasicProfile .= "Memories: {$middleTermMemory}\n";
+        }
 
         $contextBlock = !empty($dynamicBiography)
             ? "<character_sheet>\n{$npcName}:\n{$dynamicBiography}\n</character_sheet>\n\n"
