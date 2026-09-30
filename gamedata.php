@@ -438,6 +438,8 @@ function buildInventoryMetadataValue(array $items): array
                     ],
                     ["baseid" => $item['baseid'], "plugin" => $pluginName]
                 );
+            } else {
+                error_log("[buildInventoryMetadataValue] Plugin name for baseid {$item['baseid']} is empty. Item name: {$item['name']}");
             }
         }
     }

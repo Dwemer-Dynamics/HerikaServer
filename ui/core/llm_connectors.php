@@ -1725,7 +1725,7 @@ if (typeof window.consolidation !== 'function') {
     window.consolidation = function(){ return true; };
 }
 </script>
-<form method="post" onsubmit='return consolidation()' style='<?= $editItem!=null?"":"display:none"?>'>
+<form method="post"  name="llm_main_connector_form" onsubmit='return consolidation()' style='<?= $editItem!=null?"":"display:none"?>'>
     <?php if ($editItem): ?>
         <input type="hidden" name="id" value="<?= $editItem["id"] ?>">
     <?php endif; ?>
@@ -2209,7 +2209,8 @@ function llmClamp(rangeId, numberId, min, max){ const r = document.getElementByI
     const testBtn = document.getElementById('btn_test_connector_main');
     if (testBtn){
         testBtn.addEventListener('click', async function(){
-            const form = document.querySelector('form[method="post"]');
+            // const form = document.querySelector('form[method="post"]');
+            const form = document.getElementsByName("llm_main_connector_form")[0]
             if (!form) return;
             try {
                 const fd = new FormData(form);

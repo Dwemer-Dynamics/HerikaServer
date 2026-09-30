@@ -158,7 +158,8 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
 
 
                 $extdata["background_life_last_updated"] = $maxRow;
-                $npcMaster->updateExtendedKeysByName($npc["npc_name"], $extdata);
+                $npcManager = new NpcMaster();
+                $npcManager->updateExtendedKeysByName($npc["npc_name"], $extdata);
 
                 break;  // One per iteration - break after processing
             } else {
@@ -241,7 +242,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                 );
                                 $skyrimCmd->send(cmd: $json);
 
-                                error_log("[BGL RUN] {$npc["npc_name"]} — Early Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
+                                error_log("[BGL RUN] {$npc["npc_name"]} ï¿½ Early Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
 
                                 $lastGameTsRow = $GLOBALS["db"]->fetchAll('SELECT max(gamets) AS last_gamets FROM eventlog');
                                 $lastTsRow = $GLOBALS["db"]->fetchAll("SELECT max(ts) AS ts FROM eventlog WHERE gamets='{$lastGameTsRow[0]['last_gamets']}'");
@@ -288,7 +289,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                         "0x{$npcTarget['refid']}"
                                     );
                                     $skyrimCmd->send(cmd: $json);
-                                    error_log("[BGL RUN] {$npc["npc_name"]} — 275  Teleported to {$row['destination']} (formid: {$npcTarget['refid']})");
+                                    error_log("[BGL RUN] {$npc["npc_name"]} ï¿½ 275  Teleported to {$row['destination']} (formid: {$npcTarget['refid']})");
 
                                     $lastGameTsRow = $GLOBALS["db"]->fetchAll('SELECT max(gamets) AS last_gamets FROM eventlog');
                                     $lastTsRow = $GLOBALS["db"]->fetchAll("SELECT max(ts) AS ts FROM eventlog WHERE gamets='{$lastGameTsRow[0]['last_gamets']}'");
