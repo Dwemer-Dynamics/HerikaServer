@@ -149,6 +149,32 @@ if (($requestRoutingSnapshot["chat_shortcut_routed"] ?? false) === true) {
     $GLOBALS["CHIM_CHAT_SHORTCUT_ROUTED"] = true;
 }
 
+// Opt-in exact participants (docs/actor-identity.md). Validate before any eventlog write; an invalid
+// opted-in event is rejected whole and never downgraded to legacy name routing.
+require_once __DIR__ . "/lib/core/npc_reference.php";
+unset($GLOBALS["CHIM_EVENT_IDENTITY"], $GLOBALS["CHIM_REGISTRATION_ACTOR_KEY"]);
+try {
+    $GLOBALS["CHIM_EVENT_IDENTITY"] = chimDecodeEventIdentityField($gameRequest[4] ?? "");
+    $GLOBALS["CHIM_REGISTRATION_ACTOR_KEY"] = chimDecodeRegistrationActorKey($gameRequest[4] ?? "");
+    if ($GLOBALS["CHIM_EVENT_IDENTITY"] !== null) {
+        $GLOBALS["CHIM_EVENT_IDENTITY"]["type"] = strtolower((string)($gameRequest[0] ?? ""));
+        $GLOBALS["CHIM_EVENT_IDENTITY"]["ts"] = (string)($gameRequest[1] ?? "");
+    }
+} catch (ChimEventIdentityException $identityError) {
+    error_log("[IDENTITY] rejected " . strtolower((string)($gameRequest[0] ?? "")) . " event: " . $identityError->reason
+        . ($identityError->index === null ? "" : " at participant " . $identityError->index));
+    if (PHP_SAPI !== "cli" && !headers_sent()) {
+        http_response_code(422);
+    }
+    echo "ERROR: invalid event identity ({$identityError->reason})
+";
+    if (!getenv("PHPUNIT_TEST")) {
+        @ob_end_flush();
+        @flush();
+    }
+    exit;
+}
+
 
 $startTime = microtime(true);
 //error_log("Audit run ID: " . $GLOBALS["AUDIT_RUNID"]. " ({$gameRequest[0]}) started: ".$startTime);

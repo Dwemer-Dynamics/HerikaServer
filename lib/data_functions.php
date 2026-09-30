@@ -2133,6 +2133,8 @@ function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") 
         global $db;
 
         $actorcn=$db->escape($actor);
+        require_once __DIR__ . '/eventlog_helper.php';
+        $actorPeopleSql = chimBuildNpcContextPeopleWhereClause($db, $actor);
         $results = $db->fetchAll("SELECT speaker,speech,listener,gamets,localts,'speech',gamets - LAG(gamets) OVER (ORDER BY gamets ASC) AS gamets_diff,location,ts
         FROM speech where companions like '%$actorcn%' order by ts desc LIMIT 1000 OFFSET 0",true);    
          $rawData=[];
@@ -2196,14 +2198,14 @@ function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") 
         
 
         $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoaction','itemfound') 
-        and people like '%$actorcn%' and data not  like '%<memory>%' and data not like '%#MEMORY%' order by gamets desc LIMIT 10 OFFSET 0");    
+        and {$actorPeopleSql} and data not  like '%<memory>%' and data not like '%#MEMORY%' order by gamets desc LIMIT 10 OFFSET 0");
         $rawData=[];
         foreach ($results as $row) {
             $lastDialogFull[]= array('role' => 'user', 'content' => "The Narrator: {$row["data"]}",
             "_gs"=>$row["gamets"]);
         }
         
-        $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoloc') and people like '%$actorcn%' order by gamets desc LIMIT 10 OFFSET 0");    
+        $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoloc') and {$actorPeopleSql} order by gamets desc LIMIT 10 OFFSET 0");
         $rawData=[];
         foreach ($results as $row) {
             $lastDialogFull[]= array('role' => 'user', 'content' => "The Narrator: {$row["data"]}",
@@ -2213,7 +2215,7 @@ function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") 
         $results = $db->fetchAll("SELECT gamets,data,ts
             FROM eventlog
             WHERE type in ('inputtext','inputtext_s','ginputtext','ginputtext_s','narrator_inputtext')
-              AND people like '%$actorcn%'
+              AND {$actorPeopleSql}
             ORDER BY gamets desc, ts desc");
         
         $rawData=$results;
@@ -2608,8 +2610,12 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
 
     $lastDialogFull = array();
     $b_actor = (strlen($actor) > 0);
-    if ($b_actor)
+    if ($b_actor) {
         $actorEscaped=$db->escape($actor);
+        // Exact physical keys for format-2 rows; unambiguous legacy names only (lib/eventlog_helper.php).
+        require_once __DIR__ . '/eventlog_helper.php';
+        $actorPeopleSql = chimBuildNpcContextPeopleWhereClause($db, $actor);
+    }
     else
         $actorEscaped='';
     //$playerEscaped=$db->escape($GLOBALS["PLAYER_NAME"]);
@@ -2657,14 +2663,8 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
     {$removeBooks} {$sqlfilter} {$ext_sqlfilter1}
     ".(($b_actor) ? "
     AND (
-     people like '%|$actorEscaped|%'
-     or people like '$actorEscaped'
-     or people like '%|$actorEscaped (busy)|%'
-     or people like '%|$actorEscaped (hostile)|%'
-     or people like '%|$actorEscaped (in combat)|%'
-     or people like '%|$actorEscaped (restrained)|%'
+     {$actorPeopleSql}
      or type='info_timeforward'
-     
     )
     " : " ").
     //((false)?" and gamets>".($currentGameTs-(60*60*60*60)):"").

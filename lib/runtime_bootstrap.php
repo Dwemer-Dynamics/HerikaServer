@@ -26,14 +26,20 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             'core_tts_pronunciation',
             'npc_profile_reference_groups',
             'npc_profile_reference_groups_custom',
+            'eventlog',
+            // Objects without a version row of their own; a missing one reruns its idempotent migration.
+            'fn:chim_eventlog_actor_keys',
+            'idx:idx_eventlog_actor_keys',
         ];
 
         try {
             $tableRows = $db->fetchAll(
-                "SELECT table_name
+                "SELECT table_name::text AS table_name
                  FROM information_schema.tables
                  WHERE table_schema='public'
-                   AND table_name IN ('database_versioning','general_settings','core_stt_connector','core_itt_connector','core_tts_connector','core_tts_pronunciation','npc_profile_reference_groups','npc_profile_reference_groups_custom')"
+                   AND table_name IN ('database_versioning','general_settings','core_stt_connector','core_itt_connector','core_tts_connector','core_tts_pronunciation','npc_profile_reference_groups','npc_profile_reference_groups_custom','eventlog')
+                 UNION ALL SELECT 'fn:chim_eventlog_actor_keys'::text WHERE to_regprocedure('public.chim_eventlog_actor_keys(text)') IS NOT NULL
+                 UNION ALL SELECT 'idx:idx_eventlog_actor_keys'::text WHERE to_regclass('public.idx_eventlog_actor_keys') IS NOT NULL"
             );
         } catch (\Throwable $e) {
             $decision = false;
@@ -69,13 +75,14 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             'npc_profile_sharing' => 20260901001,
             'oghma_catalog' => 20260827001,
             'core_tts_pronunciation' => 20260829003,
+            'eventlog_actor_identity' => 20260930001,
         ];
 
         try {
             $versionRows = $db->fetchAll(
                 "SELECT tablename, version
                  FROM public.database_versioning
-                 WHERE tablename IN ('responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog','npc_actor_identity','npc_profile_sharing','npc_stable_identity')"
+                 WHERE tablename IN ('responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog','npc_actor_identity','npc_profile_sharing','npc_stable_identity','eventlog_actor_identity')"
             );
         } catch (\Throwable $e) {
             $decision = true;

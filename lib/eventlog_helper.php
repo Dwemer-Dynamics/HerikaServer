@@ -57,14 +57,89 @@ if (!function_exists('chimBuildVisibleEventLogWhereClause')) {
     }
 }
 
+if (!function_exists('chimEventLogPeopleColumn')) {
+    function chimEventLogPeopleColumn($peopleColumn)
+    {
+        $peopleColumn = trim((string)$peopleColumn);
+        return preg_match('/^(?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*$/', $peopleColumn)
+            ? $peopleColumn : 'people';
+    }
+}
+
+if (!function_exists('chimBuildEventLogActorKeysWhereClause')) {
+    // Exact identity match for format-2 rows through idx_eventlog_actor_keys. Legacy name-only rows
+    // never match here; pass chimNpcProfileActorKeys() to include explicitly linked references.
+    function chimBuildEventLogActorKeysWhereClause($db, array $actorKeys, $peopleColumn = 'people')
+    {
+        require_once __DIR__ . '/core/npc_reference.php';
+        $peopleColumn = chimEventLogPeopleColumn($peopleColumn);
+        $keys = [];
+        foreach ($actorKeys as $key) {
+            if (chimIsActorKey($key)) { $keys[$key] = "'" . $db->escape($key) . "'"; }
+        }
+        if (!$keys) {
+            return 'FALSE';
+        }
+        return "(left({$peopleColumn}, 1) = '[' AND public.chim_eventlog_actor_keys({$peopleColumn}) && ARRAY["
+            . implode(',', $keys) . "]::text[])";
+    }
+}
+
+if (!function_exists('chimResolveContextActorKeys')) {
+    // Physical keys for an actor-specific automated context. A request-captured participant with this
+    // exact name wins; otherwise the single registered profile owner with this name. Returns
+    // ['keys' => [...], 'legacy_names' => bool]: legacy name-only rows are allowed only when the name is
+    // unambiguous among registered actors. Nothing is ever matched to a key by name alone.
+    function chimResolveContextActorKeys($db, $actorName)
+    {
+        require_once __DIR__ . '/core/npc_reference.php';
+        require_once __DIR__ . '/core/npc_profile_sharing.php';
+        $actorName = trim((string)$actorName);
+        $rows = $db->fetchAll("SELECT * FROM core_npc_master WHERE lower(npc_name) = lower('" . $db->escape($actorName) . "') ORDER BY id");
+        $owners = array_unique(array_map(static fn($r) => (int)($r['profile_owner_npc_id'] ?? 0) ?: (int)$r['id'], $rows));
+        $captured = [];
+        foreach ($GLOBALS['CHIM_EVENT_IDENTITY']['participants'] ?? [] as $participant) {
+            if ($participant['id'] !== null && strcasecmp($participant['base_name'], $actorName) === 0) {
+                $captured[] = $participant['id'];
+            }
+        }
+        $keys = [];
+        if (count($captured) === 1) {
+            $keys = $captured;
+            foreach ($rows as $row) {
+                if (chimNpcRowPhysicalKey($row) === $captured[0]) { $keys = chimNpcProfileActorKeys($row); break; }
+            }
+        } elseif (!$captured && count($owners) === 1) {
+            $keys = chimNpcProfileActorKeys($rows[0]);
+        }
+        return ['keys' => $keys, 'legacy_names' => count($owners) <= 1 && count($captured) <= 1];
+    }
+}
+
+if (!function_exists('chimBuildNpcContextPeopleWhereClause')) {
+    // Exact-key rows for a resolved actor, plus legacy name-only rows when the name is unambiguous.
+    // Format-2 rows never match by name, and ambiguous legacy rows are excluded rather than guessed.
+    function chimBuildNpcContextPeopleWhereClause($db, $actorName, $peopleColumn = 'people')
+    {
+        $peopleColumn = chimEventLogPeopleColumn($peopleColumn);
+        $scope = chimResolveContextActorKeys($db, $actorName);
+        $clauses = [];
+        if ($scope['keys']) {
+            $clauses[] = chimBuildEventLogActorKeysWhereClause($db, $scope['keys'], $peopleColumn);
+        }
+        if ($scope['legacy_names']) {
+            $clauses[] = "(left(COALESCE({$peopleColumn}, ''), 1) <> '[' AND "
+                . chimBuildNpcEventLogPeopleWhereClause($db, $actorName, $peopleColumn) . ")";
+        }
+        return $clauses ? '(' . implode(' OR ', $clauses) . ')' : 'FALSE';
+    }
+}
+
 if (!function_exists('chimBuildNpcEventLogPeopleWhereClause')) {
     // Match one NPC token without allowing partial-name matches or far-away audience markers.
     function chimBuildNpcEventLogPeopleWhereClause($db, $npcName, $peopleColumn = 'people')
     {
-        $peopleColumn = trim((string)$peopleColumn);
-        if (!preg_match('/^(?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*$/', $peopleColumn)) {
-            $peopleColumn = 'people';
-        }
+        $peopleColumn = chimEventLogPeopleColumn($peopleColumn);
 
         $escapedNpcName = $db->escape(trim((string)$npcName));
         return "EXISTS (

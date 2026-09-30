@@ -8272,6 +8272,20 @@ if ($db->execQuery(file_get_contents(__DIR__ . '/../data/npc_profile_sharing.sql
     Logger::error('Failed to apply npc_profile_sharing migration');
 }
 
+// Additive exact-identity lookup for eventlog.people format 2; readers and writers are unchanged.
+// Runtime bootstrap also checks the function and index, so a missing object reruns this idempotent file.
+// Restores refill public.eventlog in place, which keeps and maintains the index (docs/actor-identity.md).
+$eventlogActorIdentityReady = $db->fetchAll("SELECT 1 WHERE to_regprocedure('public.chim_eventlog_actor_keys(text)') IS NOT NULL
+    AND to_regclass('public.idx_eventlog_actor_keys') IS NOT NULL");
+if ($checkVersion('eventlog_actor_identity') < 20260930001 || empty($eventlogActorIdentityReady)) {
+    if ($db->execQuery(file_get_contents(__DIR__ . '/../data/eventlog_actor_identity.sql')) !== false) {
+        $updateVersion('eventlog_actor_identity', 20260930001);
+        Logger::info('Applied patch eventlog_actor_identity 20260930001');
+    } else {
+        Logger::error('Failed to apply eventlog_actor_identity 20260930001');
+    }
+}
+
 if ($checkVersion("default_npc_tags") < 20260814001) {
     $migrationPath = __DIR__ . "/../data/canonical_npc_knowledge_tags_20260814.sql";
     if (is_readable($migrationPath) && $db->execQuery(file_get_contents($migrationPath)) !== false) {

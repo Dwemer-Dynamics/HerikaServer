@@ -3074,6 +3074,14 @@ function parsePeoplePipeList($peoplePipe)
     if ($peoplePipe === "") {
         return [];
     }
+    // Format-2 rows expose display names only to legacy pipe consumers; keys never become names.
+    if ($peoplePipe[0] === "[") {
+        require_once __DIR__ . '/core/npc_reference.php';
+        $parsed = chimParseEventParticipants($peoplePipe);
+        if ($parsed['version'] === CHIM_ACTOR_IDENTITY_VERSION) {
+            return array_values(array_unique(array_column($parsed['participants'], 'name')));
+        }
+    }
 
     $tokens = explode("|", $peoplePipe);
     $cleanPeople = [];
@@ -5573,6 +5581,36 @@ function chimGenerateUtteranceId()
     }
 }
 
+// Captured audience of an opted-in request (docs/actor-identity.md), serialized as format 2; null for legacy.
+// A forced legacy list narrows the captured audience by exact name. A name matching one captured entry
+// keeps its key; namesakes or names outside the capture stay unresolved except the player and Narrator.
+function chimCapturedEventPeople($forcePeople = '')
+{
+    $identity = $GLOBALS['CHIM_EVENT_IDENTITY'] ?? null;
+    if (!is_array($identity) || !isset($identity['participants'])) {
+        return null;
+    }
+    require_once __DIR__ . '/core/npc_reference.php';
+    $forcePeople = trim((string)$forcePeople);
+    if ($forcePeople === '') {
+        return chimSerializeEventParticipants($identity['participants']);
+    }
+    $forced = chimParseEventParticipants($forcePeople);
+    if ($forced['version'] === CHIM_ACTOR_IDENTITY_VERSION) {
+        return chimSerializeEventParticipants($forced['participants']);
+    }
+    $participants = [];
+    foreach ($forced['participants'] as $person) {
+        $matches = array_values(array_filter($identity['participants'],
+            static fn($p) => $p['name'] === $person['name'] || $p['base_name'] === $person['base_name']));
+        $id = count($matches) === 1 ? $matches[0]['id'] : null;
+        if ($id === null && $person['base_name'] === (string)($GLOBALS['PLAYER_NAME'] ?? " ")) { $id = CHIM_ACTOR_KEY_PLAYER; }
+        if ($id === null && $person['base_name'] === 'The Narrator') { $id = CHIM_ACTOR_KEY_NARRATOR; }
+        $participants[] = ['name' => $person['name'], 'id' => $id];
+    }
+    return chimSerializeEventParticipants($participants);
+}
+
 function logEvent($dataArray,$forcePeople='')
 {
     if (!empty($GLOBALS['chim_interaction_generated']) && !chimInteractionAllowed()) return;
@@ -5665,6 +5703,12 @@ function logEvent($dataArray,$forcePeople='')
         }
 
         
+        // Opted-in requests keep the audience captured on the game thread; nearby snapshots never replace it.
+        $capturedPeople = chimCapturedEventPeople($forcePeople);
+        if ($capturedPeople !== null) {
+            $eventPeople = $capturedPeople;
+        }
+
         $insertData = array(
             'ts' => $dataArray[1],
             'gamets' => $dataArray[2],

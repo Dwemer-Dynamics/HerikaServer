@@ -413,6 +413,18 @@ function chimNpcProfileMembers(array $actor): array
     );
 }
 
+// Physical keys of every member sharing this actor's kept profile, the actor first.
+// Members without a stable reference stay unresolved rather than matched by name.
+function chimNpcProfileActorKeys(array $actor): array
+{
+    $keys = [];
+    foreach (array_merge([$actor], chimNpcProfileMembers($actor)) as $member) {
+        $key = chimNpcRowPhysicalKey($member);
+        if ($key !== null && !in_array($key, $keys, true)) { $keys[] = $key; }
+    }
+    return $keys;
+}
+
 // Read name-scoped summaries across a verified linked name change, without absorbing unrelated namesakes.
 function chimNpcProfileMemoryNames(array $actor): array
 {

@@ -23,6 +23,7 @@ An HTTP success does not prove that an actor spoke or an action completed. Corre
 | Request dispatch or passive events | `comm.php`, `main.php`, `processor/comm.php` |
 | LLM/STT/TTS connectors | `connector/`, `stt/`, `tts/`, `lib/core/*_connector.class.php` |
 | Profiles and NPC state | `lib/core/core_profiles.class.php`, `lib/core/npc_master.class.php` |
+| Actor identity in event participants | [actor-identity.md](actor-identity.md), `lib/core/npc_reference.php` |
 | Actions | `lib/core/action_catalog.php`, `functions/functions.php`, `functions/json_response.php` |
 | Prompt/history selection | `prompts/`, `lib/data_functions.php`, `lib/compact_context_history.php` |
 | Memory retrieval | `lib/memory_helper_vectordb.php`, related worker call sites |

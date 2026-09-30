@@ -408,6 +408,109 @@ final class FormReferenceSupportTest extends TestCase
         $this->assertSame([], chimNpcEffectiveProfile([]));
     }
 
+    public function testEventParticipantsKeepExactIdentityWithoutInferringFromNames(): void
+    {
+        $astrid = 'ref:skyrim.esm|0001BDE8';
+        $this->assertSame($astrid, chimActorKeyFromReference('Skyrim.esm|1BDE8'));
+        $this->assertSame(md5($astrid), NpcMaster::identityMd5(['metadata' => ['refid_source' => 'Skyrim.esm|0001BDE8']]));
+        $this->assertSame($astrid, chimNpcRowActorKey(['metadata' => '{"refid_source":"Skyrim.esm|0001BDE8"}']));
+        $this->assertNull(chimNpcRowActorKey(['npc_name' => 'Astrid', 'refid' => '0001BDE8', 'metadata' => '{}']));
+        foreach (['player', 'narrator', 'dyn:0f8fad5b-d9cb-469f-a165-70867728950e', "ref:bob's mod.esp|00000ABC"] as $key) {
+            $this->assertTrue(chimIsActorKey($key), $key);
+        }
+        foreach (['Player', 'runtime:FF001234', 'FF001234', 'ref:Skyrim.esm|0001BDE8', 'ref:skyrim.esm|0001bde8',
+            'ref:skyrim.esm|FF001234', 'ref: skyrim.esm|0001BDE8', 'dyn:00000000-0000-0000-0000-000000000000',
+            'base:skyrim.esm|0001BDE8', 'ref:a\b.esp|00000001', 'Astrid', null, 7] as $key) {
+            $this->assertFalse(chimIsActorKey($key), var_export($key, true));
+        }
+
+        $people = chimSerializeEventParticipants([
+            ['name' => 'Astrid (busy)', 'id' => $astrid],
+            ['name' => 'Guard', 'id' => 'ref:skyrim.esm|00012345'],
+            ['name' => 'Guard', 'id' => 'ref:skyrim.esm|00054321'],
+            ['name' => 'Astrid the Renamed', 'id' => $astrid],
+            ['name' => 'Lydia'],
+            ['name' => 'Prisoner', 'id' => 'player'],
+        ]);
+        $this->assertSame('[{"name":"Astrid (busy)","id":"ref:skyrim.esm|0001BDE8"},'
+            . '{"name":"Guard","id":"ref:skyrim.esm|00012345"},{"name":"Guard","id":"ref:skyrim.esm|00054321"},'
+            . '{"name":"Lydia"},{"name":"Prisoner","id":"player"}]', $people);
+        $parsed = chimParseEventParticipants($people);
+        $this->assertSame(2, $parsed['version']);
+        $this->assertSame(['Astrid', 'busy'], [$parsed['participants'][0]['base_name'], $parsed['participants'][0]['status']]);
+        $this->assertNull($parsed['participants'][3]['id']);
+        $this->assertSame([$astrid, 'ref:skyrim.esm|00012345', 'ref:skyrim.esm|00054321', 'player'],
+            chimEventParticipantKeys($people));
+
+        // Legacy and malformed rows stay name-only; nothing is upgraded by matching names.
+        $legacy = chimParseEventParticipants('|Astrid (in combat)|Guard|Guard|');
+        $this->assertSame(1, $legacy['version']);
+        $this->assertSame(['Astrid (in combat)', 'Guard'], array_column($legacy['participants'], 'name'));
+        $this->assertSame([], chimEventParticipantKeys('|Astrid|'));
+        $this->assertSame([], chimEventParticipantKeys('[{"name":"Astrid","id":"ref:skyrim.esm|0001BDE8"'));
+        $this->assertSame([], chimEventParticipantKeys('[{"name":"A\u0000","id":"player"},{"name":"B","id":"narrator"}]'));
+        // Stored history is read tolerantly: only whole valid entries keep keys, as in the SQL extractor.
+        $stored = '["Astrid",{"id":"player"},{"name":"A|B","id":"narrator"},{"name":"Guard","id":"0001BDE8"},'
+            . '{"name":"Sven","id":{"x":1}},[{"name":"N","id":"dyn:0f8fad5b-d9cb-469f-a165-70867728950e"}],'
+            . '{"name":"Tab\t","id":"ref:skyrim.esm|00000007"},{"name":"The Narrator","id":"narrator"}]';
+        $this->assertSame(['narrator'], chimEventParticipantKeys($stored));
+        $this->assertSame(['Astrid', 'A|B', 'Guard', 'Sven'], array_column(chimParseEventParticipants($stored)['participants'], 'name'));
+        $this->assertSame(['[Merchant] Bob'], array_column(chimParseEventParticipants('[Merchant] Bob')['participants'], 'name'));
+        $this->assertSame([], chimEventParticipantKeys(null));
+
+        // Client ingress: only an absent capability is legacy; anything else is complete or rejected.
+        $this->assertNull(chimEventIdentityParticipants(['participants' => [['name' => 'Astrid', 'id' => $astrid]]]));
+        $accepted = chimEventIdentityParticipants(['identity_version' => 2,
+            'participants' => [['name' => 'Astrid', 'id' => $astrid], ['name' => 'Bandit'], (object)['name' => 'Ulfric|Jarl']]]);
+        $this->assertSame([$astrid, null, null], array_column($accepted, 'id'));
+        $this->assertSame('Ulfric|Jarl', $accepted[2]['name']);
+        $this->assertSame([], chimEventIdentityParticipants(['identity_version' => 2, 'participants' => []]));
+        $rejected = [
+            'unsupported_version' => [['identity_version' => '2', 'participants' => []], ['identity_version' => null],
+                ['identity_version' => 3, 'participants' => []]],
+            'participants_invalid' => [['identity_version' => 2], ['identity_version' => 2, 'participants' => 'Astrid'],
+                ['identity_version' => 2, 'participants' => ['a' => ['name' => 'Astrid']]]],
+            'participant_invalid' => [['identity_version' => 2, 'participants' => [['name' => 'Lydia'], 'Astrid']],
+                ['identity_version' => 2, 'participants' => [[]]], ['identity_version' => 2, 'participants' => [['id' => 'player']]],
+                ['identity_version' => 2, 'participants' => [['name' => 'Astrid', 'formid' => '0001BDE8']]]],
+            'participant_name_invalid' => [['identity_version' => 2, 'participants' => [['name' => ' ']]],
+                ['identity_version' => 2, 'participants' => [['name' => "A\tB"]]], ['identity_version' => 2, 'participants' => [['name' => 7]]]],
+            'participant_id_invalid' => [['identity_version' => 2, 'participants' => [['name' => 'Lydia'], ['name' => 'Bandit', 'id' => 'FF001234']]],
+                ['identity_version' => 2, 'participants' => [['name' => 'Bandit', 'id' => null]]],
+                ['identity_version' => 2, 'participants' => [['name' => 'Bandit', 'id' => '']]]],
+        ];
+        foreach ($rejected as $reason => $payloads) {
+            foreach ($payloads as $payload) {
+                try {
+                    chimEventIdentityParticipants($payload);
+                    $this->fail($reason . ' accepted: ' . json_encode($payload));
+                } catch (ChimEventIdentityException $error) {
+                    $this->assertSame($reason, $error->reason, json_encode($payload));
+                }
+            }
+        }
+
+        // Serialization enforces the same boundary; parsed participants round-trip with 'id' => null.
+        $this->assertSame('[{"name":"Ulfric|Jarl"},{"name":"Astrid","id":"ref:skyrim.esm|0001BDE8"}]',
+            chimSerializeEventParticipants([['name' => 'Ulfric|Jarl', 'id' => null], ['name' => 'Astrid', 'id' => $astrid]]));
+        $this->assertSame($people, chimSerializeEventParticipants($parsed['participants']));
+        foreach ([[['name' => 'Bandit', 'id' => 'FF001234']], [['name' => "A\x7F"]], ['Astrid'], [['name' => 'A', 'extra' => 1]]] as $bad) {
+            try {
+                chimSerializeEventParticipants($bad);
+                $this->fail('Invalid participant serialized: ' . json_encode($bad));
+            } catch (ChimEventIdentityException $expected) {
+                $this->assertInstanceOf(InvalidArgumentException::class, $expected);
+            }
+        }
+
+        require_once __DIR__ . '/../../lib/eventlog_helper.php';
+        $db = new class { public function escape($value) { return str_replace("'", "''", (string)$value); } };
+        $this->assertSame('FALSE', chimBuildEventLogActorKeysWhereClause($db, ['Astrid', 'FF001234']));
+        $this->assertSame("(left(e.people, 1) = '[' AND public.chim_eventlog_actor_keys(e.people) && "
+            . "ARRAY['ref:skyrim.esm|0001BDE8','ref:bob''s mod.esp|00000ABC']::text[])",
+            chimBuildEventLogActorKeysWhereClause($db, [$astrid, $astrid, "ref:bob's mod.esp|00000ABC"], 'e.people'));
+    }
+
     public function testNpcMasterSupportsStableFactionDetection(): void
     {
         $npcData = [

@@ -158,3 +158,239 @@ function chimMigrateStableNpcIdentity(): void
         throw $error;
     }
 }
+
+// Durable actor keys for eventlog.people identity format 2 (docs/actor-identity.md).
+// Runtime FormIDs, base IDs and display names are never keys.
+const CHIM_ACTOR_IDENTITY_VERSION = 2;
+const CHIM_ACTOR_KEY_PLAYER = 'player';
+const CHIM_ACTOR_KEY_NARRATOR = 'narrator';
+const CHIM_ACTOR_STATUS_SUFFIXES = ['busy', 'hostile', 'in combat', 'restrained'];
+
+// Strict canonical form only; must stay identical to public.chim_eventlog_actor_keys().
+function chimIsActorKey($key): bool
+{
+    if (!is_string($key)) { return false; }
+    if ($key === CHIM_ACTOR_KEY_PLAYER || $key === CHIM_ACTOR_KEY_NARRATOR) { return true; }
+    if (preg_match('/^dyn:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/D', $key)) {
+        return $key !== 'dyn:00000000-0000-0000-0000-000000000000';
+    }
+    return (bool)preg_match('~^ref:[^|/\\\\@#:\x00-\x1F\x7F A-Z][^|/\\\\@#:\x00-\x1F\x7FA-Z]*\.es[mpl]\|00[0-9A-F]{6}$~D', $key);
+}
+
+// Writers build ref keys from a plugin/local reference; the md5 of this key is the profile selector.
+function chimActorKeyFromReference($source): ?string
+{
+    $parsed = chimParseNpcReferenceSource($source);
+    if (!$parsed) { return null; }
+    $key = 'ref:' . strtolower($parsed['plugin_name']) . '|' . $parsed['local_formid'];
+    return chimIsActorKey($key) ? $key : null;
+}
+
+// Existing profile rows resolve only through their recorded stable reference, never name or runtime slot.
+function chimNpcRowActorKey(array $row): ?string
+{
+    $metadata = is_array($row['metadata'] ?? null)
+        ? $row['metadata'] : (json_decode((string)($row['metadata'] ?? ''), true) ?: []);
+    return chimActorKeyFromReference($metadata['refid_source'] ?? '');
+}
+
+// Thrown by the strict v2 boundaries: client ingress and format-2 serialization. Callers must fail the
+// event explicitly; nothing is downgraded to legacy routing or accepted partially.
+final class ChimEventIdentityException extends InvalidArgumentException
+{
+    public const UNSUPPORTED_VERSION = 'unsupported_version';
+    public const PARTICIPANTS_INVALID = 'participants_invalid';
+    public const PARTICIPANT_INVALID = 'participant_invalid';
+    public const NAME_INVALID = 'participant_name_invalid';
+    public const ID_INVALID = 'participant_id_invalid';
+    public const ROLE_INVALID = 'role_key_invalid';
+
+    public function __construct(public readonly string $reason, public readonly ?int $index = null)
+    {
+        parent::__construct('Invalid event identity: ' . $reason . ($index === null ? '' : ' at participant ' . $index));
+    }
+}
+
+// Pipes are allowed: format 2 separates names from keys, and legacy lists never yield a pipe in a token.
+function chimIsEventParticipantName($name): bool
+{
+    return is_string($name) && trim($name, ' ') !== '' && mb_check_encoding($name, 'UTF-8')
+        && mb_strlen($name, 'UTF-8') <= 256 && !preg_match('/[\x00-\x1F\x7F]/', $name);
+}
+
+// Keep the recorded name as a snapshot; status suffixes are split out, not removed.
+function chimEventParticipant(string $name, ?string $id): array
+{
+    $name = trim($name, ' ');
+    $pattern = '/^(.*\S) \((' . implode('|', array_map('preg_quote', CHIM_ACTOR_STATUS_SUFFIXES)) . ')\)$/iD';
+    $status = preg_match($pattern, $name, $matches) ? strtolower($matches[2]) : null;
+    return ['name' => $name, 'base_name' => $status === null ? $name : $matches[1], 'status' => $status, 'id' => $id];
+}
+
+// One participant per key and per unresolved name; namesakes with different keys stay separate.
+function chimDedupeEventParticipants(array $participants): array
+{
+    $unique = [];
+    foreach ($participants as $participant) {
+        $seenKey = $participant['id'] !== null ? 'id:' . $participant['id'] : 'name:' . $participant['name'];
+        $unique[$seenKey] ??= $participant;
+    }
+    return array_values($unique);
+}
+
+// Tolerant display parsing of stored history. An entry keeps a key only when the whole entry is valid,
+// exactly as public.chim_eventlog_actor_keys() decides; other entries are shown name-only or skipped.
+function chimReadStoredEventParticipants(array $items): array
+{
+    $participants = [];
+    foreach ($items as $item) {
+        if (is_string($item)) { $item = ['name' => $item]; }
+        elseif (is_object($item)) { $item = get_object_vars($item); }
+        else { continue; }
+        if (!chimIsEventParticipantName($item['name'] ?? null)) { continue; }
+        $participants[] = chimEventParticipant($item['name'], chimIsActorKey($item['id'] ?? null) ? $item['id'] : null);
+    }
+    return chimDedupeEventParticipants($participants);
+}
+
+// Strict v2 validation. Participants are associative arrays or objects holding only name and optional id.
+// An absent id is unresolved; a provided id must be canonical. Null counts as absent only for PHP writers,
+// whose parsed participants carry 'id' => null; client JSON must omit the field.
+function chimValidateEventParticipants($items, bool $nullIdIsAbsent): array
+{
+    if (!is_array($items) || !array_is_list($items)) {
+        throw new ChimEventIdentityException(ChimEventIdentityException::PARTICIPANTS_INVALID);
+    }
+    $participants = [];
+    foreach ($items as $index => $item) {
+        if (is_object($item)) { $item = get_object_vars($item); }
+        if (!is_array($item) || !array_key_exists('name', $item) || ($item !== [] && array_is_list($item))) {
+            throw new ChimEventIdentityException(ChimEventIdentityException::PARTICIPANT_INVALID, $index);
+        }
+        if (array_diff(array_keys($item), ['name', 'id', 'base_name', 'status'])
+            || (!$nullIdIsAbsent && array_diff(array_keys($item), ['name', 'id']))) {
+            throw new ChimEventIdentityException(ChimEventIdentityException::PARTICIPANT_INVALID, $index);
+        }
+        if (!chimIsEventParticipantName($item['name'])) {
+            throw new ChimEventIdentityException(ChimEventIdentityException::NAME_INVALID, $index);
+        }
+        $id = $item['id'] ?? null;
+        if (array_key_exists('id', $item) && !($id === null && $nullIdIsAbsent) && !chimIsActorKey($id)) {
+            throw new ChimEventIdentityException(ChimEventIdentityException::ID_INVALID, $index);
+        }
+        $participants[] = chimEventParticipant($item['name'], $id);
+    }
+    return chimDedupeEventParticipants($participants);
+}
+
+// Format 2 is a JSON array; anything else stays name-only legacy data. For display only: never use this
+// to accept client input. JSON that PostgreSQL jsonb rejects (for example a \u0000 escape) yields no keys.
+function chimParseEventParticipants($people): array
+{
+    $people = (string)$people;
+    if (str_starts_with($people, '[') && !preg_match('/(?<!\\\\)(?:\\\\\\\\)*\\\\u0000/i', $people)) {
+        $decoded = json_decode($people, false);
+        if (is_array($decoded)) {
+            return ['version' => CHIM_ACTOR_IDENTITY_VERSION, 'participants' => chimReadStoredEventParticipants($decoded)];
+        }
+    }
+    // Legacy writers also store a bare name, which may itself start with '['. Such rows, and malformed
+    // JSON, are shown by name only; no key is ever derived from them.
+    return ['version' => 1, 'participants' => chimReadStoredEventParticipants(explode('|', $people))];
+}
+
+// Keys in first-appearance order, matching public.chim_eventlog_actor_keys(people).
+function chimEventParticipantKeys($people): array
+{
+    return array_values(array_filter(array_column(chimParseEventParticipants($people)['participants'], 'id')));
+}
+
+// Writes format 2 through the strict boundary; throws ChimEventIdentityException rather than downgrading.
+function chimSerializeEventParticipants(array $participants): string
+{
+    return json_encode(array_map(static fn($p) => $p['id'] === null
+        ? ['name' => $p['name']] : ['name' => $p['name'], 'id' => $p['id']], chimValidateEventParticipants($participants, true)),
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+}
+
+// Client event metadata. Returns null only when identity_version is absent (legacy client; participants
+// is then ignored). Otherwise returns the complete validated audience, possibly empty, or throws
+// ChimEventIdentityException; the caller must reject the event instead of falling back to names.
+function chimEventIdentityParticipants(array $payload): ?array
+{
+    if (!array_key_exists('identity_version', $payload)) {
+        return null;
+    }
+    if ($payload['identity_version'] !== CHIM_ACTOR_IDENTITY_VERSION) {
+        throw new ChimEventIdentityException(ChimEventIdentityException::UNSUPPORTED_VERSION);
+    }
+    return chimValidateEventParticipants($payload['participants'] ?? null, false);
+}
+
+// Physical role keys travel beside the audience in the same event metadata. They record provenance only:
+// a speaker, listener or target key never adds that actor to the audience.
+function chimEventIdentityRoles(array $payload): array
+{
+    $roles = ['speaker_key' => null, 'listener_keys' => [], 'target_key' => null];
+    foreach (['speaker_key', 'target_key'] as $field) {
+        if (!array_key_exists($field, $payload)) { continue; }
+        if (!chimIsActorKey($payload[$field])) {
+            throw new ChimEventIdentityException(ChimEventIdentityException::ROLE_INVALID . ':' . $field);
+        }
+        $roles[$field] = $payload[$field];
+    }
+    if (array_key_exists('listener_keys', $payload)) {
+        $listeners = $payload['listener_keys'];
+        if (!is_array($listeners) || !array_is_list($listeners)) {
+            throw new ChimEventIdentityException(ChimEventIdentityException::ROLE_INVALID . ':listener_keys');
+        }
+        foreach ($listeners as $index => $key) {
+            if (!chimIsActorKey($key)) {
+                throw new ChimEventIdentityException(ChimEventIdentityException::ROLE_INVALID . ':listener_keys', $index);
+            }
+        }
+        $roles['listener_keys'] = array_values(array_unique($listeners));
+    }
+    return $roles;
+}
+
+// Request field 4 carries base64 JSON event metadata (the same field as the player routing snapshot).
+// Returns null for legacy clients, including fields that are not base64 JSON objects, and otherwise the
+// validated audience plus role keys. Throws before anything is written when an opted-in event is invalid.
+function chimDecodeEventIdentityField($rawField): ?array
+{
+    $rawField = trim((string)$rawField);
+    $decoded = $rawField === '' ? false : base64_decode($rawField, true);
+    $payload = is_string($decoded) && $decoded !== '' ? json_decode($decoded, true) : null;
+    if (!is_array($payload) || array_is_list($payload)) { return null; }
+    $participants = chimEventIdentityParticipants($payload);
+    if ($participants === null) { return null; }
+    return ['participants' => $participants] + chimEventIdentityRoles($payload);
+}
+
+// Actor key for a registered actor: a placed reference stays authoritative; otherwise the client-assigned
+// dyn: key recorded at registration. Names and runtime FormIDs never produce a key.
+function chimNpcRowPhysicalKey(array $row): ?string
+{
+    $key = chimNpcRowActorKey($row);
+    if ($key !== null) { return $key; }
+    $metadata = is_array($row['metadata'] ?? null)
+        ? $row['metadata'] : (json_decode((string)($row['metadata'] ?? ''), true) ?: []);
+    $dynamic = $metadata['actor_key'] ?? null;
+    return is_string($dynamic) && str_starts_with($dynamic, 'dyn:') && chimIsActorKey($dynamic) ? $dynamic : null;
+}
+
+// Registration metadata may carry the client-assigned dyn: key of a dynamic actor in the same field.
+// Absent means legacy; a present value must be a canonical dyn: key or the registration is rejected.
+function chimDecodeRegistrationActorKey($rawField): ?string
+{
+    $rawField = trim((string)$rawField);
+    $decoded = $rawField === '' ? false : base64_decode($rawField, true);
+    $payload = is_string($decoded) && $decoded !== '' ? json_decode($decoded, true) : null;
+    if (!is_array($payload) || array_is_list($payload) || !array_key_exists('actor_key', $payload)) { return null; }
+    $key = $payload['actor_key'];
+    if (!is_string($key) || !str_starts_with($key, 'dyn:') || !chimIsActorKey($key)) {
+        throw new ChimEventIdentityException(ChimEventIdentityException::ROLE_INVALID . ':actor_key');
+    }
+    return $key;
+}

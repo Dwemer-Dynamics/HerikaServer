@@ -26,6 +26,11 @@ if (
 if (!function_exists("resolvePeopleForIncomingEvent")) {
     function resolvePeopleForIncomingEvent($eventType, $eventData, $fallbackPeople = "")
     {
+        // An opted-in client already captured the complete audience; keep it untouched.
+        $capturedPeople = function_exists("chimCapturedEventPeople") ? chimCapturedEventPeople() : null;
+        if ($capturedPeople !== null) {
+            return $capturedPeople;
+        }
         $strictModeEnabled = function_exists("isStrictSpatialPeopleModeEnabled") ? isStrictSpatialPeopleModeEnabled() : false;
         $normalizedEventType = strtolower((string) $eventType);
         $pluginAuthoritativeActorEvents = [
@@ -1527,6 +1532,15 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
             if ($referenceSource) {
                 $meta['refid_source'] = $referenceSource;
+            }
+            // A placed reference stays authoritative; a dyn: key only identifies an actor without one.
+            $registrationActorKey = $GLOBALS['CHIM_REGISTRATION_ACTOR_KEY'] ?? null;
+            if ($registrationActorKey !== null && trim((string)($meta['refid_source'] ?? '')) === '') {
+                if (!isset($meta['actor_key'])) {
+                    $meta['actor_key'] = $registrationActorKey;
+                } elseif ($meta['actor_key'] !== $registrationActorKey) {
+                    error_log("[ADDNPC] kept actor_key for {$currentNpcData['npc_name']}; a different dyn key was offered");
+                }
             }
             if ($incomingDisplayName !== "" && strcasecmp((string) $currentNpcData["npc_name"], $incomingDisplayName) !== 0) {
                 $meta["current_display_name"] = $incomingDisplayName;
