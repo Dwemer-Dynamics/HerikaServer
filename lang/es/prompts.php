@@ -9,7 +9,8 @@ $TEMPLATE_DIALOG = " Escribe la siguiente línea de diálogo de {$GLOBALS["HERIK
 $esDirectNarratorDialogue = !empty($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])
     || (($GLOBALS["gameRequest"][0] ?? '') === 'narrator_inputtext')
     || (($gameRequest[0] ?? '') === 'narrator_inputtext');
-if ($esDirectNarratorDialogue) {
+$esInlineNpcNarration = in_array(strtolower(trim((string)($GLOBALS["INLINE_NARRATION_MODE"] ?? ''))), ['npc', 'text_only'], true);
+if ($esDirectNarratorDialogue && !$esInlineNpcNarration) {
     $TEMPLATE_DIALOG .= " Responde directamente a {$GLOBALS["PLAYER_NAME"]} solo con diálogo hablado."
         . " No incluyas narración en tercera persona, descripción de escena, acotaciones ni texto entre asteriscos.";
 }
