@@ -8,7 +8,8 @@ $TEMPLATE_DIALOG = " Napisz następną kwestię dialogową {$GLOBALS["HERIKA_NAM
 $plDirectNarratorDialogue = !empty($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])
     || (($GLOBALS["gameRequest"][0] ?? '') === 'narrator_inputtext')
     || (($gameRequest[0] ?? '') === 'narrator_inputtext');
-if ($plDirectNarratorDialogue) {
+$plInlineNpcNarration = in_array(strtolower(trim((string)($GLOBALS["INLINE_NARRATION_MODE"] ?? ''))), ['npc', 'text_only'], true);
+if ($plDirectNarratorDialogue && !$plInlineNpcNarration) {
     $TEMPLATE_DIALOG .= " Odpowiadaj bezpośrednio do {$GLOBALS["PLAYER_NAME"]} wyłącznie mówionym dialogiem."
         . " Nie dodawaj narracji w trzeciej osobie, opisów sceny, didaskaliów ani tekstu w gwiazdkach.";
 }

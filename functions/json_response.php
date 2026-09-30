@@ -414,7 +414,7 @@
         if (!in_array($inlineNarrationMode, ['disabled', 'narrator', 'npc', 'text_only'], true)) {
             $inlineNarrationMode = (isset($GLOBALS["INLINE_NARRATION_ENABLED"]) && $GLOBALS["INLINE_NARRATION_ENABLED"]) ? 'narrator' : 'disabled';
         }
-        if (chimIsDirectNarratorDialogue()) {
+        if (chimIsDirectNarratorDialogue() && !in_array($inlineNarrationMode, ['npc', 'text_only'], true)) {
             $inlineNarrationMode = 'disabled';
         }
         $inlineNarrationEnabled = $inlineNarrationMode !== 'disabled';
@@ -423,6 +423,9 @@
             $messageDescription = "{$promptCharacterName}'s spoken response to the current Soulgaze vision, in their own personality and speech style. Use the final Soulgaze scene description for visible details and conversation context for natural reactions. Do not invent unseen details or answer an older conversation turn.";
         } elseif ($inlineNarrationEnabled) {
             $messageDescription = "If needed, start with one brief third-person narration block in single asterisks, then put {$promptCharacterName}'s spoken text after it. Example: *She smiles* It's good to see you again, my friend! Do not wrap the entire reply in asterisks, and keep spoken dialogue outside the asterisks.";
+            if (chimIsDirectNarratorDialogue()) {
+                $messageDescription .= " Keep the spoken reply consistent with the chosen narrator action when you use one.";
+            }
         } elseif (chimIsDirectNarratorDialogue()) {
             $messageDescription = "plain spoken dialogue addressed directly to {$GLOBALS["PLAYER_NAME"]}. Keep the spoken reply consistent with the chosen narrator action when you use one. Do not include third-person narration, scene description, stage directions, or text in asterisks.";
         }
@@ -527,7 +530,7 @@
         if (!in_array($inlineNarrationMode, ['disabled', 'narrator', 'npc', 'text_only'], true)) {
             $inlineNarrationMode = (isset($GLOBALS["INLINE_NARRATION_ENABLED"]) && $GLOBALS["INLINE_NARRATION_ENABLED"]) ? 'narrator' : 'disabled';
         }
-        if (chimIsDirectNarratorDialogue()) {
+        if (chimIsDirectNarratorDialogue() && !in_array($inlineNarrationMode, ['npc', 'text_only'], true)) {
             $inlineNarrationMode = 'disabled';
         }
         $inlineNarrationEnabled = $inlineNarrationMode !== 'disabled';
@@ -536,6 +539,9 @@
             $messageDescription = "{$promptCharacterName}'s spoken response to the current Soulgaze vision, in their own personality and speech style. Use the final Soulgaze scene description for visible details and conversation context for natural reactions. Do not invent unseen details or answer an older conversation turn.";
         } elseif ($inlineNarrationEnabled) {
             $messageDescription = "If needed, start with one brief third-person narration block in single asterisks, then put {$promptCharacterName}'s spoken text after it. Example: *She smiles* It's good to see you again, my friend! Do not wrap the entire reply in asterisks, and keep spoken dialogue outside the asterisks.";
+            if (chimIsDirectNarratorDialogue()) {
+                $messageDescription .= " Keep the spoken reply consistent with the chosen narrator action when you use one.";
+            }
         } elseif (chimIsDirectNarratorDialogue()) {
             $messageDescription = "plain spoken dialogue addressed directly to {$GLOBALS["PLAYER_NAME"]}. Keep the spoken reply consistent with the chosen narrator action when you use one. Do not include third-person narration, scene description, stage directions, or text in asterisks.";
         }

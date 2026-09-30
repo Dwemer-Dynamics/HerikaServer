@@ -18,6 +18,8 @@ Use a separate repository for an extension. Install its server payload under `ex
 
 Do not assume every endpoint executes every hook. Keep hook code bounded, avoid logging secrets, and fail cleanly when optional mods/providers or data are absent. Do not echo diagnostics into a streamed response. Namespaces/function prefixes prevent collisions with other installed extensions.
 
+See [Plugin runtime reference](plugin-runtime.md) for hook examples and timing, optional speech/playthrough state, atomic writes, install/update routes, and background model calls.
+
 ## Maintained examples
 
 - [CHIM-Custom](https://github.com/Dwemer-Dynamics/CHIM-Custom): optional Skyrim-mod state, native client source under `SkyrimPlugin/`, PHP context hooks, migrations and release scripts.
@@ -31,7 +33,7 @@ For new plugin-owned tables, use prefixed names in the `plugins` schema and insp
 
 ## Package a server extension
 
-The current [package manager](../lib/plugin_package_manager.php) accepts ZIP-format `.dwpkg`/`.zip` uploads with schema version 4. This is separate from the older tarball installer in [ext/generic_installer.php](../ext/generic_installer.php). Do not mix their layouts.
+The current [package manager](../lib/plugin_package_manager.php) accepts ZIP-format `.dwpkg`/`.zip` uploads with schema version 4. The catalog uses [ui/server_plugin_installer.php](../ui/server_plugin_installer.php) and tar archives; [ext/generic_installer.php](../ext/generic_installer.php) is another legacy installer. Do not mix their layouts. Choose one [install/update route](plugin-runtime.md#install-and-update-routes) per plugin.
 
 ```text
 manifest.json
