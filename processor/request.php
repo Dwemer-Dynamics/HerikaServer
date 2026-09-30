@@ -99,6 +99,20 @@ if ($gameRequest[0] == "funcret") { // Take out the functions part
         "(Important note: Something important happened here for {$GLOBALS["PLAYER_NAME"]} on {$sk_date}. You should use the tag #PlotRelevantEvent)",
         $momentum, $gameRequest[2],'diary_intent',$gameRequest[1]);
 
+} else if ($gameRequest[0] == "combatbark" && ($GLOBALS["COMBAT_BARK_STATE"] ?? null) === "searching") {
+	// Applied after language, ext and custom prompts, whose combat cues describe hits and known enemy positions.
+	// Only a client-reported search overrides them; engaged, unknown and legacy barks keep the loaded cues.
+	$combatBarkName = $GLOBALS["HERIKA_NAME"];
+	$combatBarkAction = selectRandomInArray([
+		"$combatBarkName calls out warily while searching for the enemy.",
+		"$combatBarkName challenges the hidden enemy to show themselves.",
+		"$combatBarkName warns allies to stay alert while the enemy is out of sight.",
+		"$combatBarkName wonders aloud where the foe has gone.",
+		"$combatBarkName threatens the foe they are hunting for.",
+	]);
+	$request = "($combatBarkAction $combatBarkName has lost track of the enemy and does not know where they are. "
+		. "Do not claim to see the enemy, know their position, or land or take a hit.) {$GLOBALS["TEMPLATE_DIALOG"]}";
+
 } else if ($gameRequest[0] == "narrator_welcome") {
 	// Handle narrator welcome message
 	if (isset($PROMPTS["narrator_welcome"]["cue"]) && is_array($PROMPTS["narrator_welcome"]["cue"]) && count($PROMPTS["narrator_welcome"]["cue"]) > 0) {

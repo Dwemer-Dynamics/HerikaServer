@@ -1080,6 +1080,9 @@ if (in_array($gameRequest[0],["bored"])) {
 
 // Combat bark event - log as infoaction and apply cooldown
 if (in_array($gameRequest[0],["combatbark"])) {
+    // Older clients send no state; processor/request.php keeps the loaded cues unless the speaker is searching.
+    [$gameRequest[3], $GLOBALS["COMBAT_BARK_STATE"]] = chimSplitCombatBarkState((string)($gameRequest[3] ?? ""));
+
     // Add configurable cooldown for combat barks to prevent spam (global across all NPCs)
     $combatBarkCooldownPeriod = isset($GLOBALS["COMBAT_BARK_COOLDOWN"]) ? intval($GLOBALS["COMBAT_BARK_COOLDOWN"]) : 90;
     
@@ -1114,7 +1117,9 @@ if (in_array($gameRequest[0],["combatbark"])) {
     
     $localGameRequest=$gameRequest;
     $localGameRequest[0]="infoaction";
-    $localGameRequest[3].=" ({$GLOBALS["HERIKA_NAME"]} shouts during combat)";
+    $localGameRequest[3].=($GLOBALS["COMBAT_BARK_STATE"] === "searching")
+        ? " ({$GLOBALS["HERIKA_NAME"]} calls out while searching for an enemy they have lost track of)"
+        : " ({$GLOBALS["HERIKA_NAME"]} shouts during combat)";
     logEvent($localGameRequest);
 }
 

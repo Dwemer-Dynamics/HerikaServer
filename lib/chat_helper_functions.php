@@ -5545,6 +5545,18 @@ function chimGenerateUtteranceId()
     }
 }
 
+/**
+ * Split the client's trailing "(Combat state: ...)" marker from combat bark event data.
+ * The marker is untrusted description: a well-formed marker is always removed and unknown values return null.
+ */
+function chimSplitCombatBarkState(string $data): array
+{
+    if (!preg_match('/^(.*?)\s*\(Combat state: ([a-z_]{1,24})\)\s*$/s', $data, $matches)) {
+        return [$data, null];
+    }
+    return [$matches[1], in_array($matches[2], ['searching', 'engaged'], true) ? $matches[2] : null];
+}
+
 function logEvent($dataArray,$forcePeople='')
 {
     if (!empty($GLOBALS['chim_interaction_generated']) && !chimInteractionAllowed()) return;
