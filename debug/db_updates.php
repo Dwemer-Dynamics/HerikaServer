@@ -8543,6 +8543,41 @@ if ($checkVersion('npc_schedules') < 20260927001) {
     $updateVersion('npc_schedules', 20260927001);
 }
 
+// Skyrim date SQL functions use the Global Settings start date, which PHP sets once per
+// connection. Recreated functions still containing the old fixed date are patched again.
+$hardcodedSkyrimStartFunctions = $db->fetchAll("SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname LIKE 'convert_gamets2skyrim%' AND p.prosrc LIKE '%0201.08.17 00:00:00%'");
+if ($checkVersion('skyrim_start_date') < 20260930001 || !empty($hardcodedSkyrimStartFunctions)) {
+    $skyrimStartSql = <<<'SQL'
+CREATE OR REPLACE FUNCTION public.chim_skyrim_start_timestamp() RETURNS timestamp with time zone
+    LANGUAGE sql STABLE
+    AS $fn$
+        SELECT to_timestamp(COALESCE(NULLIF(current_setting('chim.skyrim_start_date', true), ''), '0201-08-17 00:00:00'), 'YYYY-MM-DD HH24:MI:SS')
+    $fn$;
+DO $$
+DECLARE item record;
+BEGIN
+    FOR item IN SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname LIKE 'convert_gamets2skyrim%' AND p.prosrc LIKE '%0201.08.17 00:00:00%'
+    LOOP
+        EXECUTE replace(pg_get_functiondef(item.oid),
+            'to_timestamp(''0201.08.17 00:00:00'',''YYYY.MM.DD HH24:MI:SS'')', 'public.chim_skyrim_start_timestamp()');
+    END LOOP;
+    IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname LIKE 'convert_gamets2skyrim%' AND p.prosrc LIKE '%0201.08.17 00:00:00%') THEN
+        RAISE EXCEPTION 'Some Skyrim date functions still use a fixed start date';
+    END IF;
+END;
+$$;
+SQL;
+    if ($db->execQuery($skyrimStartSql) !== false) {
+        $updateVersion('skyrim_start_date', 20260930001);
+        Logger::info("Applied patch skyrim_start_date 20260930001");
+    } else {
+        Logger::error("Skyrim start date SQL function patch failed; SQL dates keep the default start date.");
+    }
+}
+
 // Keep the installed snapshot functions and pgAdmin comments aligned with the current table policy.
 require_once dirname(__DIR__) . '/lib/playthrough_schema.php';
 require_once dirname(__DIR__) . '/lib/playthrough_preferences.php';
