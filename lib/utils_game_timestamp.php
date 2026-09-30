@@ -144,6 +144,70 @@ function convert_dow_gregorian2dow_skyrim($s_dow_name_gregorian = "") {
 
 
 //----------------------------------------------------------------
+// Skyrim calendar epoch: the in-game date at game time zero
+//----------------------------------------------------------------
+
+if (!defined('CHIM_DEFAULT_SKYRIM_START_DATE')) {
+    define('CHIM_DEFAULT_SKYRIM_START_DATE', '0201-08-17 00:00:00');
+}
+
+// Normalize "YYYY-MM-DD HH:MM[:SS]" (a "T" separator is accepted); null if not a real date/time.
+if (!function_exists('chimNormalizeSkyrimStartDate')) {
+    function chimNormalizeSkyrimStartDate($value): ?string {
+        if (!is_string($value) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/', trim($value), $m)) {
+            return null;
+        }
+        $second = isset($m[6]) ? (int)$m[6] : 0;
+        if ((int)$m[1] < 1 || !checkdate((int)$m[2], (int)$m[3], (int)$m[1])
+            || (int)$m[4] > 23 || (int)$m[5] > 59 || $second > 59) {
+            return null;
+        }
+        return sprintf('%s-%s-%s %s:%s:%02d', $m[1], $m[2], $m[3], $m[4], $m[5], $second);
+    }
+}
+
+// Settings saves: blank restores the default, anything else must be a real date/time.
+if (!function_exists('chimRequireSkyrimStartDate')) {
+    function chimRequireSkyrimStartDate($value): string {
+        if ($value === null || (is_string($value) && trim($value) === '')) {
+            return CHIM_DEFAULT_SKYRIM_START_DATE;
+        }
+        $date = chimNormalizeSkyrimStartDate($value);
+        if ($date === null) {
+            throw new InvalidArgumentException('Enter a real date and time as YYYY-MM-DD HH:MM:SS, for example ' . CHIM_DEFAULT_SKYRIM_START_DATE . '.');
+        }
+        return $date;
+    }
+}
+
+// Saved Global Setting first, then the legacy plugin global, then the vanilla start date.
+if (!function_exists('chimSkyrimStartDate')) {
+    function chimSkyrimStartDate(): string {
+        foreach (['SKYRIM_START_DATE', 'skyrim_start_date'] as $key) {
+            $date = chimNormalizeSkyrimStartDate($GLOBALS[$key] ?? null);
+            if ($date !== null) {
+                return $date;
+            }
+        }
+        return CHIM_DEFAULT_SKYRIM_START_DATE;
+    }
+}
+
+// Parsed once per date and timezone; conversions never query the database.
+if (!function_exists('chimSkyrimStartTimestamp')) {
+    function chimSkyrimStartTimestamp(): int {
+        static $cache = [];
+        $date = chimSkyrimStartDate();
+        $key = $date . '|' . date_default_timezone_get();
+        if (!isset($cache[$key])) {
+            $cache[$key] = (int)strtotime($date);
+        }
+        return $cache[$key];
+    }
+}
+
+
+//----------------------------------------------------------------
 // convert_gamets2... functions mimic corresponding SQL functions:
 //----------------------------------------------------------------
 
@@ -233,8 +297,7 @@ function convert_gamets2gregorian_date($gamets) {
 function convert_gamets2skyrim_long_date($gamets) {
     $s_result = "";
 
-    $s_skyrim_start_date = $GLOBALS["skyrim_start_date"] ?? '0201-08-17 00:00:00'; 
-    $skyrim_start_timestamp = strtotime($s_skyrim_start_date); 
+    $skyrim_start_timestamp = chimSkyrimStartTimestamp();
     
     $f_gamets = floatval($gamets); 
 
@@ -263,8 +326,7 @@ function convert_gamets2skyrim_long_date($gamets) {
 function convert_gamets2skyrim_long_date2($gamets) {
     $s_result = "";
 
-    $s_skyrim_start_date = $GLOBALS["skyrim_start_date"] ?? '0201-08-17 00:00:00'; 
-    $skyrim_start_timestamp = strtotime($s_skyrim_start_date); 
+    $skyrim_start_timestamp = chimSkyrimStartTimestamp();
 
     $f_gamets = floatval($gamets); 
 
@@ -295,8 +357,7 @@ function convert_gamets2skyrim_long_date2($gamets) {
 function convert_gamets2skyrim_long_date_no_time($gamets) {
     $s_result = "";
 
-    $s_skyrim_start_date = $GLOBALS["skyrim_start_date"] ?? '0201-08-17 00:00:00'; 
-    $skyrim_start_timestamp = strtotime($s_skyrim_start_date); 
+    $skyrim_start_timestamp = chimSkyrimStartTimestamp();
 
     $f_gamets = floatval($gamets); 
 
@@ -321,8 +382,7 @@ function convert_gamets2skyrim_long_date_no_time($gamets) {
 function convert_gamets2skyrim_date($gamets) {
     $sRes = "";
 
-    $s_skyrim_start_date = $GLOBALS["skyrim_start_date"] ?? '0201-08-17 00:00:00'; 
-    $skyrim_start_timestamp = strtotime($s_skyrim_start_date); 
+    $skyrim_start_timestamp = chimSkyrimStartTimestamp();
 
     $f_gamets = floatval($gamets); 
     if ($f_gamets > 0.0) {
@@ -339,8 +399,7 @@ function convert_gamets2skyrim_date($gamets) {
 //----------------------------------------------------------------------------
 
 function gamets2timestamp($gamets) {
-    $s_skyrim_start_date = $GLOBALS["skyrim_start_date"] ?? '0201-08-17 00:00:00'; 
-    $skyrim_start_timestamp = strtotime($s_skyrim_start_date); 
+    $skyrim_start_timestamp = chimSkyrimStartTimestamp();
     $f_seconds = floatval($gamets) * 0.00864; 
     $ts_time = $skyrim_start_timestamp + intval($f_seconds );
     return $ts_time;
@@ -388,8 +447,7 @@ function gamets2seconds_between($gamets_start, $gamets_end) {
 
 
 function gamets2str_format_date($gamets, $dt_format = 'Y-m-d H:i:s') {
-    $s_skyrim_start_date = $GLOBALS["skyrim_start_date"] ?? '0201-08-17 00:00:00'; 
-    $skyrim_start_timestamp = strtotime($s_skyrim_start_date); 
+    $skyrim_start_timestamp = chimSkyrimStartTimestamp();
     $f_seconds = floatval($gamets) * 0.00864; 
     $ts_time = $skyrim_start_timestamp + intval($f_seconds );
     return date($dt_format, $ts_time);
@@ -406,8 +464,7 @@ function gamets2str_format_gregorian_date($gamets, $dt_format = 'Y-m-d H:i:s') {
 
 
 function gamets2str_dow_gregorian($gamets) {
-    $s_skyrim_start_date = $GLOBALS["skyrim_start_date"] ?? '0201-08-17 00:00:00'; 
-    $skyrim_start_timestamp = strtotime($s_skyrim_start_date); 
+    $skyrim_start_timestamp = chimSkyrimStartTimestamp();
     $f_seconds = floatval($gamets) * 0.00864; 
     $ts_time = $skyrim_start_timestamp + intval($f_seconds);
     // date('l', $ts_time) is wrong, Skyrim week is not ISO standard
@@ -417,8 +474,7 @@ function gamets2str_dow_gregorian($gamets) {
 
 
 function gamets2str_dow_skyrim($gamets) {
-    $s_skyrim_start_date = $GLOBALS["skyrim_start_date"] ?? '0201-08-17 00:00:00'; 
-    $skyrim_start_timestamp = strtotime($s_skyrim_start_date); 
+    $skyrim_start_timestamp = chimSkyrimStartTimestamp();
     $f_seconds = floatval($gamets) * 0.00864; 
     $ts_time = $skyrim_start_timestamp + intval($f_seconds);
     // date('l', $ts_time) is wrong, Skyrim week is not ISO standard
