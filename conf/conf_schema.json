@@ -130,6 +130,7 @@
   "BGL_TRIGGER_HOURS": {"userlvl":"basic","type": "number","default": 24,"description": "Number of in-game hours between Background Life events. NPCs will generate thoughts and take actions based on this interval. Default: 24 hours. Range: 1-720 hours.","scope":"global"},
   "VISUAL_CONTEXT_SCENE_TTL_MINUTES": {"userlvl":"basic","type":"integer","default":10,"description":"Minutes before an unlocked visual scene description expires from prompt context. Locked records do not expire.","scope":"global"},
   "VISUAL_CONTEXT_PROMPT_MAX_CHARS": {"userlvl":"pro","type":"integer","default":1800,"description":"Maximum number of visual context characters included in each roleplay prompt.","scope":"global"},
+  "SKYRIM_START_DATE": {"userlvl":"basic","type":"string","default":"0201-08-17 00:00:00","scope":"global","profile_overrideable":false,"description":"The in-game date and time when your game started, not today's in-game date. CHIM adds elapsed game time to this date. Change it only if an alternate start mod begins your game on a different date. Use YYYY-MM-DD HH:MM:SS with the Fourth Era year as four digits. Default: 0201-08-17 00:00:00 (17th of Last Seed, 4E 201, midnight)."},
   "CONNECTOR": {
     "_title":"AI/LLM Connectors",
     "openrouterjson": {
