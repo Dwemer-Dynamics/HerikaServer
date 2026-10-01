@@ -780,6 +780,62 @@ if (!function_exists('chimApplyStoredNpcIdentityToPost')) {
     }
 }
 
+if (!class_exists('ChimRelationshipFormConflict')) {
+    /** A stale NPC/relationship form (stored target or extended_data changed since it was opened). */
+    class ChimRelationshipFormConflict extends RuntimeException {}
+}
+
+if (!function_exists('chimProtectPostedServerOwnedExtendedData')) {
+    // Digest provenance, dormant digests and relationship edges in extended_data are server-owned. The raw
+    // Setting Overrides JSON keeps unknown plugin metadata, but these keys always come from the stored
+    // (effective) row: the latest digest changes only through the server-stamped manual edit and
+    // relationships only through the structured editor (npc_save_handler.php, which runs afterwards).
+    // A new row has no stored keys; a digest typed on create stays unassigned legacy text.
+    function chimProtectPostedServerOwnedExtendedData($npc, $id): void
+    {
+        $posted = json_decode((string)($_POST['extended_data'] ?? '{}'), true);
+        if (!is_array($posted)) {
+            $posted = [];
+        }
+        $existing = (int)$id > 0 ? $npc->getById((int)$id) : null;
+        $stored = is_array($existing) ? json_decode((string)($existing['extended_data'] ?? ''), true) : [];
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+        if (is_array($existing)) {
+            // Compare-and-set: workers write digests/relationships without the owner advisory lock. The form
+            // carries a digest of the extended_data it was opened with, and the write commits only if the row
+            // still holds exactly what was read here; otherwise the save is refused as stale (409).
+            $readExtended = (string)($existing['extended_data'] ?? '');
+            $openedDigest = (string)($_POST['_extended_data_digest'] ?? '');
+            if ($openedDigest !== '' && !hash_equals(md5($readExtended), $openedDigest)) {
+                throw new ChimRelationshipFormConflict('This NPC changed since it was opened. Reopen it before saving.');
+            }
+            $guardId = (int)$id;
+            $_POST['_commit_guard'] = static function () use ($npc, $guardId, $readExtended) {
+                return (string)($npc->getById($guardId)['extended_data'] ?? '') === $readExtended;
+            };
+        }
+        unset($_POST['_extended_data_digest']);
+        foreach (['middle_term_memory', 'middle_term_memory_provenance', 'middle_term_memory_dormant', 'relationships'] as $key) {
+            if (array_key_exists($key, $stored)) {
+                $posted[$key] = $stored[$key];
+            } else {
+                unset($posted[$key]);
+            }
+        }
+        if (array_key_exists('middle_term_latest', $_POST)) {
+            $latest = trim((string)$_POST['middle_term_latest']);
+            if (is_array($existing)) {
+                chimMiddleTermApplyManualDigest($posted, $latest, $existing);
+            } elseif ($latest !== '') {
+                $posted['middle_term_memory'] = ['0' => $latest];
+            }
+        }
+        $_POST['extended_data'] = json_encode($posted, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    }
+}
+
 // Keep the preset ID in the existing metadata JSON while treating the dropdown as its only editor.
 if (!function_exists('chimMergeTtsFilterPresetIntoPostedMetadata')) {
     function chimMergeTtsFilterPresetIntoPostedMetadata(): void
@@ -802,6 +858,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["create"])) {
     }
     chimMergeBackgroundLifeGoalsIntoPostedExtendedData();
     chimMergeTtsFilterPresetIntoPostedMetadata();
+    chimProtectPostedServerOwnedExtendedData($npc, 0);
     if (file_exists(__DIR__."/../../ext/relationship_system/npc_save_handler.php")) {
         include(__DIR__."/../../ext/relationship_system/npc_save_handler.php");
     }
@@ -829,6 +886,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["update"])) {
         }
         chimMergeBackgroundLifeGoalsIntoPostedExtendedData();
         chimMergeTtsFilterPresetIntoPostedMetadata();
+        chimProtectPostedServerOwnedExtendedData($npc, $_POST["id"] ?? 0);
         if (file_exists(__DIR__."/../../ext/relationship_system/npc_save_handler.php")) {
             include(__DIR__."/../../ext/relationship_system/npc_save_handler.php");
         }
@@ -838,15 +896,23 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["update"])) {
         };
         if (chimNpcRelationshipSaveNeedsLock()) {
             $saveResult = chimRunWithRelationshipExtendedDataWrite($saveNpc);
+            if ($saveResult === false) {
+                throw new ChimRelationshipFormConflict('This NPC changed while saving. Reopen it before saving again.');
+            }
             // Anchor editor relationship saves to the last known game time (see Create branch) -
             // without this a NULL-stamped row loses its manual entries on the next reconnect.
             if ($saveResult !== false && function_exists('chimRelationshipTimelineStamp')) {
                 $savedRow = $npc->getActorById((int)($_POST['id'] ?? 0));
                 chimRelationshipTimelineStamp((int)($savedRow['profile_owner_npc_id'] ?? $savedRow['id']));
             }
-        } else {
-            $saveNpc();
+        } elseif ($saveNpc() === false) {
+            throw new ChimRelationshipFormConflict('This NPC changed while saving. Reopen it before saving again.');
         }
+    } catch (ChimRelationshipFormConflict | InvalidArgumentException $refused) {
+        http_response_code($refused instanceof ChimRelationshipFormConflict ? 409 : 400);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo $refused->getMessage();
+        exit;
     } finally {
         chimReleaseNpcRelationshipLock($relationshipLockId);
     }
@@ -886,43 +952,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["inline_update_npc"]))
                 $tmp["individual_memory_enabled"] = 1;
             }
 
-            // The UI exposes only the latest middle-term memory entry. Persist edits back into the
-            // timestamp-keyed structure used by the middle-term generator, and allow clearing it.
-            if (array_key_exists('middle_term_latest', $_POST)) {
-                $editedMiddleTerm = trim((string)$_POST['middle_term_latest']);
-                $middleTermMemory = [];
-
-                if (isset($tmp['middle_term_memory']) && is_array($tmp['middle_term_memory'])) {
-                    $middleTermMemory = $tmp['middle_term_memory'];
-                }
-
-                if (!empty($middleTermMemory)) {
-                    $latestKey = array_key_last($middleTermMemory);
-                    if ($latestKey !== null) {
-                        if ($editedMiddleTerm === '') {
-                            unset($middleTermMemory[$latestKey]);
-                        } else {
-                            $middleTermMemory[$latestKey] = $editedMiddleTerm;
-                        }
-                    }
-                } elseif ($editedMiddleTerm !== '') {
-                    // Preserve the generator's expected timestamp-keyed object shape without blocking
-                    // future summaries. A synthetic 0 key behaves as "no previous summary" for regen.
-                    $middleTermMemory = ['0' => $editedMiddleTerm];
-                }
-
-                if (!empty($middleTermMemory)) {
-                    $tmp['middle_term_memory'] = $middleTermMemory;
-                } else {
-                    unset($tmp['middle_term_memory']);
-                }
-
-            }
-
             $_POST['extended_data'] = json_encode($tmp);
         } catch (Throwable $e) {
             $_POST['extended_data'] = '{}';
         }
+        // Server-owned digest/relationship keys come from the stored row; the latest digest edit is
+        // stamped with manual provenance by the shared helper.
+        chimProtectPostedServerOwnedExtendedData($npc, $id);
 
         // Merge relationship editor data after all other extended_data processing.
         // The structured relationship editor must be the last writer for relationships.
@@ -974,13 +1010,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["inline_update_npc"]))
                 $npc->backupNpcById((int)($savedRow['profile_owner_npc_id'] ?? $id));
             }
             if ($ok === false) {
-                echo json_encode(["ok"=>false, "error"=>($npc->getLastError() ?? 'Update failed')]);
+                // Binding, related targets and extended_data are rechecked under row locks; a refusal is stale.
+                http_response_code(409);
+                echo json_encode(["ok"=>false, "conflict"=>true, "error"=>'This NPC changed while saving. Reopen it before saving again.']);
             } else {
                 echo json_encode(["ok"=>true, "id"=>$id]);
             }
         }
     } catch (Throwable $e) {
-        echo json_encode(["ok"=>false, "error"=>$e->getMessage()]);
+        if ($e instanceof ChimRelationshipFormConflict) { http_response_code(409); }
+        echo json_encode(["ok"=>false, "error"=>$e->getMessage(), "conflict"=>$e instanceof ChimRelationshipFormConflict]);
     } finally {
         chimReleaseNpcRelationshipLock($relationshipLockId);
     }
@@ -2261,6 +2300,22 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
     .label-with-toggle input[type="checkbox"] { accent-color:#176529; transform: scale(1.8); transform-origin:center; cursor:pointer; }
     .span-2 { grid-column: 1 / -1; margin-bottom:12px; }
     .checkbox-inline { display:flex; align-items:center; gap:8px; }
+    .npc-task-section { border:1px solid #4a4a4a; border-radius:8px; padding:12px; background:#262626; }
+    .npc-task-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
+    .npc-task-list { display:grid; gap:10px; }
+    .npc-task-card { border:1px solid #3f3f3f; border-radius:8px; padding:12px; background:#242424; }
+    .npc-task-card.is-active { border-color:rgba(242,124,17,.55); }
+    .npc-task-head { display:flex; flex-wrap:wrap; justify-content:space-between; gap:12px; align-items:flex-start; }
+    .npc-task-subject { min-width:0; overflow-wrap:anywhere; color:#f0f3f8; font-weight:700; line-height:1.35; }
+    .npc-task-status { border:1px solid #555; border-radius:999px; padding:2px 8px; color:#cfd9ea; font-size:11px; text-transform:uppercase; }
+    .npc-task-status.due { border-color:#e5a82a; color:#ffd36b; }
+    .npc-task-status.scheduled { border-color:#4f7658; color:#91d5a0; }
+    .npc-task-meta { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:8px; color:#aeb9c9; font-size:12px; }
+    .npc-task-outcome { margin-top:8px; color:#c9d1dc; font-size:12px; }
+    .npc-task-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+    .npc-task-actions button, .npc-task-refresh { border:1px solid #4a4a4a; border-radius:5px; background:#303030; color:#e9efff; padding:5px 9px; cursor:pointer; }
+    .npc-task-actions button:hover, .npc-task-refresh:hover { border-color:rgb(242,124,17); color:rgb(242,124,17); }
+    .npc-task-empty { border:1px dashed #444; border-radius:8px; padding:18px; text-align:center; color:#9fb1c9; }
     #tts_filter_preset:focus-visible { outline:2px solid rgb(242,124,17); outline-offset:2px; border-color:rgb(242,124,17); }
     .form-item .hint.npc-voice-filter-desc { color:#cfd9ea; }
     .form-item .hint.npc-voice-filter-desc:empty { display:none; }
@@ -2458,12 +2513,13 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
     <button type="button" class="npc-editor-tab" role="tab" aria-selected="false" data-npc-editor-tab="info">🛠️ Info</button>
     <button type="button" class="npc-editor-tab" role="tab" aria-selected="false" data-npc-editor-tab="actions">⚡ Actions</button>
     <button type="button" class="npc-editor-tab" role="tab" aria-selected="false" data-npc-editor-tab="background-life">🌍 Background Life</button>
+    <button type="button" class="npc-editor-tab" role="tab" aria-selected="false" data-npc-editor-tab="schedules">Schedules</button>
     <button type="button" class="npc-editor-tab" role="tab" aria-selected="false" data-npc-editor-tab="history">📜 History</button>
 </div>
 <style>
 .npc-editor-tabs {
     display:grid;
-    grid-template-columns:repeat(7, minmax(0, 1fr));
+    grid-template-columns:repeat(8, minmax(0, 1fr));
     gap:8px;
     margin-bottom:14px;
     padding:8px;
@@ -2750,7 +2806,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
             tablist.dataset.initialized = '1';
 
             const panels = {};
-            ['general','bios','relationships','info','actions','background-life','history'].forEach(function(section){
+            ['general','bios','relationships','info','actions','background-life','schedules','history'].forEach(function(section){
                 const panel = document.createElement('div');
                 panel.className = 'npc-editor-panel form-grid';
                 if (section === 'history') panel.classList.add('npc-editor-panel-history');
@@ -2775,6 +2831,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
             }
 
             function sectionFor(unit){
+                if (unit.id === "npc-schedules") return "schedules";
                 if (unit.id === 'relationship-editor-section' || unit.querySelector('#relationship-editor-section')) return 'relationships';
                 if (unit.id === 'relationship-change-history') return 'relationships';
                 const label = unit.querySelector('label:not([for])');
@@ -2929,6 +2986,10 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
                             <button type="button" class="npc-bgl-control" data-bgl-setting="auto_actions" disabled><span class="npc-bgl-control-dot"></span><span><strong>Auto Actions</strong><small>Allow scheduled autonomous actions.</small></span></button>
                             <button type="button" class="npc-bgl-control" data-bgl-setting="send_letters" disabled><span class="npc-bgl-control-dot"></span><span><strong>Send Letters</strong><small>Allow this NPC to send BgL letters.</small></span></button>
                             <button type="button" class="npc-bgl-control" data-bgl-setting="hourly_tracking" disabled><span class="npc-bgl-control-dot"></span><span><strong>Hourly Tracking</strong><small>Keep the NPC's map location updated.</small></span></button>
+                            <button type="button" class="npc-bgl-control" data-bgl-setting="combat_participation" disabled><span class="npc-bgl-control-dot"></span><span><strong>Combat Participation</strong><small>Allow this NPC to be selected for Background Life combat.</small></span></button>
+                            <button type="button" class="npc-bgl-control" data-bgl-setting="combat_initiate" disabled><span class="npc-bgl-control-dot"></span><span><strong>Initiate Combat</strong><small>Allow this NPC to choose Attack NPC.</small></span></button>
+                            <button type="button" class="npc-bgl-control" data-bgl-setting="combat_lethal" disabled><span class="npc-bgl-control-dot"></span><span><strong>Lethal Outcomes</strong><small>Allow this NPC to die in a resolved encounter.</small></span></button>
+                            <button type="button" class="npc-bgl-control" data-bgl-setting="combat_loot" disabled><span class="npc-bgl-control-dot"></span><span><strong>Loot Encounters</strong><small>Allow this NPC to take eligible loot after winning.</small></span></button>
                         </div>
                     </section>
                     <section class="npc-bgl-section">
@@ -3044,7 +3105,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
                     const statusPayload = await npcBglRequest('../api/background_life_npc.php?' + statusQuery.toString());
                     let events = [];
                     try {
-                        const detailQuery = new URLSearchParams({npc:targetName});
+                        const detailQuery = new URLSearchParams({npc:targetName, npc_id:String(targetId)});
                         const detailPayload = await npcBglRequest('../api/background_life_npc_detail.php?' + detailQuery.toString());
                         events = Array.isArray(detailPayload.data && detailPayload.data.events) ? detailPayload.data.events : [];
                     } catch (_error) {}
@@ -3843,6 +3904,109 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
             <textarea id="middle_term_latest" name="middle_term_latest" placeholder="No middle term memory yet."><?= htmlspecialchars($mtmLatest) ?></textarea>
             <small class="hint">Manual edits save to the latest middle-term memory entry. Future auto-generated summaries continue appending after your edit.</small>
         </div>
+
+        <?php if ($editItem): ?>
+        <div id="npc-schedules" class="form-item span-2" data-schedule-root></div>
+        <link rel="stylesheet" href="../css/npc_schedules.css">
+        <script src="../js/npc_schedules.js"></script>
+        <script>window.chimSchedules(document.getElementById('npc-schedules'), '../api/npc_schedules.php', <?= (int)$editItem['id'] ?>);</script>
+        <?php endif; ?>
+        <?php if ($editItem): ?>
+        <div class="form-item span-2 npc-task-section">
+            <div class="npc-task-toolbar">
+                <div>
+                    <label>Persistent Tasks</label>
+                    <small class="hint" style="display:block; margin-top:4px;">Active duties, repeating schedules, and resolved task history for this NPC.</small>
+                </div>
+                <button type="button" id="npc_tasks_refresh" class="npc-task-refresh">Refresh</button>
+            </div>
+            <div id="npc_tasks_list" class="npc-task-list"><div class="npc-task-empty">Loading tasks...</div></div>
+        </div>
+        <script>
+        (function(){
+            const list = document.getElementById('npc_tasks_list');
+            const refresh = document.getElementById('npc_tasks_refresh');
+            const npcId = <?= json_encode((string)($editItem['id'] ?? '')) ?>;
+            if (!list || !npcId) return;
+
+            function esc(value){
+                return String(value == null ? '' : value).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+            }
+            function render(tasks){
+                if (!Array.isArray(tasks) || tasks.length === 0){
+                    list.innerHTML = '<div class="npc-task-empty">No persistent tasks have been recorded for this NPC.</div>';
+                    return;
+                }
+                list.innerHTML = tasks.map(task=>{
+                    const status = String(task.status || 'scheduled').toLowerCase();
+                    const active = status === 'scheduled' || status === 'due';
+                    const details = [];
+                    if (task.commitment_type) details.push(esc(String(task.commitment_type).replaceAll('_',' ')));
+                    if (task.due_label) details.push('Due: '+esc(task.due_label));
+                    if (Number(task.repeat_hours || 0) > 0) details.push('Repeats every '+esc(task.repeat_hours)+' hour(s)');
+                    if (Number(task.occurrence_count || 0) > 0) details.push('Resolved '+esc(task.occurrence_count)+' time(s)');
+                    if (task.counterparty) details.push('With: '+esc(task.counterparty));
+                    if (task.location_name) details.push('At: '+esc(task.location_name));
+                    const actions = active ? '<div class="npc-task-actions">'
+                        + '<button type="button" data-task-op="completed" data-task-id="'+esc(task.id)+'">Complete</button>'
+                        + '<button type="button" data-task-op="failed" data-task-id="'+esc(task.id)+'">Fail</button>'
+                        + '<button type="button" data-task-op="cancelled" data-task-id="'+esc(task.id)+'">Cancel</button>'
+                        + '</div>' : '';
+                    const outcome = task.outcome ? '<div class="npc-task-outcome">Outcome: '+esc(task.outcome)+'</div>' : '';
+                    return '<div class="npc-task-card'+(active?' is-active':'')+'">'
+                        + '<div class="npc-task-head"><div class="npc-task-subject">#'+esc(task.id)+' '+esc(task.subject)+'</div><span class="npc-task-status '+esc(status)+'">'+esc(status)+'</span></div>'
+                        + '<div class="npc-task-meta">'+details.map(v=>'<span>'+v+'</span>').join('')+'</div>'
+                        + outcome + actions + '</div>';
+                }).join('');
+            }
+            let busy = false;
+            async function load(){
+                if (busy) return;
+                busy = true;
+                refresh.disabled = true;
+                list.innerHTML = '<div class="npc-task-empty">Loading tasks...</div>';
+                try {
+                    const response = await fetch('../api/npc_commitments.php?npc_id='+encodeURIComponent(npcId), {cache:'no-store'});
+                    const data = await response.json();
+                    if (!response.ok || !data.success) throw new Error(data.error || 'Task request failed');
+                    render(data.tasks || []);
+                } catch(error){
+                    list.innerHTML = '<div class="npc-task-empty" style="color:#ff8b8b;">'+esc(error.message || error)+'</div>';
+                }
+                finally { busy = false; refresh.disabled = false; }
+            }
+            if (refresh) refresh.addEventListener('click', load);
+            list.addEventListener('click', async function(event){
+                const button = event.target.closest('[data-task-op]');
+                if (!button || busy) return;
+                const operation = button.getAttribute('data-task-op');
+                const taskId = button.getAttribute('data-task-id');
+                const label = operation === 'cancelled' ? 'cancel' : operation === 'failed' ? 'mark as failed' : 'complete';
+                if (!confirm('Are you sure you want to '+label+' task #'+taskId+'?')) return;
+                let outcome = '';
+                if (operation !== 'completed') {
+                    outcome = prompt('Optional reason or outcome:', '');
+                    if (outcome === null) return;
+                }
+                const body = new URLSearchParams({npc_id:npcId, task_id:taskId, operation, outcome});
+                busy = true;
+                refresh.disabled = true;
+                list.querySelectorAll('button').forEach(item => item.disabled = true);
+                try {
+                    const response = await fetch('../api/npc_commitments.php', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'}, body:body.toString()});
+                    const data = await response.json();
+                    if (!response.ok || !data.success) throw new Error(data.error || 'Task update failed');
+                    render(data.tasks || []);
+                } catch(error){
+                    alert(error.message || error);
+                    list.querySelectorAll('button').forEach(item => item.disabled = false);
+                }
+                finally { busy = false; refresh.disabled = false; }
+            });
+            load();
+        })();
+        </script>
+        <?php endif; ?>
 
         <?php
         // REINSERT Skills, Equipment, Stats, Inventory sections here (below Middle Term Memory)
@@ -5524,18 +5688,22 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
       const tabs = document.getElementById('npc_modal_tabs');
       const bioPane = document.getElementById('pane_bio');
       const manualPane = document.getElementById('pane_manual');
+      const bioTab = document.querySelector('#npc_modal_tabs [data-pane="pane_bio"]');
       const exportBtn = document.getElementById('npc_modal_export');
       const importBioBtn = document.getElementById('npc_modal_import_to');
       const isEdit = /[?&]edit=/.test(url);
       if (isEdit){
-        if (tabs) tabs.style.display = 'none';
+        if (tabs) tabs.style.display = 'flex';
+        if (bioTab) bioTab.style.display = 'none';
         if (bioPane) { bioPane.style.display = 'none'; bioPane.classList.remove('active'); }
         if (manualPane) { manualPane.style.display = 'block'; manualPane.classList.add('active'); }
+        document.querySelectorAll('#npc_modal_tabs .pf-tab').forEach(t=>t.classList.toggle('active', t.getAttribute('data-pane')==='pane_manual'));
         // Show export/import buttons only for existing NPCs
         if (exportBtn) exportBtn.style.display = '';
         if (importBioBtn) importBioBtn.style.display = '';
       } else {
         if (tabs) tabs.style.display = 'flex';
+        if (bioTab) bioTab.style.display = '';
         // Hide export/import buttons for new NPCs
         if (exportBtn) exportBtn.style.display = 'none';
         if (importBioBtn) importBioBtn.style.display = 'none';
@@ -5671,7 +5839,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
           const npcName = nameEl ? String(nameEl.value||'').trim() : '';
           if (!npcName) { alert('Cannot determine NPC name'); return; }
           // Open diary book page in new tab with person filter
-          const url = '<?php echo $webRoot; ?>/ui/diary_book.php?person=' + encodeURIComponent(npcName);
+          const url = '<?php echo $webRoot; ?>/ui/diary_book.php?' + new URLSearchParams({npc_id:id, person:npcName}).toString();
           window.open(url, '_blank');
         } catch(_e){
           console.error('Failed to open diary:', _e);

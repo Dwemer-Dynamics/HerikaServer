@@ -678,7 +678,7 @@ sentence ::= [a-zA-Z0-9.,?!\' ]*
                 // bypass reponse.
                 $this->_functionRawName="OpenInventory@";
                 
-                $alreadysent[md5("Herika|command|{$this->_functionRawName}\r\n")] = "Herika|command|{$this->_functionRawName}\r\n";
+                chimRegisterLegacyConnectorCommand($alreadysent, $this->_functionRawName);
             }  
                 
             

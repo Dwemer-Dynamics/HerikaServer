@@ -6,6 +6,7 @@
  * Params:
  *   - npc_name: NPC name (optional if refid provided)
  *   - refid: NPC reference ID (optional if npc_name provided)
+ *   - npc_id / actor_key: exact NPC row or actor key (optional; preferred over name and refid)
  */
 
 error_reporting(E_ERROR);
@@ -128,7 +129,7 @@ try {
 
     error_log("CHIM AI View: Request received - npc_name: '{$npcName}', refid: '{$refId}'");
 
-    if (empty($npcName) && empty($refId)) {
+    if (empty($npcName) && empty($refId) && empty($_GET['npc_id']) && empty($_GET['actor_key'])) {
         echo json_encode([
             'success' => false,
             'error' => 'Missing npc_name or refid parameter'
@@ -146,42 +147,73 @@ try {
     $sampleNpcs = $db->fetchAll($sampleQuery);
     error_log("CHIM AI View: Sample NPCs: " . json_encode($sampleNpcs));
     
-    // Query NPC data - PRIORITIZE NAME SEARCH (refid format might not match)
+    // Exact identity first: an explicit npc_id or actor key selects that physical row (refused if absent).
+    // Otherwise a refid selects its row, and a name is used only when it identifies one row (or the refid
+    // picks one of its namesakes); several same-name NPCs without a disambiguator are refused, never guessed.
     $npcData = null;
-    
-    // STEP 1: Try by name first (most reliable)
-    if (!empty($npcName)) {
+    $npcId = isset($_GET['npc_id']) ? (int)$_GET['npc_id'] : 0;
+    $actorKey = isset($_GET['actor_key']) ? trim((string)$_GET['actor_key']) : '';
+    $exactRequested = $npcId > 0 || $actorKey !== '';
+    $normalizedRefId = strtolower(ltrim(preg_replace('/^0x/i', '', $refId), '0'));
+    $refIdMatches = static function ($row) use ($refId, $normalizedRefId) {
+        $rowRef = trim((string)($row['refid'] ?? ''));
+        return $refId !== '' && $rowRef !== '' && ($rowRef === $refId
+            || ($normalizedRefId !== '' && strtolower(ltrim(preg_replace('/^0x/i', '', $rowRef), '0')) === $normalizedRefId));
+    };
+
+    if ($npcId > 0) {
+        $npcData = $db->fetchOne("SELECT * FROM core_npc_master WHERE id = {$npcId}");
+    } elseif ($actorKey !== '') {
+        if (preg_match('/^ref:(.+)$/i', $actorKey, $m)) {
+            $source = $db->escape(strtolower($m[1]));
+            $rows = $db->fetchAll("SELECT * FROM core_npc_master WHERE lower(metadata->>'refid_source') = '{$source}' ORDER BY id");
+        } else {
+            $rows = $db->fetchAll("SELECT * FROM core_npc_master WHERE metadata->>'actor_key' = '" . $db->escape($actorKey)
+                . "' AND COALESCE(metadata->>'refid_source', '') = '' ORDER BY id");
+        }
+        $npcData = count((array)$rows) === 1 ? $rows[0] : null;
+    }
+    if ($exactRequested && $npcData && $refId !== '' && !$refIdMatches($npcData)) {
+        $npcData = null; // a stale id/key pointing at a different actor than the requested refid
+    }
+
+    if (!$exactRequested && $refId !== '') {
+        $escapedRefId = $db->escape($refId);
+        $escapedNormalized = $db->escape($normalizedRefId);
+        $rows = array_values(array_filter((array)$db->fetchAll("SELECT * FROM core_npc_master
+            WHERE refid = '{$escapedRefId}' OR ('{$escapedNormalized}' <> ''
+                AND ltrim(lower(regexp_replace(BTRIM(refid), '^0x', '', 'i')), '0') = '{$escapedNormalized}') ORDER BY id"), $refIdMatches));
+        if (count($rows) === 1) {
+            $npcData = $rows[0];
+            error_log("CHIM AI View: Found by refid '{$refId}'");
+        }
+    }
+
+    if (!$exactRequested && !$npcData && $npcName !== '') {
         // Extract base name if brackets present (e.g., "Gisli [Riften Guard]" -> "Gisli")
         $baseName = $npcName;
         if (preg_match('/^(.+?)\s*\[/', $npcName, $matches)) {
             $baseName = trim($matches[1]);
         }
-        
         $escapedName = $db->escape($baseName);
-        $query = "SELECT * FROM core_npc_master WHERE npc_name = '{$escapedName}' ORDER BY gamets_last_updated DESC NULLS LAST LIMIT 1";
-        error_log("CHIM AI View: Searching by name: " . $baseName);
-        error_log("CHIM AI View: Query: " . $query);
-        $npcData = $db->fetchOne($query);
-        
-        if ($npcData) {
+        $rows = (array)$db->fetchAll("SELECT * FROM core_npc_master WHERE npc_name = '{$escapedName}' ORDER BY id");
+        if (count($rows) === 1) {
+            $npcData = $rows[0];
             error_log("CHIM AI View: Found by name '{$baseName}'");
-        } else {
-            error_log("CHIM AI View: Not found by name '{$baseName}'");
-        }
-    }
-    
-    // STEP 2: If name search failed and we have a refid, try refid as fallback
-    if (!$npcData && !empty($refId)) {
-        $escapedRefId = $db->escape($refId);
-        $query = "SELECT * FROM core_npc_master WHERE refid = '{$escapedRefId}' ORDER BY gamets_last_updated DESC NULLS LAST LIMIT 1";
-        error_log("CHIM AI View: Searching by refid: " . $refId);
-        error_log("CHIM AI View: Query: " . $query);
-        $npcData = $db->fetchOne($query);
-        
-        if ($npcData) {
-            error_log("CHIM AI View: Found by refid '{$refId}'");
-        } else {
-            error_log("CHIM AI View: Not found by refid '{$refId}'");
+        } elseif (count($rows) > 1) {
+            error_log("CHIM AI View: Name '{$baseName}' matches " . count($rows) . " NPCs; refusing to guess");
+            http_response_code(409);
+            echo json_encode([
+                'success' => false,
+                'error' => 'Several NPCs share this name. Open the NPC by id or reference.',
+                'ambiguous' => true,
+                'searched_name' => $npcName,
+                'searched_refid' => $refId,
+                'candidates' => array_map(static function ($row) {
+                    return ['id' => (int)$row['id'], 'npc_name' => (string)$row['npc_name'], 'refid' => (string)($row['refid'] ?? '')];
+                }, $rows),
+            ]);
+            exit;
         }
     }
 

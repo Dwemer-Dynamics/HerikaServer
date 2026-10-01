@@ -550,16 +550,17 @@ class openai
 
                 $functionCodeName = getFunctionCodeName($this->_functionName);
                 $parameter = buildFunctionExecutionParameter($functionCodeName, $parameter);
-                $commandStr = "Herika|command|$functionCodeName@$parameter\r\n";
+                // The selected speaker (or typed narrator/player), never a hardcoded label; null = drop.
+                $commandStr = chimBuildCurrentCommandLine((string)$GLOBALS["HERIKA_NAME"], "command", "$functionCodeName@$parameter");
 
-                if (!isset($alreadysent[md5($commandStr)])) {
+                if ($commandStr !== null && !isset($alreadysent[md5($commandStr)])) {
                     $this->_commandBuffer[] = $commandStr;
                     file_put_contents(__DIR__.DIRECTORY_SEPARATOR."..".DIRECTORY_SEPARATOR."data".DIRECTORY_SEPARATOR.".last_tool_call_openai.id.txt",$this->_fid);
                     //echo "Herika|command|$functionCodeName@$parameter\r\n";
 
                 }
 
-                $alreadysent[md5($commandStr)] = $commandStr;
+                if ($commandStr !== null) $alreadysent[md5($commandStr)] = $commandStr;
                 if (ob_get_level()) @ob_flush();
             }
 
@@ -611,15 +612,16 @@ class openai
 
                 $functionCodeName = getFunctionCodeName($this->_functionName);
                 $parameter = buildFunctionExecutionParameter($functionCodeName, $parameter);
-                $commandStr = "Herika|command|$functionCodeName@$parameter\r\n";
+                // The selected speaker (or typed narrator/player), never a hardcoded label; null = drop.
+                $commandStr = chimBuildCurrentCommandLine((string)$GLOBALS["HERIKA_NAME"], "command", "$functionCodeName@$parameter");
 
-                if (!isset($alreadysent[md5($commandStr)])) {
+                if ($commandStr !== null && !isset($alreadysent[md5($commandStr)])) {
                     $this->_commandBuffer[] = $commandStr;
                     //echo "Herika|command|$functionCodeName@$parameter\r\n";
 
                 }
 
-                $alreadysent[md5($commandStr)] = $commandStr;
+                if ($commandStr !== null) $alreadysent[md5($commandStr)] = $commandStr;
                 if (ob_get_level()) @ob_flush();
             } else 
                 return null;

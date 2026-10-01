@@ -1,6 +1,7 @@
 <?php
 
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'tts_filter_presets.php');
+require_once(__DIR__ . DIRECTORY_SEPARATOR . 'response_identity.php');
 
 class Narrator
 {
@@ -619,22 +620,11 @@ if (!function_exists('chimBuildNarratorContextLine')) {
 }
 
 if (!function_exists('chimGetPromptCharacterName')) {
+    // Shared with npc_master.class.php: a selected physical row (even one named The Narrator) stays
+    // physical; only the typed narrator uses the roleplay name.
     function chimGetPromptCharacterName(): string
     {
-        $canonicalName = trim((string)($GLOBALS['HERIKA_NAME'] ?? ''));
-        if ($canonicalName !== '' && strcasecmp($canonicalName, Narrator::CANONICAL_NAME) !== 0) {
-            $currentNpcData = is_array($GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] ?? null)
-                ? $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA']
-                : [];
-            $refid = strtoupper(trim((string)($currentNpcData['refid'] ?? '')));
-            $refid = preg_replace('/^0X/i', '', $refid);
-            if ($refid !== '' && preg_match('/^[0-9A-F]{1,8}$/', $refid)) {
-                return $canonicalName . ' [RefID: ' . str_pad($refid, 8, '0', STR_PAD_LEFT) . ']';
-            }
-            return $canonicalName;
-        }
-
-        return chimGetNarratorRoleplayName();
+        return chimResponsePromptCharacterName();
     }
 }
 

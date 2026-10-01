@@ -13,6 +13,7 @@ final class OghmaSettingsTest extends TestCase
         foreach ([
             'OGHMA_INFINIUM', 'OGHMA_AMOUNT', 'OGHMA_RESULT_LIMIT',
             'OGHMA_EXTRACTOR_FALLBACK', 'OGHMA_EXTRACTOR_TIMEOUT_MS',
+            'OGHMA_MULTILINGUAL_ROUTING',
             'RACIAL_OGHMA', 'LOCATION_OGHMA',
         ] as $settingId) {
             $this->assertContains($settingId, $managed);
@@ -30,6 +31,9 @@ final class OghmaSettingsTest extends TestCase
         $this->assertSame(['1', '2', '3'], $catalog['OGHMA_AMOUNT']['values']);
         $this->assertSame(['1', '2', '3', '4', '5'], $catalog['OGHMA_RESULT_LIMIT']['values']);
         $this->assertSame('boolean', $catalog['OGHMA_EXTRACTOR_FALLBACK']['type']);
+        $this->assertSame('boolean', $catalog['OGHMA_MULTILINGUAL_ROUTING']['type']);
+        $schema = json_decode(file_get_contents(__DIR__ . '/../../conf/conf_schema.json'), true);
+        $this->assertFalse($schema['OGHMA_MULTILINGUAL_ROUTING']['default']);
         $this->assertSame('integer', $catalog['OGHMA_EXTRACTOR_TIMEOUT_MS']['type']);
         $this->assertSame('Oghma', $catalog['RACIAL_OGHMA']['category']);
         $this->assertSame('Oghma', $catalog['LOCATION_OGHMA']['category']);

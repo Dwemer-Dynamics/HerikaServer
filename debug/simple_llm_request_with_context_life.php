@@ -169,8 +169,9 @@ $dynamicBiography = $npcMaster->appendBackgroundLifeGoals($dynamicBiography, $cu
 $extended_data = $npcMaster->getExtendedData($currentNpcData);
 $metadata = $npcMaster->getMetadata($currentNpcData);
 
-if (isset($extended_data["middle_term_memory"])) {
-    $middle_term_memory = end($extended_data["middle_term_memory"]);
+// Only a digest whose sources all belong to this actor's current profile group.
+if ($mtmDigest = chimMiddleTermLatestDigest($currentNpcData)) {
+    $middle_term_memory = $mtmDigest['text'];
     $dynamicBiography .= "\n\n<middle_term_memory>\nPast events\n{$middle_term_memory}\n</middle_term_memory>";
 
 }

@@ -1215,7 +1215,9 @@ function createBook($title, $content, $location, $quest_id, $npc_ref = null)
     );
 }
 
-function createLetter($title, $content)
+// $resourceKey (e.g. a physical diary book_key) names the image instead of the title, so same-titled
+// books by different authors never overwrite each other. Generic notes/letters keep the title name.
+function createLetter($title, $content, $resourceKey = null)
 {
 
     $width = 371;
@@ -1327,7 +1329,7 @@ function createLetter($title, $content)
 
     // Output the final image with text overlay
     @mkdir(__DIR__ . "/../data/books");
-    $filename = __DIR__ . "/../data/books/" . md5(string: strtolower(string: $name)) . ".png";
+    $filename = __DIR__ . "/../data/books/" . ($resourceKey !== null && $resourceKey !== '' ? md5((string)$resourceKey) : md5(string: strtolower(string: $name))) . ".png";
     imagepng($background, $filename);
 
     // Free up memory

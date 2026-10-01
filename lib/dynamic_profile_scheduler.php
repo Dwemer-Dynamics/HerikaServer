@@ -63,12 +63,30 @@ function dps_candidates($conn): array {
     $rows = pg_fetch_all(dps_query($conn, "SELECT n.*, p.metadata AS profile_metadata
         FROM public.{$product['npc_table']} n JOIN public.core_profiles p ON p.id=n.profile_id ORDER BY n.id")) ?: [];
     $candidates = [];
+    $byId = array_column($rows,null,'id');
+    $chim = $product['prefix'] !== 'stobe';
+    if ($chim) require_once __DIR__ . '/core/npc_profile_sharing.php';
     foreach ($rows as $row) {
         $metadata = array_replace(dps_json($row['profile_metadata']), dps_json($row['metadata'] ?? ''));
         $enabled = $metadata['DYNAMIC_PROFILE_ENABLED'] ?? $row['dynamic_profile'] ?? false;
         if (isset($row['dynamic_profile']) && !in_array($row['dynamic_profile'], [true,1,'1','t','true'],true)) $enabled = false;
         $name = trim((string)$row[$product['name']]);
-        if ($name === '' || $name === 'The Narrator') continue;
+        // CHIM: a physical row named "The Narrator" is an ordinary actor; the typed Narrator is id 0 below.
+        if ($name === '' || (!$chim && $name === 'The Narrator')) continue;
+        if ($chim) {
+            // Shared character fields belong to the explicit profile owner; physical provenance stays this row.
+            $ownerId = (int)($row['profile_owner_npc_id'] ?? 0);
+            $row['owner_id'] = $ownerId ?: (int)$row['id'];
+            $row['binding'] = chimNpcProfileBinding($row);
+            $row['actor_key'] = chimNpcRowActorKey($row);
+            $row['owner_binding'] = '';
+            if ($ownerId) {
+                $owner = $byId[$ownerId] ?? null;
+                if (!$owner || !empty($owner['profile_owner_npc_id'])) continue;
+                foreach (CHIM_SHARED_NPC_FIELDS as $shared) $row[$shared] = $owner[$shared] ?? null;
+                $row['owner_binding'] = chimNpcProfileBinding($owner);
+            }
+        }
         $allowed = $product['prefix'] === 'stobe' ? ['backstory','personality','occupation','speechstyle','goals'] : ['personality','occupation','skills','speechstyle','goals'];
         $fields = $metadata['DYNAMIC_PROFILE_FIELDS'] ?? ['personality','speechstyle','goals'];
         $fields = array_values(array_intersect(is_array($fields) ? $fields : [], $allowed));
@@ -82,7 +100,8 @@ function dps_candidates($conn): array {
     }
     $data = array_column(pg_fetch_all(dps_query($conn,'SELECT id,value FROM public.core_narrator')) ?: [],'value','id');
     $narratorFields = array_values(array_intersect(dps_json($data['dynamic_profile_fields'] ?? ''),['personality','speechstyle','goals']));
-    $narrator = ['id'=>0, 'name'=>'The Narrator', 'key'=>'DYNAMIC_PROFILE_STATE_NARRATOR',
+    $narrator = ['id'=>0, 'name'=>'The Narrator', 'key'=>'DYNAMIC_PROFILE_STATE_NARRATOR', 'narrator'=>true, 'owner_id'=>0,
+        'binding'=>'', 'owner_binding'=>'', 'actor_key'=>defined('CHIM_ACTOR_KEY_NARRATOR') ? CHIM_ACTOR_KEY_NARRATOR : 'narrator',
         'fields'=>$narratorFields, 'enabled'=>filter_var($data['dynamic_profile'] ?? false,FILTER_VALIDATE_BOOLEAN) && count($narratorFields)>0,
         'policy'=>dps_policy($data), 'metadata_effective'=>$data];
     foreach ($narratorFields as $field) $narrator[$field] = $data[$field] ?? null;
@@ -95,6 +114,10 @@ function dps_audience(array $npc, array &$params): string {
     if ((int)$npc['id'] === 0) return 'TRUE';
     if (dps_product()['prefix'] === 'stobe') return stobeEventAudienceSql($npc['name'], $params, [], $npc);
     require_once __DIR__ . '/eventlog_helper.php';
+    if (dps_product()['prefix'] === 'chim') {
+        // Physical key plus explicitly linked references sharing the kept profile; legacy name-only rows never count.
+        return chimBuildEventLogActorKeysWhereClause($GLOBALS['db'], chimResolveContextActorKeys($GLOBALS['db'], $npc));
+    }
     $fn = dps_product()['prefix'] . 'BuildNpcEventLogPeopleWhereClause';
     return $fn($GLOBALS['db'], $npc['name']);
 }
@@ -157,7 +180,9 @@ function dps_context_limit(array $npc): int {
 function dps_context($conn, array $npc, int $gamets): string {
     try {
         $limit = dps_context_limit($npc);
-        $data = DataLastDataExpandedForNPC($npc["name"], $limit*-1);
+        // The candidate row itself scopes keyed history; the Narrator uses its reserved key.
+        require_once __DIR__ . '/core/npc_reference.php';
+        $data = DataLastDataExpandedForNPC($npc["name"], $limit*-1, "", (int)$npc['id'] === 0 ? CHIM_ACTOR_KEY_NARRATOR : $npc);
         $context = [];
         foreach ($data as $k => $v) {
             $context[] = $v["content"];
@@ -171,6 +196,13 @@ function dps_context($conn, array $npc, int $gamets): string {
             . dps_event_filter(false) . " AND ($audience) AND gamets <= $gamets ORDER BY rowid DESC LIMIT $limit",$params)) ?: [];
         return implode("\n",array_map(static fn($row)=>'['.$row['gamets'].' '.$row['type'].' '.$row['location'].'] '.mb_substr($row['data'],0,2000),array_reverse($rows)));
     }
+}
+
+// Playthrough runtime generation, captured before a model call and rechecked before writing.
+function dps_runtime_generation(): string {
+    $path = dirname(__DIR__) . '/log/playthrough_runtime/generation';
+    clearstatcache(true,$path);
+    return is_file($path) ? trim((string)@file_get_contents($path)) : '';
 }
 
 // Only explicit manual actions carry overrides; old client timer batches have no scheduling authority.
@@ -187,8 +219,13 @@ function dps_request(array $names): int {
             return 0;
         }
         $count = 0;
-        foreach (dps_candidates($conn) as $npc) {
-            if (!in_array($npc['name'],$names,true)) continue;
+        $all = dps_candidates($conn);
+        $names = dps_resolve_selectors($all,$names);
+        foreach ($all as $npc) {
+            // Numeric entries select an exact physical row; the bare "The Narrator" selects only the typed narrator.
+            $hit = false;
+            foreach ($names as $selector) $hit = $hit || dps_manual_match($npc,$selector);
+            if (!$hit) continue;
             if (!$npc['enabled']) {
                 dps_log($npc,'manual_request_disabled_or_locked');
                 continue;
@@ -225,7 +262,7 @@ function dps_conflicts(array $npc, array $fresh): array {
     $changed = [];
     if (!$fresh) return ['npc_missing'];
     if (!$fresh['enabled']) $changed[] = 'npc_disabled_or_locked';
-    foreach (['name','profile_id','fields','policy'] as $key) {
+    foreach (['name','profile_id','fields','policy','actor_key','binding','owner_id','owner_binding'] as $key) {
         if (($fresh[$key] ?? null) !== ($npc[$key] ?? null)) $changed[] = $key;
     }
     if (dps_context_limit($fresh) !== dps_context_limit($npc)) $changed[] = 'context_history_limit';
@@ -236,7 +273,8 @@ function dps_conflicts(array $npc, array $fresh): array {
 }
 
 // One NPC per worker pass; attempts determine ordering so a failing NPC cannot starve others.
-function dps_run(?string $manualName = null, ?callable $generator = null, $connection = null): array {
+// $manualName selects an exact row: an integer id (or numeric string), or "The Narrator" for the typed narrator.
+function dps_run($manualName = null, ?callable $generator = null, $connection = null): array {
     $result = ['updated'=>0,'npcs'=>0,'events'=>0];
     $conn = $connection ?? ptp_connect();
     if (!$conn) return $result;
@@ -249,6 +287,10 @@ function dps_run(?string $manualName = null, ?callable $generator = null, $conne
         $clock = dps_state($conn,'DYNAMIC_PROFILE_CLOCK');
         if (!$clock || pg_fetch_result(dps_query($conn,"SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='eventlog' AND column_name='dynamic_profile_pending')"),0,0) !== 't') return $result;
         $candidates = dps_candidates($conn);
+        if ($manualName !== null) {
+            $manualName = dps_resolve_selectors($candidates,[$manualName])[0] ?? null;
+            if ($manualName === null) return $result;
+        }
         $result['events'] = dps_account($conn,$candidates,$clock);
         if ((dps_state($conn,'DYNAMIC_PROFILE_CLOCK')['epoch'] ?? '') !== $clock['epoch']) return $result;
         $allowed = dps_product()['prefix'].'InteractionAllowed';
@@ -267,7 +309,7 @@ function dps_run(?string $manualName = null, ?callable $generator = null, $conne
             return ($a['state']['attempt'] ?? 0)<=>($b['state']['attempt'] ?? 0);
         });
         foreach ($candidates as $npc) {
-            if (!$npc['enabled'] || ($manualName !== null && $npc['name'] !== $manualName)) continue;
+            if (!$npc['enabled'] || ($manualName !== null && !dps_manual_match($npc,$manualName))) continue;
             $state = $npc['state'];
             if (($state['epoch'] ?? '') !== $clock['epoch'] || !dps_due($state,$npc['policy'],(int)$clock['gamets'],time(),$manualName!==null || $npc['manual'])) continue;
             if ($manualName === null && $npc['manual'] && (int)($npc['manual_request']['retry_after'] ?? 0)>time()) continue;
@@ -302,6 +344,7 @@ function dps_run(?string $manualName = null, ?callable $generator = null, $conne
             }
             $state['attempt'] = time();
             dps_store($conn,$npc['key'],$state);
+            $npc['runtime_generation'] = dps_runtime_generation();
             $result['npcs']++;
             $updates = ($generator ?? 'dps_generate')($npc,$history);
             if (!$updates || !$allowed()) {
@@ -313,7 +356,8 @@ function dps_run(?string $manualName = null, ?callable $generator = null, $conne
                 dps_query($conn,"SELECT pg_advisory_xact_lock(hashtext('dynamic_profile_clock'))");
                 if ($npc['id']) {
                     $table = dps_product()['npc_table'];
-                    dps_query($conn,"SELECT id FROM public.$table WHERE id=$1 FOR UPDATE",[(int)$npc['id']]);
+                    // Member and explicit owner, in id order, on this same connection.
+                    dps_query($conn,"SELECT id FROM public.$table WHERE id IN ($1,$2) ORDER BY id FOR UPDATE",[(int)$npc['id'],(int)($npc['owner_id'] ?? $npc['id'])]);
                 } else {
                     dps_query($conn,'SELECT id FROM public.core_narrator FOR UPDATE');
                 }
@@ -321,6 +365,7 @@ function dps_run(?string $manualName = null, ?callable $generator = null, $conne
                 $fresh = array_values(array_filter(dps_candidates($conn),static fn($row)=>$row['key']===$npc['key']));
                 $conflicts = dps_conflicts($npc,$fresh[0] ?? []);
                 if (($current['epoch'] ?? '') !== $clock['epoch']) $conflicts[] = 'clock_epoch';
+                if (dps_runtime_generation() !== $npc['runtime_generation']) $conflicts[] = 'runtime_generation';
                 if (!$allowed()) $conflicts[] = 'interaction_cancelled';
                 if ($conflicts) {
                     dps_query($conn,'ROLLBACK');
@@ -331,6 +376,16 @@ function dps_run(?string $manualName = null, ?callable $generator = null, $conne
                 $state['consumed'] = $state['total'];
                 $state['last_game'] = $clock['gamets'];
                 dps_store($conn,$npc['key'],$state);
+                // Linked references share the regenerated profile: account their progress so the group generates once.
+                foreach ($candidates as $member) {
+                    if ((int)$npc['id']>0 && (int)$member['id']>0 && $member['key']!==$npc['key'] && ($member['owner_id'] ?? null)===($npc['owner_id'] ?? null)) {
+                        $memberState = dps_state($conn,$member['key']);
+                        if (($memberState['epoch'] ?? '') !== $clock['epoch']) continue;
+                        $memberState['consumed'] = $memberState['total'] ?? 0;
+                        $memberState['last_game'] = $clock['gamets'];
+                        dps_store($conn,$member['key'],$memberState);
+                    }
+                }
                 if ($manualAttempt !== null) {
                     dps_query($conn,'DELETE FROM public.conf_opts WHERE id=$1 AND value::jsonb=$2::jsonb',
                         ['DYNAMIC_PROFILE_MANUAL_'.(int)$npc['id'],json_encode($manualAttempt,JSON_THROW_ON_ERROR)]);
@@ -355,6 +410,25 @@ function dps_run(?string $manualName = null, ?callable $generator = null, $conne
     return $result;
 }
 
+const CHIM_DPS_NARRATOR = ['id'=>0,'narrator'=>true,'name'=>'The Narrator'];
+
+// Legacy name selectors resolve only to a unique physical row among candidates; namesakes are refused.
+function dps_resolve_selectors(array $candidates, array $selectors): array {
+    $out = [];
+    foreach ($selectors as $selector) {
+        if (is_int($selector) || ctype_digit((string)$selector) || $selector === 'The Narrator') { $out[] = $selector; continue; }
+        $hits = array_values(array_filter($candidates, static fn($c)=>(int)$c['id']>0 && $c['name']===(string)$selector));
+        if (count($hits) === 1) $out[] = (int)$hits[0]['id'];
+        else error_log('[DPS] '.json_encode(['reason'=>'manual_selector_ambiguous_or_missing','matches'=>count($hits)]));
+    }
+    return $out;
+}
+
+function dps_manual_match(array $npc, $selector): bool {
+    if (is_int($selector) || ctype_digit((string)$selector)) return (int)$npc['id']>0 && (int)$npc['id']===(int)$selector;
+    return (int)$npc['id']===0 && $selector==='The Narrator';
+}
+
 function dps_generate(array $npc, string $history): array {
     if (dps_product()['prefix'] === 'stobe') {
         $data = $npc['id'] ? getNpcData($npc['name']) : stobeBuildNarratorNpcData();
@@ -366,7 +440,8 @@ function dps_generate(array $npc, string $history): array {
     foreach ($npc['fields'] as $field) {
         $allowed = dps_product()['prefix'].'InteractionAllowed';
         if (!$allowed()) return [];
-        $value = updateDynamicProfileField($npc['name'],$field,$history);
+        // Typed narrator or the exact candidate row (owner-overlaid shared fields); never a name lookup.
+        $value = updateDynamicProfileField((int)$npc['id'] ? $npc : CHIM_DPS_NARRATOR,$field,$history);
         if ($value === false || trim((string)$value)==='') return [];
         if ($field==='skills' && function_exists('getInGameSkillDataFor')) $value .= "\n".getInGameSkillDataFor($npc['name']);
         $updates[$field] = $value;
@@ -404,10 +479,12 @@ function dps_save($conn, array $npc, array $updates, int $gamets): void {
                 JOIN information_schema.columns h ON h.table_schema='public' AND h.table_name='core_npc_master_history' AND h.column_name=n.column_name
                 WHERE n.table_schema='public' AND n.table_name='core_npc_master' AND n.column_name<>'id' ORDER BY n.ordinal_position")) ?: [];
             $names = implode(',',array_map(static fn($column)=>pg_escape_identifier($conn,$column['column_name']),$columns));
-            dps_query($conn,"INSERT INTO public.core_npc_master_history(npc_id,$names) SELECT id,$names FROM public.core_npc_master WHERE id=$1",[(int)$npc['id']]);
+            dps_query($conn,"INSERT INTO public.core_npc_master_history(npc_id,$names) SELECT id,$names FROM public.core_npc_master WHERE id=$1",[(int)($npc['owner_id'] ?? 0) ?: (int)$npc['id']]);
         }
         $values[]=$gamets; $sets[]='gamets_last_updated=$'.count($values);
-        $values[]=(int)$npc['id'];
+        // Linked: generated character fields update the explicit owner, so the member's dormant original
+        // (restored on unlink) is not overwritten. Physical provenance stays in the member's progress state.
+        $values[]=$product['prefix']==='stobe' ? (int)$npc['id'] : ((int)($npc['owner_id'] ?? 0) ?: (int)$npc['id']);
         $saved = dps_query($conn,"UPDATE public.{$product['npc_table']} SET ".implode(',',$sets).' WHERE id=$'.count($values),$values);
         if (pg_affected_rows($saved)!==1) throw new RuntimeException('NPC changed during profile update.');
         else

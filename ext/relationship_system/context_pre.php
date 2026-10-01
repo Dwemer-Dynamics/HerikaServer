@@ -152,37 +152,27 @@ $npcName = $GLOBALS["HERIKA_NAME"] ?? null;
 Logger::info("[REL-CONTEXT] npcName=" . ($npcName ?? 'NULL') . ", CACHE_PEOPLE=" . substr($GLOBALS["CACHE_PEOPLE"] ?? 'NULL', 0, 100));
 
 if ($npcName) {
-    // Parse nearby NPCs from CACHE_PEOPLE
-    $nearbyNpcs = [];
-    if (!empty($GLOBALS["CACHE_PEOPLE"])) {
-        // CACHE_PEOPLE is a comma-separated string of NPC names
-        $nearbyNpcs = array_map('trim', explode(',', $GLOBALS["CACHE_PEOPLE"]));
-    }
+    // Exact speaker row and the captured scene roster: same-name actors keep separate edges.
+    $sourceRow = is_array($GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"] ?? null) && !empty($GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"]["id"])
+        ? $GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"] : $npcName;
+    $nearbyNpcs = function_exists('DataCloseRangeActorRoster') ? DataCloseRangeActorRoster() : [];
 
-    // Also include NPCs mentioned in recent dialogue
-    // This ensures relationships are shown for NPCs being discussed, not just physically present
+    // Also include actors mentioned in recent dialogue, by their typed edges only (never legacy names).
     $mentionedNpcs = [];
     if (!empty($GLOBALS["HERIKA_CONTEXT"])) {
-        // Get this NPC's known relationships to check for mentions
-        $knownRels = RelationshipManager::getRelationships($npcName);
-        $knownNames = array_keys($knownRels);
-
-        // Scan recent context for mentions of known NPCs
-        $contextLower = strtolower($GLOBALS["HERIKA_CONTEXT"]);
-        foreach ($knownNames as $knownNpc) {
-            if ($knownNpc === 'Player') continue; // Player always included
-            if (stripos($contextLower, strtolower($knownNpc)) !== false) {
-                $mentionedNpcs[] = $knownNpc;
+        foreach (RelationshipManager::getRelationships($sourceRow) as $key => $rel) {
+            $target = is_array($rel) ? ($rel['target'] ?? null) : null;
+            if (!is_array($target) || !in_array($target['kind'] ?? '', ['actor', 'concept'], true)) continue;
+            $label = (string)($target['label'] ?? '');
+            if ($label !== '' && stripos($GLOBALS["HERIKA_CONTEXT"], $label) !== false) {
+                $mentionedNpcs[] = ['kind' => $target['kind'], 'key' => (string)$key, 'label' => $label];
             }
         }
     }
 
-    // Merge nearby + mentioned, remove duplicates
-    $relevantNpcs = array_unique(array_merge($nearbyNpcs, $mentionedNpcs));
-
     // Build the relationship context block
     // This automatically uses tier-only mode if RELLLM_CONNECTOR is set
-    $relationshipContext = RelationshipManager::buildContext($npcName, $relevantNpcs);
+    $relationshipContext = RelationshipManager::buildContext($sourceRow, array_merge($nearbyNpcs, $mentionedNpcs));
 
     Logger::debug("[REL-CONTEXT] buildContext returned " . strlen($relationshipContext) . " chars for " . $npcName);
 

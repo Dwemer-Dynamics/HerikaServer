@@ -511,6 +511,40 @@ final class FormReferenceSupportTest extends TestCase
             chimBuildEventLogActorKeysWhereClause($db, [$astrid, $astrid, "ref:bob's mod.esp|00000ABC"], 'e.people'));
     }
 
+    public function testContextScopesAndRegistrationKeysAreTypedNotNamed(): void
+    {
+        require_once __DIR__ . '/../../lib/eventlog_helper.php';
+        $db = new class { public function escape($value) { return str_replace("'", "''", (string)$value); } };
+        // Reserved keys come only from typed principals; names (even the player's or "The Narrator") never map.
+        $GLOBALS['PLAYER_NAME'] = 'Prisoner';
+        $this->assertSame(['player'], chimResolveContextActorKeys($db, CHIM_ACTOR_KEY_PLAYER));
+        $this->assertSame(['narrator'], chimResolveContextActorKeys($db, CHIM_ACTOR_KEY_NARRATOR));
+        $this->assertSame([], chimResolveContextActorKeys($db, 'Prisoner'));
+        $this->assertSame([], chimResolveContextActorKeys($db, 'The Narrator'));
+        $this->assertSame([], chimResolveContextActorKeys($db, null));
+        $this->assertSame('FALSE', chimBuildNpcContextPeopleWhereClause($db, 'The Narrator'));
+
+        // addnpc/addbgnpc field 45: ref: must equal the verified source; dyn: only without one.
+        $dyn = 'dyn:0f8fad5b-d9cb-469f-a165-70867728950e';
+        $this->assertNull(chimRegistrationActorKey('', 'Skyrim.esm|0001BDE8'));
+        $this->assertSame('ref:skyrim.esm|0001BDE8', chimRegistrationActorKey('ref:skyrim.esm|0001BDE8', 'Skyrim.esm|0001BDE8'));
+        $this->assertSame($dyn, chimRegistrationActorKey($dyn, null));
+        foreach ([[$dyn, 'Skyrim.esm|0001BDE8'], ['ref:skyrim.esm|00012345', 'Skyrim.esm|0001BDE8'], ['player', null], ['Astrid', null]] as [$key, $source]) {
+            try {
+                chimRegistrationActorKey($key, $source);
+                $this->fail("accepted {$key}");
+            } catch (ChimEventIdentityException $e) {
+                $this->assertSame('role_key_invalid:actor_key', $e->reason);
+            }
+        }
+
+        // A dyn: row is selected by its key; a row that released a recycled slot keeps its recorded selector.
+        $this->assertSame(md5($dyn), NpcMaster::identityMd5(['npc_name' => 'Nord', 'refid' => 'FF000801', 'metadata' => ['actor_key' => $dyn]]));
+        $kept = md5('runtime:FF000801');
+        $this->assertSame($kept, NpcMaster::identityMd5(['npc_name' => 'Nord', 'refid' => null, 'metadata' => ['detached_selector' => $kept]]));
+        $this->assertSame(md5('Nord'), NpcMaster::identityMd5(['npc_name' => 'Nord', 'refid' => null, 'metadata' => ['detached_selector' => 'Nord']]));
+    }
+
     public function testNpcMasterSupportsStableFactionDetection(): void
     {
         $npcData = [

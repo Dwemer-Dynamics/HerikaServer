@@ -52,12 +52,22 @@ Logger::debug("[REL-ENTRY] postrequest.php loaded for HERIKA_NAME='{$_relEntryNp
  * Helper: Get the listener from the most recent speech entry for this NPC
  * Returns the listener name, or null if not found/not applicable
  */
-function _relGetConversationListener($speakerName) {
-    $escapedSpeaker = $GLOBALS["db"]->escape($speakerName);
+function _relGetConversationListener($speakerName, $speakerRow = null) {
+    // Only this physical speaker's captured speech role counts; a namesake's latest line never does,
+    // and event audience is not a listener. Uncaptured (legacy) speech gives no listener.
+    $speakerKey = is_array($speakerRow) ? chimNpcRowActorKey($speakerRow) : null;
+    if ($speakerKey === null) { return null; }
+    $escapedKey = $GLOBALS["db"]->escape($speakerKey);
     $row = $GLOBALS["db"]->fetchOne(
-        "SELECT listener FROM speech WHERE speaker = '{$escapedSpeaker}' ORDER BY localts DESC LIMIT 1"
+        "SELECT listener, listener_keys FROM speech WHERE speaker_key = '{$escapedKey}'
+         AND listener_keys IS NOT NULL ORDER BY localts DESC, rowid DESC LIMIT 1"
     );
-    return $row ? $row['listener'] : null;
+    $keys = $row ? json_decode((string)$row['listener_keys'], true) : null;
+    if (!is_array($keys) || count($keys) !== 1 || !is_string($keys[0])) { return null; }
+    if ($keys[0] === CHIM_ACTOR_KEY_PLAYER) { return ['name' => 'Player', 'id' => null]; }
+    require_once $GLOBALS["ENGINE_PATH"] . "lib/core/npc_master.class.php";
+    $listener = (new NpcMaster())->getByActorKey($keys[0]);
+    return $listener ? ['name' => $listener['npc_name'], 'id' => (int)$listener['id']] : null;
 }
 
 /**
@@ -84,11 +94,13 @@ function _relIsValidNpcTarget($name) {
 /**
  * Helper: Get NPC ID by name
  */
-function _relGetNpcIdByName($npcName) {
-    // Full ladder: dialogue-parsed names can drift from the row's spelling (rename mods).
-    require_once $GLOBALS["ENGINE_PATH"] . "lib/relationship_manager.php";
-    $npcRow = RelationshipManager::resolveNpcByName($npcName);
-    return $npcRow ? intval($npcRow['id']) : null;
+function _relGetNpcIdByName($npcName, $excludeId = null) {
+    // Listener lookup: physical identifier or an unambiguous name only. The current-speaker bridge in
+    // resolveNpcByName must not turn a same-name listener into the speaker.
+    require_once $GLOBALS["ENGINE_PATH"] . "lib/core/npc_master.class.php";
+    $npcRow = (new NpcMaster())->getByPromptIdentifier(trim((string)$npcName));
+    if (!$npcRow || ($excludeId && (int)$npcRow['id'] === (int)$excludeId)) { return null; }
+    return intval($npcRow['id']);
 }
 
 /**
@@ -167,6 +179,7 @@ if ($npcName === "The Narrator") {
 // 1. SCRIPTLINE_LISTENER_ATOMIC - set during response processing (most reliable)
 // 2. Speech table query - fallback for edge cases
 $listenerName = null;
+$capturedListener = null;
 $listenerSource = 'none';
 
 if (!empty($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"])) {
@@ -178,8 +191,9 @@ if (!empty($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"])) {
     $listenerName = trim($listeners[0]);
     $listenerSource = 'SCRIPTLINE_LISTENER';
 } else {
-    // Fallback to speech table (may have race condition issues)
-    $listenerName = _relGetConversationListener($npcName);
+    // Fallback: this physical speaker's last captured speech role.
+    $capturedListener = _relGetConversationListener($npcName, $GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"] ?? null);
+    $listenerName = $capturedListener['name'] ?? null;
     $listenerSource = 'speech_table';
 }
 
@@ -194,16 +208,15 @@ if ($isNpcToNpcConversation) {
 
 Logger::info("[REL] Processing relationship evaluation for NPC: {$npcName}");
 
-// Get NPC ID
+// Get NPC ID: the physical speaker row first, never the first of several same-name rows.
 $npcId = null;
-if (!empty($GLOBALS["HERIKA_ID"])) {
+if (!empty($GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"]["id"])) {
+    $npcId = intval($GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"]["id"]);
+} elseif (!empty($GLOBALS["HERIKA_ID"])) {
     $npcId = intval($GLOBALS["HERIKA_ID"]);
 } else {
-    // Look up by name
-    $escapedName = $GLOBALS["db"]->escape($npcName);
-    $npcRow = $GLOBALS["db"]->fetchOne(
-        "SELECT id FROM core_npc_master WHERE npc_name = '" . $escapedName . "' LIMIT 1"
-    );
+    require_once $GLOBALS["ENGINE_PATH"] . "lib/core/npc_master.class.php";
+    $npcRow = (new NpcMaster())->getByPromptIdentifier($npcName);
     if ($npcRow) {
         $npcId = intval($npcRow['id']);
     }
@@ -308,7 +321,7 @@ if ($useRelLLM && $npcId) {
     // Get listener NPC ID if this is NPC-to-NPC conversation
     $listenerNpcId = null;
     if ($isNpcToNpcConversation) {
-        $listenerNpcId = _relGetNpcIdByName($listenerName);
+        $listenerNpcId = !empty($capturedListener['id']) ? (int)$capturedListener['id'] : _relGetNpcIdByName($listenerName, $npcId);
         if (!$listenerNpcId) {
             Logger::warn("[REL] NPC-to-NPC: Could not find NPC ID for listener '{$listenerName}'");
         }
@@ -343,5 +356,7 @@ if (!$useRelLLM && !empty($GLOBALS["talkedSoFar"])) {
     // Parse and apply relationship changes
     // This also strips the commands from the response
     // Note: The TTS has already received the text, so stripping here is for logging only
-    RelationshipManager::parseChanges($fullResponse, $npcName);
+    $relSource = !empty($npcId) ? (int)$npcId : $npcName;
+    $relRoster = function_exists('DataCloseRangeActorRoster') ? DataCloseRangeActorRoster() : [];
+    RelationshipManager::parseChanges($fullResponse, $relSource, $relRoster);
 }

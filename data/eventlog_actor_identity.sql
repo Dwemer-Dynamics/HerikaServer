@@ -50,3 +50,15 @@ $fn$;
 CREATE INDEX IF NOT EXISTS idx_eventlog_actor_keys ON public.eventlog
     USING gin (public.chim_eventlog_actor_keys(people))
     WHERE left(people, 1) = '[';
+
+-- Exact role provenance (docs/actor-identity.md). NULL means the row predates identity or the event was
+-- not captured by an opted-in client; never backfilled from names. listener_keys is a JSON array of keys.
+ALTER TABLE public.eventlog ADD COLUMN IF NOT EXISTS speaker_key text;
+ALTER TABLE public.eventlog ADD COLUMN IF NOT EXISTS listener_keys text;
+ALTER TABLE public.eventlog ADD COLUMN IF NOT EXISTS target_key text;
+ALTER TABLE public.speech ADD COLUMN IF NOT EXISTS speaker_key text;
+ALTER TABLE public.speech ADD COLUMN IF NOT EXISTS listener_keys text;
+
+-- One row per client-assigned dynamic actor key; registration selects rows by this key only.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_npc_dynamic_actor_key ON public.core_npc_master ((metadata->>'actor_key'))
+    WHERE metadata->>'actor_key' LIKE 'dyn:%' AND COALESCE(metadata->>'refid_source', '') = '';

@@ -59,6 +59,8 @@ final class PhysicalDiaryFakeDb
 #[RunTestsInSeparateProcesses]
 final class PhysicalNpcDiariesTest extends TestCase
 {
+    private const AUTHOR_KEY = 'ref:skyrim.esm|000A2C8E';
+
     protected function setUp(): void
     {
         $GLOBALS['db'] = new PhysicalDiaryFakeDb();
@@ -87,6 +89,21 @@ final class PhysicalNpcDiariesTest extends TestCase
         unset($GLOBALS['db'], $GLOBALS['taskId']);
     }
 
+    private function assertIdentityArgument(array $parts): void
+    {
+        // Sixth spawnBook argument: identity beside the title (native C9b), the author keeps the book.
+        $this->assertCount(7, $parts);
+        $this->assertStringStartsWith('b64:', $parts[6]);
+        $this->assertSame([
+            'identity_version' => 1,
+            'book_key' => 'diary:' . self::AUTHOR_KEY,
+            'author_key' => self::AUTHOR_KEY,
+            'recipient_key' => self::AUTHOR_KEY,
+        ], json_decode(base64_decode(substr($parts[6], 4), true), true));
+        $this->assertStringContainsString("author_key = '" . self::AUTHOR_KEY . "'", implode("
+", $GLOBALS['db']->queries));
+    }
+
     public function testRefIdsConvertToPapyrusSignedIntegers(): void
     {
         $this->assertSame(0x000A2C8E, chimPhysicalDiaryRefIdToSignedInt('0x000A2C8E'));
@@ -96,7 +113,7 @@ final class PhysicalNpcDiariesTest extends TestCase
 
     public function testContentUsesChronologicalOrderAndGroundedHeadings(): void
     {
-        $entries = chimPhysicalDiaryEntries('Lydia');
+        $entries = chimPhysicalDiaryEntries(self::AUTHOR_KEY);
         $content = chimPhysicalDiaryContent($entries);
 
         $this->assertStringStartsWith('[16th of Last Seed - Riverwood]', $content);
@@ -114,7 +131,7 @@ final class PhysicalNpcDiariesTest extends TestCase
             $rendered = compact('title', 'content');
         };
 
-        $result = chimPhysicalDiaryMaterialize('Lydia', '000A2C8E', 500, $renderer);
+        $result = chimPhysicalDiaryMaterialize(self::AUTHOR_KEY, 'Lydia', '000A2C8E', 500, $renderer);
 
         $this->assertTrue($result['ok']);
         $this->assertTrue($result['created']);
@@ -129,12 +146,13 @@ final class PhysicalNpcDiariesTest extends TestCase
         $this->assertSame("rolecommand|spawnBook@Lydia's Diary@0@666766@0", implode('@', array_slice($parts, 0, 5)));
         $this->assertStringStartsWith('b64:', $parts[5]);
         $this->assertSame(chimPhysicalDiaryContent(array_reverse($GLOBALS['db']->entries)), base64_decode(substr($parts[5], 4), true));
+        $this->assertIdentityArgument($parts);
     }
 
     public function testExistingPhysicalDiaryQueuesInventoryEnsureCommand(): void
     {
         $GLOBALS['db']->physicalRows = [['npc_name' => 'Lydia']];
-        $result = chimPhysicalDiaryMaterialize('Lydia', '000A2C8E', 600, static function (): void {});
+        $result = chimPhysicalDiaryMaterialize(self::AUTHOR_KEY, 'Lydia', '000A2C8E', 600, static function (): void {});
 
         $this->assertTrue($result['ok']);
         $this->assertFalse($result['created']);
@@ -147,6 +165,7 @@ final class PhysicalNpcDiariesTest extends TestCase
         $this->assertSame("rolecommand|spawnBook@Lydia's Diary@0@666766@0", implode('@', array_slice($parts, 0, 5)));
         $this->assertStringStartsWith('b64:', $parts[5]);
         $this->assertSame(chimPhysicalDiaryContent(array_reverse($GLOBALS['db']->entries)), base64_decode(substr($parts[5], 4), true));
+        $this->assertIdentityArgument($parts);
     }
 
     public function testProfileSettingDefaultsOffWithoutRendering(): void
@@ -169,6 +188,8 @@ final class PhysicalNpcDiariesTest extends TestCase
     public function testEnabledProfileCreatesAndRefreshesOneDiary(): void
     {
         $resolver = static fn(): array => [
+            'author_key' => self::AUTHOR_KEY,
+            'name' => 'Lydia',
             'refid' => '000A2C8E',
             'profile_metadata' => '{"MATERIALIZE_DIARY_ENABLED":true}',
         ];
@@ -208,5 +229,32 @@ final class PhysicalNpcDiariesTest extends TestCase
         $this->assertFalse($result['enabled']);
         $this->assertFalse($rendered);
         $this->assertNotEmpty($GLOBALS['db']->physicalRows);
+    }
+
+    public function testEnabledProfileWithoutAuthorKeyNeverRendersByName(): void
+    {
+        $rendered = false;
+        $result = chimPhysicalDiarySyncForNpc(
+            'Lydia',
+            700,
+            static function () use (&$rendered): void {
+                $rendered = true;
+            },
+            static fn(): array => ['refid' => '000A2C8E', 'profile_metadata' => '{"MATERIALIZE_DIARY_ENABLED":true}']
+        );
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame('missing_author_key', $result['error']);
+        $this->assertFalse($rendered);
+        $this->assertSame([], $GLOBALS['db']->inserts);
+    }
+
+    public function testMaterializeRejectsTypedOrMissingAuthor(): void
+    {
+        foreach (['player', 'narrator', 'Lydia'] as $key) {
+            $result = chimPhysicalDiaryMaterialize($key, 'Lydia', '000A2C8E', 500, static function (): void {});
+            $this->assertSame(['ok' => false, 'error' => 'missing_npc_reference'], $result, $key);
+        }
+        $this->assertSame([], $GLOBALS['db']->inserts);
     }
 }

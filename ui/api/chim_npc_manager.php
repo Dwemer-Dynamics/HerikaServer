@@ -43,6 +43,16 @@ function chimNpcManagerRespond(array $payload, int $status = 200): void
     exit;
 }
 
+// Stale editor state (row reuse, link/unlink, playthrough switch) refuses with 409 instead of writing.
+final class ChimNpcManagerConflict extends RuntimeException
+{
+}
+
+// Well-formed request whose typed content is refused (forged or malformed relationship targets).
+final class ChimNpcManagerInvalid extends RuntimeException
+{
+}
+
 function chimNpcManagerDecodeJson($value): array
 {
     if (is_array($value)) {
@@ -203,7 +213,21 @@ function chimNpcManagerCard(array $row, array $profileMap): array
         'favorite' => chimNpcManagerBool($row['npc_favorite'] ?? false),
         'locked' => chimNpcManagerBool($row['lock_profile'] ?? false),
         'portrait_url' => chimNpcManagerPortraitUrl($row, $metadata),
+        // The selected row's own physical key (metadata is never shared); null for legacy rows.
+        'actor_key' => chimNpcRowActorKey($row),
     ];
+}
+
+// Additive guard: when the client sent the key it was shown, the row id must still be that actor.
+function chimNpcManagerGuardExpectedKey(array $input, array $row, string $field = 'expected_actor_key'): void
+{
+    if (!array_key_exists($field, $input)) {
+        return;
+    }
+    $expected = $input[$field];
+    if (!is_string($expected) || !chimIsActorKey($expected) || chimNpcRowActorKey($row) !== $expected) {
+        throw new ChimNpcManagerConflict('This NPC changed since it was opened. Reopen it before continuing.');
+    }
 }
 
 function chimNpcManagerLatestMemory(array $extended): string
@@ -323,8 +347,8 @@ function chimNpcManagerFindNpc(array $input): array
     throw new InvalidArgumentException('NPC not found');
 }
 
-// The event log stores recipients as a '|'-delimited list of visible names, so anything routed
-// through it is name-scoped. Count the profiles sharing a name to detect when that is ambiguous.
+// Legacy event rows store a '|'-delimited list of visible names. They are never assigned to an actor:
+// they are shown, flagged as unassigned, only while exactly one profile carries that name.
 function chimNpcManagerSharedNameCount(string $npcName): int
 {
     $npcName = trim($npcName);
@@ -338,39 +362,39 @@ function chimNpcManagerSharedNameCount(string $npcName): int
     return max(1, (int)($row['total'] ?? 1));
 }
 
-function chimNpcManagerSharedNameNotice(string $npcName, int $count): string
+// Exact history scope: format-2 rows whose captured keys include this row's group (linked references
+// share history while linked). Unkeyed rows match nothing here.
+function chimNpcManagerHistoryKeyWhere(array $npc): string
 {
-    return $count . ' profiles share the name "' . $npcName . '", and the event log identifies NPCs'
-        . ' by name only, so events cannot be routed to just one of them.';
+    $keys = chimNpcRowActorKey($npc) !== null || !empty($npc['profile_owner_npc_id'])
+        ? chimNpcProfileActorKeys($npc) : [];
+    return chimBuildEventLogActorKeysWhereClause($GLOBALS['db'], $keys, 'a.people');
 }
 
-// Name-scoped event writes must refuse rather than silently reach every same-named actor.
-function chimNpcManagerGuardSharedNameEvents(string $npcName, string $operationLabel): void
+// Read-only legacy visibility, applied in WHERE before LIMIT; FALSE when the name is ambiguous.
+function chimNpcManagerHistoryLegacyWhere(array $npc): string
 {
-    $count = chimNpcManagerSharedNameCount($npcName);
-    if ($count > 1) {
-        throw new InvalidArgumentException(
-            $operationLabel . ' is unavailable for "' . $npcName . '": '
-            . chimNpcManagerSharedNameNotice($npcName, $count)
-        );
+    $npcName = trim((string)($npc['npc_name'] ?? ''));
+    if ($npcName === '' || chimNpcManagerSharedNameCount($npcName) !== 1) {
+        return 'FALSE';
     }
+    return "(left(COALESCE(a.people, ''), 1) <> '[' AND "
+        . chimBuildNpcEventLogPeopleWhereClause($GLOBALS['db'], $npcName, 'a.people') . ')';
 }
 
 function chimNpcManagerEventRecipients($people): array
 {
-    $recipients = [];
-    foreach (explode('|', trim((string)$people, '|')) as $recipient) {
-        $recipient = trim((string)$recipient);
-        if ($recipient !== '' && !in_array($recipient, $recipients, true)) {
-            $recipients[] = $recipient;
-        }
-    }
-    return $recipients;
+    return array_map(static function ($participant) {
+        return $participant['id'] === null
+            ? ['name' => $participant['name']]
+            : ['name' => $participant['name'], 'id' => $participant['id']];
+    }, chimParseEventParticipants($people)['participants']);
 }
 
 function chimNpcManagerHistory(array $input): array
 {
     $npc = chimNpcManagerFindNpc($input);
+    chimNpcManagerGuardExpectedKey($input, $npc);
     $npcName = trim((string)($npc['npc_name'] ?? ''));
     $limit = max(1, min(100, (int)($input['limit'] ?? 100)));
     $selectedEventType = trim((string)($input['event_type'] ?? ''));
@@ -397,14 +421,16 @@ function chimNpcManagerHistory(array $input): array
         return "'" . $GLOBALS['db']->escape($eventType) . "'";
     }, $allowedEventTypes);
     $allowedTypesWhere = 'a.type IN (' . implode(',', $escapedAllowedEventTypes) . ')';
-    $peopleWhere = chimBuildNpcEventLogPeopleWhereClause($GLOBALS['db'], $npcName, 'a.people');
+    $keyWhere = chimNpcManagerHistoryKeyWhere($npc);
+    $peopleWhere = '(' . $keyWhere . ' OR ' . chimNpcManagerHistoryLegacyWhere($npc) . ')';
     $visibleWhere = chimBuildVisibleEventLogWhereClause(
         $GLOBALS['db'],
         $selectedEventType,
         $hiddenEventTypes
     );
     $rows = $GLOBALS['db']->fetchAll(
-        "SELECT a.rowid, a.type, a.data, a.people, a.gamets, a.localts, a.ts, a.sess
+        "SELECT a.rowid, a.type, a.data, a.people, a.gamets, a.localts, a.ts, a.sess,
+                CASE WHEN {$keyWhere} THEN 1 ELSE 0 END AS exact_scope
          FROM eventlog a
          WHERE {$allowedTypesWhere} AND {$visibleWhere} AND {$peopleWhere}
          ORDER BY a.gamets DESC, a.ts DESC, a.localts DESC, a.rowid DESC
@@ -421,11 +447,14 @@ function chimNpcManagerHistory(array $input): array
 
     $events = array_map(static function ($row) {
         $gamets = (int)($row['gamets'] ?? 0);
+        $exact = (int)($row['exact_scope'] ?? 0) === 1;
         return [
             'rowid' => (int)($row['rowid'] ?? 0),
             'type' => (string)($row['type'] ?? ''),
             'data' => (string)($row['data'] ?? ''),
             'recipients' => chimNpcManagerEventRecipients($row['people'] ?? ''),
+            'legacy_unassigned' => !$exact,
+            'deletable' => $exact,
             'gamets' => $gamets,
             'tamrielic_time' => $gamets > 0 ? convert_gamets2skyrim_long_date2($gamets) : '',
             'local_time' => !empty($row['localts']) ? gmdate('d-m-Y H:i:s', (int)$row['localts']) : '',
@@ -437,13 +466,13 @@ function chimNpcManagerHistory(array $input): array
     $sharedNameCount = chimNpcManagerSharedNameCount($npcName);
 
     return [
-        'npc' => ['id' => (int)$npc['id'], 'name' => $npcName],
+        'npc' => ['id' => (int)$npc['id'], 'name' => $npcName, 'actor_key' => chimNpcRowActorKey($npc)],
         'shared_name' => [
             'shared' => $sharedNameCount > 1,
             'count' => $sharedNameCount,
             'notice' => $sharedNameCount > 1
-                ? 'This history is shared: ' . chimNpcManagerSharedNameNotice($npcName, $sharedNameCount)
-                    . ' Injecting and deleting events is unavailable here.'
+                ? $sharedNameCount . ' profiles share the name "' . $npcName . '". Only events recorded with this'
+                    . ' actor\'s identity are listed; older name-only events stay stored but unassigned.'
                 : '',
         ],
         'events' => $events,
@@ -460,6 +489,8 @@ function chimNpcManagerHistory(array $input): array
     ];
 }
 
+// Recipients are physical rows chosen by id; each must carry its own key, checked against the key the
+// client was shown when it sent one.
 function chimNpcManagerResolveEventRecipients(array $input, array $npc): array
 {
     $ids = [(int)$npc['id']];
@@ -473,15 +504,26 @@ function chimNpcManagerResolveEventRecipients(array $input, array $npc): array
     if (count($ids) > 12) {
         throw new InvalidArgumentException('An event can include at most 12 NPCs');
     }
+    $expectedKeys = $input['recipient_expected_keys'] ?? [];
+    if (!is_array($expectedKeys)) {
+        throw new InvalidArgumentException('Invalid recipient keys');
+    }
 
     $recipients = [];
     foreach ($ids as $id) {
         $row = $id === (int)$npc['id'] ? $npc : chimNpcManagerFindNpc(['id' => $id]);
-        $name = trim((string)($row['npc_name'] ?? ''));
-        if ($name === '' || strpos($name, '|') !== false) {
-            throw new InvalidArgumentException('One of the selected NPC names cannot be used for event routing');
+        if (array_key_exists((string)$id, $expectedKeys)) {
+            chimNpcManagerGuardExpectedKey(['expected_actor_key' => $expectedKeys[(string)$id]], $row);
         }
-        $recipients[] = ['id' => (int)$row['id'], 'name' => $name];
+        $name = trim((string)($row['npc_name'] ?? ''));
+        $key = chimNpcRowActorKey($row);
+        if ($name === '') {
+            throw new InvalidArgumentException('One of the selected NPCs has no name');
+        }
+        if ($key === null) {
+            throw new InvalidArgumentException('"' . $name . '" has no stable actor identity yet, so events cannot be routed to it');
+        }
+        $recipients[] = ['id' => (int)$row['id'], 'name' => $name, 'actor_key' => $key];
     }
     return $recipients;
 }
@@ -489,6 +531,7 @@ function chimNpcManagerResolveEventRecipients(array $input, array $npc): array
 function chimNpcManagerInjectEvent(array $input): array
 {
     $npc = chimNpcManagerFindNpc($input);
+    chimNpcManagerGuardExpectedKey($input, $npc);
     $eventText = trim((string)($input['event'] ?? ''));
     if (strlen($eventText) >= 2 && $eventText[0] === '(' && substr($eventText, -1) === ')') {
         $eventText = trim(substr($eventText, 1, -1));
@@ -502,10 +545,10 @@ function chimNpcManagerInjectEvent(array $input): array
     }
 
     $recipients = chimNpcManagerResolveEventRecipients($input, $npc);
-    foreach ($recipients as $recipient) {
-        chimNpcManagerGuardSharedNameEvents($recipient['name'], 'Event injection');
-    }
-    $people = '|' . implode('|', array_column($recipients, 'name')) . '|';
+    // Format 2: names are snapshots, keys are the recipients' own physical keys (never a keeper's).
+    $people = chimSerializeEventParticipants(array_map(static function ($recipient) {
+        return ['name' => $recipient['name'], 'id' => $recipient['actor_key']];
+    }, $recipients));
     $rowId = $GLOBALS['db']->insertReturningId('eventlog', [
         'ts' => max(0, (int)DataLastKnownTS()) + 1,
         'gamets' => max(0, (int)DataLastKnownGameTS()),
@@ -528,23 +571,23 @@ function chimNpcManagerInjectEvent(array $input): array
     ];
 }
 
+// Only rows recorded with this actor's group keys can be deleted here; legacy name-only rows stay.
 function chimNpcManagerDeleteEvent(array $input): array
 {
     $npc = chimNpcManagerFindNpc($input);
+    chimNpcManagerGuardExpectedKey($input, $npc);
     $rowId = (int)($input['rowid'] ?? 0);
     if ($rowId <= 0) {
         throw new InvalidArgumentException('Invalid event row');
     }
 
-    $npcName = trim((string)($npc['npc_name'] ?? ''));
-    chimNpcManagerGuardSharedNameEvents($npcName, 'Event deletion');
-    $peopleWhere = chimBuildNpcEventLogPeopleWhereClause($GLOBALS['db'], $npcName, 'a.people');
+    $keyWhere = chimNpcManagerHistoryKeyWhere($npc);
     $visibleWhere = chimBuildVisibleEventLogWhereClause($GLOBALS['db']);
     $event = $GLOBALS['db']->fetchOne(
-        "SELECT a.rowid FROM eventlog a WHERE a.rowid = {$rowId} AND {$visibleWhere} AND {$peopleWhere} LIMIT 1"
+        "SELECT a.rowid FROM eventlog a WHERE a.rowid = {$rowId} AND {$visibleWhere} AND {$keyWhere} LIMIT 1"
     );
     if (!$event) {
-        throw new InvalidArgumentException('Event is not available in this NPC history');
+        throw new InvalidArgumentException('Event is not recorded for this NPC; unassigned legacy events cannot be deleted here');
     }
 
     $result = chimDeleteEventLogRow($GLOBALS['db'], $rowId);
@@ -580,6 +623,7 @@ function chimNpcManagerSaveReturnLocation(int $npcId, ?array $returnLocation): b
 function chimNpcManagerAction(array $input): array
 {
     $row = chimNpcManagerFindNpc($input);
+    chimNpcManagerGuardExpectedKey($input, $row);
     $action = strtolower(trim((string)($input['action'] ?? '')));
     $npcName = trim((string)($row['npc_name'] ?? 'NPC'));
     $npcManager = new NpcMaster();
@@ -796,151 +840,262 @@ function chimNpcManagerList(array $profiles): array
     ];
 }
 
+// Untyped name-keyed edges are legacy/display-only: never renamed, attributed or reclassified here.
+function chimNpcManagerIsLegacyEdge(string $key, $rel): bool
+{
+    return is_array($rel) && $key !== 'Player' && !is_array($rel['target'] ?? null)
+        && !RelationshipManager::isActorEdgeKey($key);
+}
+
+function chimNpcManagerEdgeFields(array $edge, array $rel): array
+{
+    if (array_key_exists('aff', $edge)) {
+        $rel['aff'] = max(-100, min(100, (int)$edge['aff']));
+    }
+    if (array_key_exists('type', $edge)) {
+        $type = strtolower(trim(is_scalar($edge['type']) ? (string)$edge['type'] : ''));
+        $rel['type'] = $type === '' ? 'neutral' : $type;
+    }
+    foreach (['note', 'custom_info'] as $key) {
+        if (array_key_exists($key, $edge)) {
+            $rel[$key] = is_scalar($edge[$key]) ? trim((string)$edge[$key]) : '';
+        }
+    }
+    return $rel;
+}
+
+// Validate a submitted relationship map against the stored one (read under the owner lock).
+// Existing edges keep their map key and stored target; only aff/type/note/custom_info change. Legacy
+// edges are kept exactly as stored. New edges need an explicit target: Player, an actor row (selected by
+// its id and its own physical card key) or a typed concept. An actor edge is stored under the target's
+// current effective key (RelationshipManager link-owner policy), so a linked member's card shares its
+// keeper's edge; the label stays the selected row's name. $targetRows collects those rows so the write can
+// recheck their binding and keys under row locks.
+function chimNpcManagerRelationshipEdits($submitted, array $stored, array $row, array &$targetRows = []): array
+{
+    if (!is_array($submitted)) {
+        throw new ChimNpcManagerInvalid('Relationships must be an object');
+    }
+    $result = [];
+    foreach ($stored as $key => $rel) {
+        if (chimNpcManagerIsLegacyEdge((string)$key, $rel)) {
+            $result[$key] = $rel;
+        }
+    }
+    $ownKeys = chimNpcRowActorKey($row) !== null || !empty($row['profile_owner_npc_id'])
+        ? chimNpcProfileActorKeys($row) : [];
+
+    foreach ($submitted as $key => $edge) {
+        $key = (string)$key;
+        if (!is_array($edge) || $key === '') {
+            throw new ChimNpcManagerInvalid('Invalid relationship entry');
+        }
+        $target = $edge['target'] ?? null;
+        $storedRel = $stored[$key] ?? null;
+        if (is_array($storedRel)) {
+            if (chimNpcManagerIsLegacyEdge($key, $storedRel)) {
+                if ($target !== null) {
+                    throw new ChimNpcManagerInvalid('Legacy relationship "' . $key . '" cannot be given a target here');
+                }
+                continue;
+            }
+            $storedTarget = $storedRel['target'] ?? null;
+            $playerTarget = $key === 'Player' && is_array($target)
+                && ($target['kind'] ?? '') === 'player' && ($target['key'] ?? '') === 'Player';
+            if ($target !== null && !$playerTarget && $target != $storedTarget) {
+                throw new ChimNpcManagerInvalid('Relationship "' . $key . '" no longer has that target. Reopen this NPC.');
+            }
+            $result[$key] = chimNpcManagerEdgeFields($edge, $storedRel);
+            continue;
+        }
+
+        $rel = chimNpcManagerEdgeFields($edge, ['aff' => 0, 'type' => 'neutral']);
+        if ($key === 'Player') {
+            if ($target !== null && (!is_array($target) || ($target['kind'] ?? '') !== 'player' || ($target['key'] ?? '') !== 'Player')) {
+                throw new ChimNpcManagerInvalid('Invalid Player relationship target');
+            }
+            RelationshipManager::storeTargetEdge($result, RelationshipManager::playerTargetIdentity(), null, $rel);
+            continue;
+        }
+        if (!is_array($target)) {
+            throw new ChimNpcManagerInvalid('New relationship "' . $key . '" needs an explicit target type');
+        }
+        $kind = $target['kind'] ?? '';
+        if ($kind === 'actor') {
+            $targetId = (int)($edge['target_npc_id'] ?? 0);
+            if (($target['key'] ?? null) !== $key) {
+                throw new ChimNpcManagerInvalid('Relationship target does not match that NPC. Search for it again.');
+            }
+            // The card key is the row's own physical key; the current effective (keeper) key is also accepted.
+            $taken = array_merge(array_map('strval', array_keys($stored)), array_map('strval', array_keys($result)),
+                array_values(array_filter(array_map('strval', array_keys($submitted)), static fn($k) => $k !== $key)));
+            try {
+                [$identity, $targetRow] = RelationshipManager::validateNewActorTarget($key, $targetId, $row, $taken);
+            } catch (InvalidArgumentException $invalid) {
+                throw new ChimNpcManagerInvalid($invalid->getMessage());
+            }
+            // The label is the target row's current name, display only; target_npc_id is not stored.
+            RelationshipManager::storeTargetEdge($result, $identity, null, $rel);
+            $targetRows[$targetId] = $targetRow;
+            continue;
+        }
+        if ($kind === 'concept') {
+            $label = $target['label'] ?? null;
+            if (!is_string($label) || $label !== trim($label) || $label !== $key || ($target['key'] ?? null) !== $key
+                || chimIsActorKey($label) || strcasecmp($label, 'Player') === 0
+                || RelationshipManager::normalizeTargetName($label) === 'Player') {
+                throw new ChimNpcManagerInvalid('Invalid concept relationship "' . $key . '"');
+            }
+            RelationshipManager::storeTargetEdge($result, ['kind' => 'concept', 'key' => $key, 'label' => $label], null, $rel);
+            continue;
+        }
+        throw new ChimNpcManagerInvalid('Unsupported relationship target type');
+    }
+    return $result;
+}
+
 function chimNpcManagerSave(array $input, array $profiles): array
 {
     $row = chimNpcManagerFindNpc($input);
     $id = (int)$row['id'];
-    $raw = (new NpcMaster())->getActorById($id);
-    $members = chimNpcProfileMembers($raw);
-    // Older clients remain compatible for never-linked rows. A shared/previously shared editor must be current.
-    if (chimNpcProfileBinding($raw) !== ':' || isset($input['profile_revision'])) {
-        if (!hash_equals(chimNpcProfileRevision($members), (string)($input['profile_revision'] ?? ''))) {
-            throw new InvalidArgumentException('Profile changed. Reopen this NPC before saving.');
-        }
-    }
-    $fields = is_array($input['fields'] ?? null) ? $input['fields'] : [];
-    $overrides = is_array($input['overrides'] ?? null) ? $input['overrides'] : [];
-    $update = ['_profile_binding' => $row['_profile_binding'] ?? ':'];
-
-    $allowedFields = [
-        'npc_name', 'profile_id', 'lock_profile', 'npc_favorite', 'gender', 'race', 'base',
-        'refid', 'voiceid', 'oghma_knowledge_tags', 'tags', 'prompt_head', 'core',
-        'npc_static_bio', 'appearance', 'personality', 'occupation', 'skills', 'speechstyle',
-        'goals', 'emote_moods',
-    ];
-    foreach ($allowedFields as $field) {
-        if (!array_key_exists($field, $fields)) {
-            continue;
-        }
-        if (in_array($field, ['lock_profile', 'npc_favorite'], true)) {
-            $update[$field] = chimNpcManagerBool($fields[$field]) ? 1 : 0;
-        } elseif ($field === 'profile_id') {
-            $profileId = (int)$fields[$field];
-            $profileExists = false;
-            foreach ($profiles as $profile) {
-                if ((int)$profile['id'] === $profileId) {
-                    $profileExists = true;
-                    break;
-                }
-            }
-            if (!$profileExists) {
-                throw new InvalidArgumentException('Selected profile does not exist');
-            }
-            $update[$field] = $profileId;
-        } else {
-            $update[$field] = trim((string)$fields[$field]);
-        }
-    }
-
-    if (array_key_exists('npc_name', $update) && $update['npc_name'] === '') {
-        throw new InvalidArgumentException('NPC name is required');
-    }
-
-    // RefID is part of the profile selector, so management cannot change it independently.
-    if (NpcMaster::isActorBound($row)) {
-        unset($update['refid']);
-    }
-
-    // The lookup key follows the stored physical reference, never a display name or client-supplied hash.
-    $update['md5'] = NpcMaster::identityMd5($row, $update['npc_name'] ?? ($row['npc_name'] ?? ''));
-
-    if (array_key_exists('tts_filter_preset', $fields)) {
-        $update['metadata'] = mergeTtsFilterPresetIntoMetadata(
-            $row['metadata'] ?? '{}',
-            $fields['tts_filter_preset']
-        );
-    }
-
-    $extended = chimNpcManagerDecodeJson($row['extended_data'] ?? '{}');
-    $relationshipChanged = false;
-    $toggleMap = [
-        'middle_term_enabled' => 'middle_term_enabled',
-        'individual_memory_enabled' => 'individual_memory_enabled',
-        'auto_diary_enabled' => 'auto_diary_enabled',
-        'auto_diary_wait_enabled' => 'auto_diary_wait_enabled',
-        'salutation_after_a_while' => 'salutation_after_a_while',
-    ];
-    if (array_key_exists('dynamic_profile', $overrides)) {
-        $update['dynamic_profile'] = $overrides['dynamic_profile'] === null
-            ? null
-            : (chimNpcManagerBool($overrides['dynamic_profile']) ? 1 : 0);
-    }
-    foreach ($toggleMap as $requestKey => $extendedKey) {
-        if (!array_key_exists($requestKey, $overrides)) {
-            continue;
-        }
-        if ($overrides[$requestKey] === null) {
-            unset($extended[$extendedKey]);
-        } else {
-            $extended[$extendedKey] = chimNpcManagerBool($overrides[$requestKey]) ? 1 : 0;
-        }
-    }
-
-    if (array_key_exists('middle_term_latest', $fields)) {
-        $latest = trim((string)$fields['middle_term_latest']);
-        $memories = is_array($extended['middle_term_memory'] ?? null) ? $extended['middle_term_memory'] : [];
-        $latestKey = empty($memories) ? null : array_key_last($memories);
-        if ($latestKey !== null) {
-            if ($latest === '') {
-                unset($memories[$latestKey]);
-            } else {
-                $memories[$latestKey] = $latest;
-            }
-        } elseif ($latest !== '') {
-            $memories['0'] = $latest;
-        }
-        if (empty($memories)) {
-            unset($extended['middle_term_memory']);
-        } else {
-            $extended['middle_term_memory'] = $memories;
-        }
-    }
-
-    if (array_key_exists('relationships', $input)) {
-        $relationships = is_array($input['relationships']) ? $input['relationships'] : [];
-        foreach ($relationships as $target => &$relationship) {
-            if (!is_array($relationship)) {
-                $relationship = [];
-            }
-            $relationship['aff'] = max(-100, min(100, (int)($relationship['aff'] ?? 0)));
-            $relationship['type'] = strtolower(trim((string)($relationship['type'] ?? 'neutral')));
-            foreach (['relation', 'note', 'best', 'worst', 'custom_info'] as $key) {
-                if (array_key_exists($key, $relationship)) {
-                    $relationship[$key] = is_scalar($relationship[$key])
-                        ? trim((string)$relationship[$key])
-                        : '';
-                }
-            }
-        }
-        unset($relationship);
-        $extended['relationships'] = RelationshipManager::normalizeRelationshipMap($relationships);
-        $relationshipChanged = true;
-    }
-    if (array_key_exists('relationships_locked', $input)) {
-        $extended['relationships_locked'] = chimNpcManagerBool($input['relationships_locked']);
-        $relationshipChanged = true;
-    }
-
-    if (!array_key_exists('AUTO_LOCK_PROFILE', $GLOBALS) || chimNpcManagerBool($GLOBALS['AUTO_LOCK_PROFILE'])) {
-        $update['lock_profile'] = 1;
-    }
-
-    $update['extended_data'] = json_encode($extended, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    chimNpcManagerGuardExpectedKey($input, $row);
     $ownerId = (int)($row['profile_owner_npc_id'] ?? $id);
-    $lockId = $relationshipChanged ? 1001000000 + $ownerId : null;
+    $lockId = 1001000000 + $ownerId;
+    $GLOBALS['db']->execQuery("SELECT pg_advisory_lock({$lockId})");
     try {
-        if ($lockId !== null) {
-            $GLOBALS['db']->execQuery("SELECT pg_advisory_lock({$lockId})");
+        // Everything below is validated against the state read under the owner lock that it writes over.
+        $row = chimNpcManagerFindNpc(['id' => $id]);
+        if ((int)($row['profile_owner_npc_id'] ?? $id) !== $ownerId) {
+            throw new ChimNpcManagerConflict('Profile changed. Reopen this NPC before saving.');
+        }
+        chimNpcManagerGuardExpectedKey($input, $row);
+        $raw = (new NpcMaster())->getActorById($id);
+        $members = chimNpcProfileMembers($raw);
+        // Older clients remain compatible for never-linked rows. A shared/previously shared editor must be current.
+        if (chimNpcProfileBinding($raw) !== ':' || isset($input['profile_revision'])) {
+            if (!hash_equals(chimNpcProfileRevision($members), (string)($input['profile_revision'] ?? ''))) {
+                throw new ChimNpcManagerConflict('Profile changed. Reopen this NPC before saving.');
+            }
+        }
+        $fields = is_array($input['fields'] ?? null) ? $input['fields'] : [];
+        $overrides = is_array($input['overrides'] ?? null) ? $input['overrides'] : [];
+        $update = ['_profile_binding' => $row['_profile_binding'] ?? ':'];
+
+        $allowedFields = [
+            'npc_name', 'profile_id', 'lock_profile', 'npc_favorite', 'gender', 'race', 'base',
+            'refid', 'voiceid', 'oghma_knowledge_tags', 'tags', 'prompt_head', 'core',
+            'npc_static_bio', 'appearance', 'personality', 'occupation', 'skills', 'speechstyle',
+            'goals', 'emote_moods',
+        ];
+        foreach ($allowedFields as $field) {
+            if (!array_key_exists($field, $fields)) {
+                continue;
+            }
+            if (in_array($field, ['lock_profile', 'npc_favorite'], true)) {
+                $update[$field] = chimNpcManagerBool($fields[$field]) ? 1 : 0;
+            } elseif ($field === 'profile_id') {
+                $profileId = (int)$fields[$field];
+                $profileExists = false;
+                foreach ($profiles as $profile) {
+                    if ((int)$profile['id'] === $profileId) {
+                        $profileExists = true;
+                        break;
+                    }
+                }
+                if (!$profileExists) {
+                    throw new InvalidArgumentException('Selected profile does not exist');
+                }
+                $update[$field] = $profileId;
+            } else {
+                $update[$field] = trim((string)$fields[$field]);
+            }
+        }
+
+        if (array_key_exists('npc_name', $update) && $update['npc_name'] === '') {
+            throw new InvalidArgumentException('NPC name is required');
+        }
+
+        // RefID is part of the profile selector, so management cannot change it independently.
+        if (NpcMaster::isActorBound($row)) {
+            unset($update['refid']);
+        }
+
+        // The lookup key follows the stored physical reference, never a display name or client-supplied hash.
+        $update['md5'] = NpcMaster::identityMd5($row, $update['npc_name'] ?? ($row['npc_name'] ?? ''));
+
+        if (array_key_exists('tts_filter_preset', $fields)) {
+            $update['metadata'] = mergeTtsFilterPresetIntoMetadata(
+                $row['metadata'] ?? '{}',
+                $fields['tts_filter_preset']
+            );
+        }
+
+        // Starts from stored data: server-owned keys (provenance, dormant entries, relationship metadata)
+        // are never taken from the request.
+        $extended = chimNpcManagerDecodeJson($row['extended_data'] ?? '{}');
+        $relationshipChanged = false;
+        $targetRows = [];
+        $toggleMap = [
+            'middle_term_enabled' => 'middle_term_enabled',
+            'individual_memory_enabled' => 'individual_memory_enabled',
+            'auto_diary_enabled' => 'auto_diary_enabled',
+            'auto_diary_wait_enabled' => 'auto_diary_wait_enabled',
+            'salutation_after_a_while' => 'salutation_after_a_while',
+        ];
+        if (array_key_exists('dynamic_profile', $overrides)) {
+            $update['dynamic_profile'] = $overrides['dynamic_profile'] === null
+                ? null
+                : (chimNpcManagerBool($overrides['dynamic_profile']) ? 1 : 0);
+        }
+        foreach ($toggleMap as $requestKey => $extendedKey) {
+            if (!array_key_exists($requestKey, $overrides)) {
+                continue;
+            }
+            if ($overrides[$requestKey] === null) {
+                unset($extended[$extendedKey]);
+            } else {
+                $extended[$extendedKey] = chimNpcManagerBool($overrides[$requestKey]) ? 1 : 0;
+            }
+        }
+
+        if (array_key_exists('middle_term_latest', $fields)) {
+            chimMiddleTermApplyManualDigest($extended, trim((string)$fields['middle_term_latest']), $row);
+        }
+
+        if (array_key_exists('relationships', $input)) {
+            $stored = is_array($extended['relationships'] ?? null) ? $extended['relationships'] : [];
+            $relationships = chimNpcManagerRelationshipEdits($input['relationships'], $stored, $row, $targetRows);
+            if ($relationships !== $stored) {
+                $extended['relationships'] = $relationships;
+                $relationshipChanged = true;
+            }
+        }
+        if (array_key_exists('relationships_locked', $input)) {
+            $locked = chimNpcManagerBool($input['relationships_locked']);
+            if ($locked !== chimNpcManagerBool($extended['relationships_locked'] ?? false)) {
+                $relationshipChanged = true;
+            }
+            $extended['relationships_locked'] = $locked;
+        }
+
+        if (!array_key_exists('AUTO_LOCK_PROFILE', $GLOBALS) || chimNpcManagerBool($GLOBALS['AUTO_LOCK_PROFILE'])) {
+            $update['lock_profile'] = 1;
+        }
+
+        $update['extended_data'] = json_encode($extended, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        // Workers (middle-term generator, relationship commands) do not take the owner advisory lock; commit
+        // only if extended_data is unchanged since it was read under that lock, otherwise refuse (409).
+        $readExtended = (string)($row['extended_data'] ?? '');
+        $update['_commit_guard'] = static function () use ($id, $readExtended) {
+            return (string)(chimNpcManagerFindNpc(['id' => $id])['extended_data'] ?? '') === $readExtended;
+        };
+        if ($targetRows) {
+            // New actor targets: their binding and physical/keeper keys are rechecked under row locks in the
+            // write, so an unlink/relink or key change after validation refuses instead of storing a stale key.
+            foreach ($targetRows as $targetId => $targetRow) {
+                $update['_expected_bindings'][$targetId] = chimNpcProfileBinding($targetRow);
+            }
+            $update['_expected_keys'] = RelationshipManager::expectedKeysFor(array_values($targetRows));
         }
         $save = static function () use ($id, $update) {
             $manager = new NpcMaster();
@@ -948,16 +1103,15 @@ function chimNpcManagerSave(array $input, array $profiles): array
         };
         $saved = $relationshipChanged ? chimRunWithRelationshipExtendedDataWrite($save) : $save();
         if ($saved === false) {
-            throw new RuntimeException('NPC update failed');
+            // Binding, related targets and extended_data were rechecked under row locks.
+            throw new ChimNpcManagerConflict('This NPC changed while saving. Reopen it before saving again.');
         }
         if ($relationshipChanged && function_exists('chimRelationshipTimelineStamp')) {
             chimRelationshipTimelineStamp($ownerId);
         }
         (new NpcMaster())->backupNpcById($ownerId);
     } finally {
-        if ($lockId !== null) {
-            $GLOBALS['db']->execQuery("SELECT pg_advisory_unlock({$lockId})");
-        }
+        $GLOBALS['db']->execQuery("SELECT pg_advisory_unlock({$lockId})");
     }
 
     $fresh = (new NpcMaster())->getById($id);
@@ -1005,6 +1159,7 @@ try {
     }
     if ($operation === 'detail') {
         $row = chimNpcManagerFindNpc($_GET);
+        chimNpcManagerGuardExpectedKey($_GET, $row);
         chimNpcManagerRespond(['success' => true, 'data' => chimNpcManagerDetail($row, $profiles)]);
     }
     if ($operation === 'history') {
@@ -1014,6 +1169,10 @@ try {
         chimNpcManagerRespond(['success' => true, 'data' => chimNpcReferenceGroupCatalog()]);
     }
     throw new InvalidArgumentException('Unsupported NPC manager operation');
+} catch (ChimNpcManagerConflict $error) {
+    chimNpcManagerRespond(['success' => false, 'error' => $error->getMessage(), 'conflict' => true], 409);
+} catch (ChimNpcManagerInvalid $error) {
+    chimNpcManagerRespond(['success' => false, 'error' => $error->getMessage()], 422);
 } catch (InvalidArgumentException $error) {
     chimNpcManagerRespond(['success' => false, 'error' => $error->getMessage()], 400);
 } catch (Throwable $error) {

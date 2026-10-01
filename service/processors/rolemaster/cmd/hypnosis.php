@@ -60,9 +60,17 @@ $GLOBALS["db"]->insert(
     )
 );
 
+// Resolve the hinted target to one exact row (prompt identifier or unique name) and capture its identity.
+require_once($GLOBALS["ENGINE_ROOT"] . "/lib/core/npc_profile_sharing.php");
+require_once($GLOBALS["ENGINE_ROOT"] . "/lib/core/npc_reference.php");
+$hypnosisRow = chimDynamicProfileUniqueRow(new NpcMaster(), (string)$GLOBALS['argv'][4]);
+$hypnosisExpected = $hypnosisRow ? ['id' => (int)$hypnosisRow['id'], 'npc_name' => (string)$hypnosisRow['npc_name'],
+    '_profile_binding' => chimNpcProfileBinding($hypnosisRow), '_actor_key' => (string)chimNpcRowActorKey($hypnosisRow),
+    '_timeline' => function_exists('chimRechatTimelineEpoch') ? chimRechatTimelineEpoch() : null] : null;
 $newvalue = [];
-$generationFailed = false;
-foreach ($npc['fields'] as $field) {
+$generationFailed = $hypnosisRow === null;
+if ($generationFailed) { Logger::warn('[HYPNOSIS] Target is missing or ambiguous; no profile was changed'); }
+foreach ($generationFailed ? [] : $npc['fields'] as $field) {
     $prompt = "Note: There is no story for this character, you will have to create it (be imaginative), Skyrim lore based, based on this hint.";
     $prompt .= "\nMandatory hint from rolemaster to {$GLOBALS["argv"][4]} : " . $GLOBALS["argv"][3];
     $prompt .= "\nCurrent location (character should be attached to this location): " . DataLastKnownLocation();
@@ -73,7 +81,7 @@ foreach ($npc['fields'] as $field) {
     if ($field == "speechstyle") {
         $prompt .= "\nCreate a new speech style for the character, consistent with their personality and goals. Also create character's filler words and common expressions";
     }
-    $newvalue[$field] = updateDynamicProfileField($GLOBALS["argv"][4], $field, $prompt);
+    $newvalue[$field] = updateDynamicProfileField($hypnosisRow, $field, $prompt);
     if (!is_string($newvalue[$field]) || trim($newvalue[$field]) === '') {
         $generationFailed = true;
         Logger::warn('[HYPNOSIS] Profile generation failed; existing fields were kept');
@@ -85,12 +93,7 @@ foreach ($npc['fields'] as $field) {
 $saved = false;
 if (!$generationFailed) {
     // Save all four generated fields together, preserving names such as J'zargo.
-    $escapedTarget = $GLOBALS['db']->escape($GLOBALS['argv'][4]);
-    $saved = $GLOBALS["db"]->upsertRow(
-        'core_npc_master',
-        $newvalue,
-        "npc_name='{$escapedTarget}'"
-    );
+    $saved = saveDynamicProfileUpdates($hypnosisExpected, $newvalue, $GLOBALS["db"], false);
 }
 $notification = $saved
     ? "Updated basic profile for {$GLOBALS['argv'][4]}"

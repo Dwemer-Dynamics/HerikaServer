@@ -5,25 +5,13 @@ if (!function_exists('chimParseStableFormReference')) {
 }
 require_once __DIR__ . '/npc_reference.php';
 require_once __DIR__ . '/npc_profile_sharing.php';
+require_once __DIR__ . '/response_identity.php';
 
 if (!function_exists('chimGetPromptCharacterName')) {
+    // Shared with narrator.class.php so both conditional definitions agree.
     function chimGetPromptCharacterName(): string
     {
-        $canonicalName = trim((string)($GLOBALS['HERIKA_NAME'] ?? ''));
-        if ($canonicalName === '' || strcasecmp($canonicalName, 'The Narrator') === 0) {
-            return function_exists('chimGetNarratorRoleplayName')
-                ? chimGetNarratorRoleplayName()
-                : ($canonicalName !== '' ? $canonicalName : 'The Narrator');
-        }
-
-        $currentNpcData = is_array($GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] ?? null)
-            ? $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA']
-            : [];
-        $refid = strtoupper(preg_replace('/^0X/i', '', trim((string)($currentNpcData['refid'] ?? ''))));
-        if ($refid !== '' && preg_match('/^[0-9A-F]{1,8}$/', $refid)) {
-            return $canonicalName . ' [RefID: ' . str_pad($refid, 8, '0', STR_PAD_LEFT) . ']';
-        }
-        return $canonicalName;
+        return chimResponsePromptCharacterName();
     }
 }
 
@@ -440,8 +428,14 @@ class NpcMaster
         if ($source) {
             return md5('ref:' . strtolower($source['plugin_name']) . '|' . $source['local_formid']);
         }
+        // A dynamic actor is selected by md5 of its client-assigned dyn: key, never its FF slot or name.
+        $actorKey = chimNpcRowActorKey(['metadata' => $metadata]);
+        if ($actorKey !== null) { return md5($actorKey); }
         $runtimeRef = self::normalizeRefId($refid ?? ($row['refid'] ?? ''));
         if ($runtimeRef !== '') { return md5('runtime:' . $runtimeRef); }
+        // A row that released a recycled runtime slot keeps the selector it had (chimRegisterDynamicActorRow).
+        $detached = $metadata['detached_selector'] ?? null;
+        if (is_string($detached) && preg_match('/^[0-9a-f]{32}$/D', $detached)) { return $detached; }
         return md5(trim((string)($npcName ?? ($row['npc_name'] ?? ''))));
     }
 
@@ -634,6 +628,9 @@ class NpcMaster
     public function getByPromptIdentifier($identifier)
     {
         $identifier = trim((string)$identifier);
+        if (str_starts_with($identifier, 'dyn:') || str_starts_with($identifier, 'ref:')) {
+            return $this->getByActorKey($identifier);
+        }
         if (!preg_match('/^(.*?)\s*\[RefID:\s*(?:0x)?([0-9a-f]{1,8})\]\s*$/i', $identifier, $matches)) {
             return $this->getByName($identifier);
         }
@@ -651,6 +648,17 @@ class NpcMaster
         $rows = $this->db->fetchAll("SELECT * FROM {$this->table}
             WHERE lower(metadata->>'refid_source') = '{$key}' ORDER BY id");
         if (count($rows) > 1) { throw new RuntimeException('Duplicate stable actor reference; reconcile profiles before registration'); }
+        return $rows ? chimNpcEffectiveProfile($rows[0]) : null;
+    }
+
+    // Exact physical key: a placed reference by its stable source, a dynamic actor by its stored dyn: key.
+    public function getByActorKey(string $key)
+    {
+        if (!chimIsActorKey($key) || !preg_match('/^(ref|dyn):/', $key)) { return null; }
+        if (str_starts_with($key, 'ref:')) { return $this->getByReferenceSource(substr($key, 4)); }
+        $rows = $this->db->fetchAll("SELECT * FROM {$this->table}
+            WHERE metadata->>'actor_key' = '" . $this->escape($key) . "' AND COALESCE(metadata->>'refid_source', '') = '' ORDER BY id");
+        if (count($rows) > 1) { throw new RuntimeException('Duplicate dynamic actor key; reconcile profiles before registration'); }
         return $rows ? chimNpcEffectiveProfile($rows[0]) : null;
     }
 
@@ -706,7 +714,7 @@ class NpcMaster
             // UI saves and workers must carry the binding they read; never silently retarget stale work.
             return false;
         }
-        if ($binding !== ':') {
+        if ($binding !== ':' || isset($data['_expected_bindings']) || isset($data['_commit_guard']) || isset($data['_expected_keys'])) {
             return chimNpcWriteSharedProfile($this, (int)$id, $data);
         }
         $data['_profile_binding'] = $binding;
@@ -1393,7 +1401,11 @@ class NpcMaster
 
         // Decode metadata and extended_data if available
         $metadata = json_decode($currentNpcData['metadata'] ?? '{}', true);
-        $presetId = is_array($metadata) ? ($metadata['tts_filter_preset'] ?? '') : '';
+        $presetId = resolveActorTtsFilterPreset(
+            is_array($metadata) ? $metadata : [],
+            chimGetGeneralSettingBool('AUTOMATIC_ACTOR_VOICE_EFFECTS', true),
+            chimGetGeneralSettingBool('TRANSFORMATION_DETECTION', true)
+        );
         setActiveTtsFilterPreset($presetId);
         $narratorManagedKeys = [
             'REMOVE_ASTERISKS_FROM_OUTPUT',
@@ -1424,7 +1436,7 @@ class NpcMaster
 
         // Apply extended_data overrides (highest precedence - NPC level)
         // Reserved keys are excluded (system fields managed by dedicated subsystems/toggles)
-        $reservedKeys = ['middle_term_memory', 'middle_term_enabled', 'individual_memory_enabled', 'background_life_goals', 'chim_core_migrated'];
+        $reservedKeys = ['middle_term_memory', 'middle_term_memory_provenance', 'middle_term_memory_dormant', 'middle_term_enabled', 'individual_memory_enabled', 'background_life_goals', 'chim_core_migrated'];
         $extendedData = json_decode($currentNpcData['extended_data'] ?? '{}', true);
         if (is_array($extendedData)) {
             foreach ($extendedData as $key => $value) {
@@ -1504,6 +1516,14 @@ class NpcMaster
         }
         $actor = $this->getByPromptIdentifier($npcName);
         if (!$actor) { return false; }
+        return $this->updateMetadataKeysById((int)$actor['id'], $setValues, $unsetKeys);
+    }
+
+    // Physical runtime metadata (activity, ritual, transformation) of one exact row; never the shared owner.
+    // With $expectedRefid the write applies only while that row still holds the runtime ref (atomic guard).
+    public function updateMetadataKeysById(int $actorId, array $setValues = [], array $unsetKeys = [], ?string $expectedRefid = null): bool
+    {
+        if ($actorId <= 0) { return false; }
         $protected = array_merge(CHIM_NPC_PROFILE_METADATA_KEYS, ['refid_source']);
         $setValues = array_diff_key($setValues, array_flip($protected));
         $unsetKeys = array_diff($unsetKeys, $protected);
@@ -1554,13 +1574,18 @@ class NpcMaster
             $metadataExpr = "jsonb_set({$metadataExpr}, '{\"{$escapedKey}\"}', '{$escapedValue}'::jsonb, true)";
         }
 
-        $actorId = (int)$actor['id'];
         $query = "
             UPDATE {$this->table}
             SET metadata = {$metadataExpr}
             WHERE id = {$actorId}
         ";
 
+        if ($expectedRefid !== null) {
+            $ref = self::normalizeRefId($expectedRefid);
+            if ($ref === '') { return false; }
+            $rows = $this->db->fetchAll($query . " AND upper(lpad(regexp_replace(COALESCE(refid::text, ''), '^0x', '', 'i'), 8, '0')) = '{$ref}' RETURNING id");
+            return is_array($rows) && count($rows) === 1;
+        }
         return $this->db->execQuery($query) !== false;
     }
 

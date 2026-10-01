@@ -86,55 +86,68 @@ if (!function_exists('chimBuildEventLogActorKeysWhereClause')) {
 }
 
 if (!function_exists('chimResolveContextActorKeys')) {
-    // Physical keys for an actor-specific automated context. A request-captured participant with this
-    // exact name wins; otherwise the single registered profile owner with this name. Returns
-    // ['keys' => [...], 'legacy_names' => bool]: legacy name-only rows are allowed only when the name is
-    // unambiguous among registered actors. Nothing is ever matched to a key by name alone.
-    function chimResolveContextActorKeys($db, $actorName)
+    // Physical keys for an actor-specific automated context from a typed scope, never from a name:
+    // - a selected physical core_npc_master row (has an id): its own key plus the keys of explicitly
+    //   linked references sharing its kept profile. This wins even when the row is named like the player
+    //   or "The Narrator";
+    // - CHIM_ACTOR_KEY_PLAYER / CHIM_ACTOR_KEY_NARRATOR, passed only by callers building the player's or
+    //   the Narrator's own context.
+    // Anything else, including a row without a key, yields none: legacy name-only history stays stored
+    // and displayable but is never attributed by a current name.
+    function chimResolveContextActorKeys($db, $actorScope)
     {
         require_once __DIR__ . '/core/npc_reference.php';
         require_once __DIR__ . '/core/npc_profile_sharing.php';
-        $actorName = trim((string)$actorName);
-        $rows = $db->fetchAll("SELECT * FROM core_npc_master WHERE lower(npc_name) = lower('" . $db->escape($actorName) . "') ORDER BY id");
-        $owners = array_unique(array_map(static fn($r) => (int)($r['profile_owner_npc_id'] ?? 0) ?: (int)$r['id'], $rows));
-        $captured = [];
-        foreach ($GLOBALS['CHIM_EVENT_IDENTITY']['participants'] ?? [] as $participant) {
-            if ($participant['id'] !== null && strcasecmp($participant['base_name'], $actorName) === 0) {
-                $captured[] = $participant['id'];
-            }
-        }
-        $keys = [];
-        if (count($captured) === 1) {
-            $keys = $captured;
-            foreach ($rows as $row) {
-                if (chimNpcRowPhysicalKey($row) === $captured[0]) { $keys = chimNpcProfileActorKeys($row); break; }
-            }
-        } elseif (!$captured && count($owners) === 1) {
-            $keys = chimNpcProfileActorKeys($rows[0]);
-        }
-        return ['keys' => $keys, 'legacy_names' => count($owners) <= 1 && count($captured) <= 1];
+        if (is_array($actorScope) && (int)($actorScope['id'] ?? 0) > 0) { return chimNpcProfileActorKeys($actorScope); }
+        if ($actorScope === CHIM_ACTOR_KEY_PLAYER || $actorScope === CHIM_ACTOR_KEY_NARRATOR) { return [$actorScope]; }
+        return [];
+    }
+}
+
+if (!function_exists('chimCurrentContextActorRow')) {
+    // The request's selected physical row when it is the actor being built. Callers that know the actor
+    // pass its row (or a reserved principal) explicitly; this only serves callers that have not.
+    function chimCurrentContextActorRow($actorName)
+    {
+        $row = $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] ?? null;
+        return is_array($row) && (int)($row['id'] ?? 0) > 0 && (string)($row['npc_name'] ?? '') === trim((string)$actorName) ? $row : null;
     }
 }
 
 if (!function_exists('chimBuildNpcContextPeopleWhereClause')) {
-    // Exact-key rows for a resolved actor, plus legacy name-only rows when the name is unambiguous.
-    // Format-2 rows never match by name, and ambiguous legacy rows are excluded rather than guessed.
-    function chimBuildNpcContextPeopleWhereClause($db, $actorName, $peopleColumn = 'people')
+    // Exactly-indexed key clause for the typed actor scope; FALSE when it has no key. No name branch.
+    function chimBuildNpcContextPeopleWhereClause($db, $actorName, $peopleColumn = 'people', $actorScope = null)
     {
-        $peopleColumn = chimEventLogPeopleColumn($peopleColumn);
-        $scope = chimResolveContextActorKeys($db, $actorName);
-        $clauses = [];
-        if ($scope['keys']) {
-            $clauses[] = chimBuildEventLogActorKeysWhereClause($db, $scope['keys'], $peopleColumn);
-        }
-        if ($scope['legacy_names']) {
-            $clauses[] = "(left(COALESCE({$peopleColumn}, ''), 1) <> '[' AND "
-                . chimBuildNpcEventLogPeopleWhereClause($db, $actorName, $peopleColumn) . ")";
-        }
-        return $clauses ? '(' . implode(' OR ', $clauses) . ')' : 'FALSE';
+        $actorScope = $actorScope ?? chimCurrentContextActorRow($actorName);
+        return chimBuildEventLogActorKeysWhereClause($db, chimResolveContextActorKeys($db, $actorScope), $peopleColumn);
     }
 }
-
+if (!function_exists('chimBuildSpeechActorKeysWhereClause')) {
+    // Exact speech rows an actor witnessed: its key is the captured speaker_key or is in the captured
+    // format-2 audience. Legacy rows (no capture) never match; companions/speaker names are display only.
+    function chimBuildSpeechActorKeysWhereClause($db, array $actorKeys, $alias = '')
+    {
+        require_once __DIR__ . '/core/npc_reference.php';
+        $alias = preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', (string)$alias) ? $alias . '.' : '';
+        $keys = [];
+        foreach ($actorKeys as $key) {
+            if (chimIsActorKey($key)) { $keys[$key] = "'" . $db->escape($key) . "'"; }
+        }
+        if (!$keys) {
+            return 'FALSE';
+        }
+        $list = implode(',', $keys);
+        return "({$alias}speaker_key IN ({$list}) OR public.chim_identity_audience_keys({$alias}audience) && ARRAY[{$list}]::text[])";
+    }
+}
+if (!function_exists('chimBuildSpeechContextWhereClause')) {
+    // Speech clause for the typed actor scope (explicit row/principal, else the selected matching row).
+    function chimBuildSpeechContextWhereClause($db, $actorName, $actorScope = null, $alias = '')
+    {
+        $actorScope = $actorScope ?? chimCurrentContextActorRow($actorName);
+        return chimBuildSpeechActorKeysWhereClause($db, chimResolveContextActorKeys($db, $actorScope), $alias);
+    }
+}
 if (!function_exists('chimBuildNpcEventLogPeopleWhereClause')) {
     // Match one NPC token without allowing partial-name matches or far-away audience markers.
     function chimBuildNpcEventLogPeopleWhereClause($db, $npcName, $peopleColumn = 'people')

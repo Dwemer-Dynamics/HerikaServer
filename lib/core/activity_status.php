@@ -151,6 +151,21 @@ function chimSanitizeActivityStatusPayload(array $payload): array
             : 0,
     ];
 
+    // C18 captured attack target identity (validated by gamedata.php); never derived from attack_target.
+    if (array_key_exists('attack_target_key', $payload)) {
+        $targetKey = $payload['attack_target_key'];
+        $targetRef = $payload['attack_target_refid'] ?? null;
+        $valid = is_string($targetKey) && is_string($targetRef) && preg_match('/^[0-9A-F]{8}$/D', $targetRef);
+        $status['attack_target_key'] = $valid ? $targetKey : null;
+        $status['attack_target_refid'] = $valid ? $targetRef : null;
+        $status['attack_target_npc_id'] = $valid && is_numeric($payload['attack_target_npc_id'] ?? null)
+            ? (int) $payload['attack_target_npc_id'] : null;
+        $status['attack_target_binding'] = $valid ? (string) ($payload['attack_target_binding'] ?? '') : 'none';
+        if (!$valid) {
+            $status['attack_target'] = '';
+        }
+    }
+
     if ($status['use_type'] === '' && $status['furniture_name'] !== '') {
         $status['use_type'] = chimInferActivityUseTypeFromFurniture($status['furniture_name']);
     }
@@ -199,6 +214,8 @@ function chimClearActivityStatusMetadata(array $metadata): array
 function chimBuildActivityStatusMetadataUpdates(array $payload): array
 {
     $status = chimSanitizeActivityStatusPayload($payload);
+    // Client timestamps may be monotonic nanoseconds, not Unix milliseconds.
+    $status['received_at_ms'] = chimActivityStatusNowMs();
 
     $setValues = [
         'activity_status' => $status,
@@ -220,10 +237,12 @@ function chimBuildActivityStatusMetadataUpdates(array $payload): array
     ];
 }
 
-function chimApplyNpcMetadataUpdatesByName(string $npcName, array $updates): bool
+// $npcName may be the exact physical row (array with id); a string resolves only a prompt identifier or name.
+function chimApplyNpcMetadataUpdatesByName($npcName, array $updates): bool
 {
-    $npcName = trim($npcName);
-    if ($npcName === '' || count($updates) === 0) {
+    $exactRow = is_array($npcName) ? $npcName : null;
+    $npcName = $exactRow !== null ? '' : trim((string)$npcName);
+    if (($exactRow === null && $npcName === '') || ($exactRow !== null && (int)($exactRow['id'] ?? 0) <= 0) || count($updates) === 0) {
         return false;
     }
 
@@ -233,7 +252,7 @@ function chimApplyNpcMetadataUpdatesByName(string $npcName, array $updates): boo
     }
 
     $npcMaster = new NpcMaster();
-    $npcData = $npcMaster->getByName($npcName);
+    $npcData = $exactRow ?? $npcMaster->getByName($npcName);
     if (!is_array($npcData) || count($npcData) === 0) {
         return false;
     }
@@ -295,7 +314,9 @@ function chimApplyNpcMetadataUpdatesByName(string $npcName, array $updates): boo
         }
     }
 
-    return $npcMaster->updateMetadataKeysByName($npcName, $setValues, $unsetKeys);
+    // An exact row may carry _expected_refid (gamedata keyed rows): the write then applies only to that runtime ref.
+    $expectedRefid = isset($exactRow['_expected_refid']) ? (string)$exactRow['_expected_refid'] : null;
+    return $npcMaster->updateMetadataKeysById((int)$npcData['id'], $setValues, $unsetKeys, $expectedRefid);
 }
 
 function chimActivityStatusIsFresh(array $status, int $maxAgeMs = 45000): bool

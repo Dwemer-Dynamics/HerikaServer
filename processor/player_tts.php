@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../lib/chim_interaction.php';
+require_once __DIR__ . '/../lib/core/response_identity.php';
 chimInteractionRequire();
 
 $playerTtsSourceText = function_exists('chimResolvePlayerTtsSourceText')
@@ -22,7 +23,10 @@ if (!function_exists('emitPlayerTextOnlyScriptQueueLine')) {
             return;
         }
 
-        $outputLine = "Player|ScriptQueue|{$subtitle}//__player_text_only///1.0\r\n";
+        $outputLine = chimBuildCurrentResponseLine("Player", "ScriptQueue", "{$subtitle}//__player_text_only///1.0", CHIM_ACTOR_KEY_PLAYER);
+        if ($outputLine === null) {
+            return;
+        }
         echo $outputLine;
         $GLOBALS["DEBUG_DATA"]["OUTPUT_LOG"] = $outputLine;
         @file_put_contents(__DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "log" . DIRECTORY_SEPARATOR . "output_to_plugin.log", $outputLine, FILE_APPEND | LOCK_EX);
@@ -140,6 +144,8 @@ try {
 
     $GLOBALS["PATCH_DONT_STORE_SPEECH_ON_DB"] = true;
     $GLOBALS["HERIKA_NAME"] = "Player";
+    // Typed player speech: never a physical row that happens to be named Player.
+    $GLOBALS["CHIM_RESPONSE_PRINCIPAL"] = CHIM_ACTOR_KEY_PLAYER;
 
     Translation::translate($cleaned_dialogue);
     Translation::$sentences = [Translation::$response];
@@ -197,6 +203,7 @@ try {
         unset($GLOBALS["CHIM_CORE_CURRENT_TTS_CONNECTOR_ID"]);
     }
     unset($GLOBALS["SCRIPTLINE_ANIMATION_SENT"]);
+    unset($GLOBALS["CHIM_RESPONSE_PRINCIPAL"]);
     $GLOBALS["HERIKA_NAME"] = $origName;
     unset($GLOBALS["PATCH_DONT_STORE_SPEECH_ON_DB"]);
     pipeline_status_set('player_tts', false);

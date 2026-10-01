@@ -274,6 +274,210 @@ class RelationshipManager {
         return array_keys($customTypes);
     }
 
+    /**
+     * Stable target identity for relationship edges (see docs/actor-identity.md, "Relationship edges").
+     *
+     * Actor edges are keyed in extended_data.relationships by the target's canonical physical actor key
+     * and carry 'target' => ['kind' => 'actor', 'key' => ..., 'label' => display name]. While the target
+     * shares a kept profile its effective key is the keeper's, so every linked reference reads and writes
+     * one edge; the dormant edge under the member's own key is left untouched and is used again after
+     * unlink. The player edge stays keyed "Player" with kind 'player'. Name keys without an actor target
+     * remain legacy/display-only (or explicit 'concept' entries) and are never assigned to an actor by
+     * name: today's unique NPC label is no evidence of which actor an old name-only edge described.
+     */
+    public static function targetIdentityForActor($row) {
+        if (!is_array($row) || empty($row['id'])) { return null; }
+        $ownerId = (int)($row['profile_owner_npc_id'] ?? 0);
+        $keyRow = $row;
+        if ($ownerId > 0 && $ownerId !== (int)$row['id']) {
+            $keyRow = $GLOBALS['db']->fetchOne("SELECT id, npc_name, metadata FROM core_npc_master WHERE id = {$ownerId}");
+            if (!$keyRow) { return null; }
+        }
+        $key = chimNpcRowActorKey($keyRow);
+        if ($key === null) { return null; }
+        return [
+            'kind' => 'actor', 'key' => $key, 'label' => (string)($row['npc_name'] ?? ''),
+            'npc_id' => (int)$row['id'], 'binding' => chimNpcProfileBinding($row),
+        ];
+    }
+
+    public static function playerTargetIdentity() {
+        return ['kind' => 'player', 'key' => 'Player', 'label' => 'Player'];
+    }
+
+    public static function isActorEdgeKey($key) {
+        return is_string($key) && chimIsActorKey($key) && preg_match('/^(ref|dyn):/', $key);
+    }
+
+    /**
+     * Find the edge for a typed target identity. Returns [mapKey, rel|null]. Actor identities read only
+     * their keyed edge; name-only legacy entries stay stored for explicit user attribution later.
+     * A concept reads its name entry only when that entry is explicitly classified as a concept.
+     */
+    public static function findTargetEdge($relationships, $identity) {
+        $relationships = is_array($relationships) ? $relationships : [];
+        if (!is_array($identity)) { return [null, null]; }
+        $kind = $identity['kind'] ?? '';
+        if ($kind === 'player') {
+            return ['Player', $relationships['Player'] ?? null];
+        }
+        $key = (string)($identity['key'] ?? '');
+        if ($kind === 'actor') {
+            return [$key, $relationships[$key] ?? null];
+        }
+        if ($kind === 'concept') {
+            $rel = $relationships[$key] ?? null;
+            return [$key, is_array($rel) && ($rel['target']['kind'] ?? '') === 'concept' ? $rel : null];
+        }
+        return [null, null];
+    }
+
+    /** Store an edge under its identity key. Other edge fields (custom info, notes) are kept. */
+    public static function storeTargetEdge(array &$relationships, $identity, $foundKey, array $rel) {
+        $kind = $identity['kind'] ?? '';
+        $key = $kind === 'player' ? 'Player' : (string)$identity['key'];
+        if ($kind === 'actor' || $kind === 'concept') {
+            // The physically selected row's key is kept as provenance when it differs from the keeper key.
+            $selected = $identity['selected_key']
+                ?? ((($rel['target']['key'] ?? null) === $key) ? ($rel['target']['selected_key'] ?? null) : null);
+            $rel['target'] = ['kind' => $kind, 'key' => $key, 'label' => (string)($identity['label'] ?? $key)];
+            if ($kind === 'actor' && is_string($selected) && $selected !== '' && $selected !== $key) {
+                $rel['target']['selected_key'] = $selected;
+            }
+        }
+        $relationships[$key] = $rel;
+        return $key;
+    }
+
+    /**
+     * Resolve a runtime relationship target to a typed identity. Accepts a typed identity, an exact
+     * physical row/id, a canonical actor key, a rendered "Label [key]" reference or a bare name.
+     * A bare name resolves only when its rows share one effective key; otherwise it is 'ambiguous'.
+     * A bare name without an actor row is 'unknown' (never silently a concept). Physical rows stay
+     * actors even when named "Player", "The Narrator" or the player's name.
+     */
+    public static function resolveTargetIdentity($target, array $roster = []) {
+        if (is_array($target) && isset($target['kind'])) { return $target; }
+        if (is_array($target) || is_int($target)) {
+            $row = is_array($target) ? $target : null;
+            if (is_int($target) || !isset($row['npc_name'])) {
+                $id = is_int($target) ? $target : (int)($target['id'] ?? 0);
+                $row = $id > 1 ? $GLOBALS['db']->fetchOne("SELECT * FROM core_npc_master WHERE id = {$id}") : null;
+            }
+            return self::targetIdentityForActor($row) ?? ['kind' => 'unknown', 'key' => null, 'label' => ''];
+        }
+        $raw = trim((string)$target);
+        if (preg_match('/\[((?:ref|dyn):[^\]]+)\]\s*$/u', $raw, $m)) { $raw = $m[1]; }
+        if (self::isActorEdgeKey($raw)) {
+            require_once __DIR__ . "/core/npc_master.class.php";
+            $row = (new NpcMaster())->getByActorKey($raw);
+            return self::targetIdentityForActor($row) ?? ['kind' => 'unknown', 'key' => $raw, 'label' => $raw];
+        }
+        $name = self::normalizeTargetName($raw);
+        if ($name === 'Player') { return self::playerTargetIdentity(); }
+        if ($name === '' || strcasecmp($name, 'The Narrator') === 0 || strcasecmp($name, 'Narrator') === 0) {
+            return ['kind' => 'unknown', 'key' => null, 'label' => $name];
+        }
+        // Captured scene rows win; two captured actors with one label stay ambiguous.
+        $captured = [];
+        foreach ($roster as $member) {
+            $identity = self::resolveTargetIdentity($member);
+            if (($identity['kind'] ?? '') === 'actor' && strcasecmp((string)$identity['label'], $name) === 0) {
+                $captured[$identity['key']] = $identity;
+            }
+        }
+        if (count($captured) > 1) { return ['kind' => 'ambiguous', 'key' => null, 'label' => $name]; }
+        if ($captured) { return reset($captured); }
+        $escaped = $GLOBALS['db']->escape($name);
+        $identities = [];
+        foreach ((array)$GLOBALS['db']->fetchAll("SELECT * FROM core_npc_master WHERE lower(btrim(npc_name)) = lower('{$escaped}') ORDER BY id") as $row) {
+            $identity = self::targetIdentityForActor($row);
+            if ($identity) { $identities[$identity['key']] = $identity; }
+        }
+        if (count($identities) > 1) { return ['kind' => 'ambiguous', 'key' => null, 'label' => $name]; }
+        if ($identities) { return reset($identities); }
+        return ['kind' => 'unknown', 'key' => null, 'label' => $name];
+    }
+
+    /** Runtime (prompt/agent) read: only a typed edge. Raw stored maps stay available via getRelationships(). */
+    public static function runtimeEdge($relationships, $identity) {
+        if (!in_array($identity['kind'] ?? '', ['actor', 'player', 'concept'], true)) { return null; }
+        [, $rel] = self::findTargetEdge($relationships, $identity);
+        return is_array($rel) ? $rel : null;
+    }
+
+    /** Prompt label for a typed target; same-label actors carry their exact key so #REL can name it. */
+    public static function renderTargetLabel($identity, array $labelCounts = []) {
+        $label = (string)($identity['label'] ?? $identity['key'] ?? '');
+        if (($identity['kind'] ?? '') === 'actor' && ($labelCounts[strtolower($label)] ?? 0) > 1) {
+            return $label . ' [' . $identity['key'] . ']';
+        }
+        return $label;
+    }
+
+    /** Typed roster members: DataCloseRangeActorRoster entries contribute only their exact rows. */
+    private static function rosterTargets($nearby) {
+        $targets = [];
+        foreach ((array)$nearby as $member) {
+            if (is_array($member) && array_key_exists('row', $member) && !isset($member['kind'])) {
+                if (is_array($member['row'])) { $targets[] = $member['row']; }
+                continue; // an unregistered roster participant never resolves by name
+            }
+            $targets[] = $member;
+        }
+        return $targets;
+    }
+
+    /**
+     * Validate a newly chosen actor target for $sourceRow (the physical row being edited). $key is the
+     * selected row's physical key (its current keeper key is also accepted) and $targetId its row id.
+     * Returns [identity, targetRow]; the identity carries the keeper key and the selected row's label, plus
+     * 'selected_key' when the selected physical key differs. Throws InvalidArgumentException otherwise.
+     * Callers recheck the returned row's binding and keys under row locks in the guarded write.
+     */
+    public static function validateNewActorTarget($key, $targetId, array $sourceRow, array $takenKeys) {
+        $key = (string)$key;
+        $targetId = (int)$targetId;
+        $targetRow = $targetId > 0
+            ? $GLOBALS['db']->fetchOne("SELECT * FROM core_npc_master WHERE id = {$targetId}") : null;
+        $identity = $targetRow ? self::targetIdentityForActor($targetRow) : null;
+        $physicalKey = $targetRow ? chimNpcRowActorKey($targetRow) : null;
+        if (!self::isActorEdgeKey($key) || !$identity || $physicalKey === null
+            || ($key !== $physicalKey && $key !== $identity['key'])) {
+            throw new InvalidArgumentException('Relationship target does not match that NPC. Search for it again.');
+        }
+        $ownKeys = chimNpcRowActorKey($sourceRow) !== null || !empty($sourceRow['profile_owner_npc_id'])
+            ? chimNpcProfileActorKeys($sourceRow) : [];
+        if ($targetId === (int)($sourceRow['id'] ?? 0) || in_array($identity['key'], $ownKeys, true)
+            || in_array($physicalKey, $ownKeys, true)) {
+            throw new InvalidArgumentException('An NPC cannot have a relationship with itself or its linked profile');
+        }
+        if (in_array($identity['key'], $takenKeys, true)) {
+            throw new InvalidArgumentException('A relationship with that profile already exists. Edit that entry instead.');
+        }
+        if ($physicalKey !== $identity['key']) {
+            $identity['selected_key'] = $physicalKey;
+        }
+        return [$identity, $targetRow];
+    }
+
+    /** Lock-free capture of physical keys used inside the guarded write: endpoint and its keeper. */
+    public static function expectedKeysFor(array $rows) {
+        $keys = [];
+        foreach ($rows as $row) {
+            if (!is_array($row) || empty($row['id'])) { continue; }
+            $key = chimNpcRowActorKey($row);
+            if ($key !== null) { $keys[(int)$row['id']] = $key; }
+            $ownerId = (int)($row['profile_owner_npc_id'] ?? 0);
+            if ($ownerId > 0 && $ownerId !== (int)$row['id']) {
+                $owner = $GLOBALS['db']->fetchOne("SELECT * FROM core_npc_master WHERE id = {$ownerId}");
+                $ownerKey = $owner ? chimNpcRowActorKey($owner) : null;
+                if ($ownerKey !== null) { $keys[$ownerId] = $ownerKey; }
+            }
+        }
+        return $keys;
+    }
+
     public static function normalizeRelationshipMap($relationships) {
         if (!is_array($relationships)) {
             return [];
@@ -285,7 +489,9 @@ class RelationshipManager {
                 continue;
             }
 
-            $canonicalTarget = self::normalizeTargetName($target);
+            // Actor-keyed edges are physical identities: never fold them into the player alias.
+            $canonicalTarget = self::isActorEdgeKey((string)$target) || is_array($rel['target'] ?? null)
+                ? (string)$target : self::normalizeTargetName($target);
             if ($canonicalTarget === '') {
                 continue;
             }
@@ -598,18 +804,21 @@ class RelationshipManager {
         require_once __DIR__ . "/core/npc_master.class.php";
         $npcMaster = new NpcMaster();
 
-        $raw = trim((string)$npcName);
-        if ($raw === '' || strcasecmp($raw, 'The Narrator') === 0) {
-            return null;
+        // Explicit physical principals first: a row, its id, or a canonical actor key.
+        if (is_array($npcName) || is_int($npcName)) {
+            $id = is_array($npcName) ? (int)($npcName['id'] ?? 0) : $npcName;
+            return $id > 1 ? $npcMaster->getById($id) : null;
         }
+        $raw = trim((string)$npcName);
+        if ($raw === '') { return null; }
+        if (chimIsActorKey($raw)) { return $npcMaster->getByActorKey($raw); }
 
+        // A physical NPC whose display name is "The Narrator" still resolves by its reference.
         $npcData = $npcMaster->getByPromptIdentifier($raw);
         if ($npcData) { return $npcData; }
-        // Dialogue already has a physical speaker context; never choose another same-name row.
-        $speaker = $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] ?? null;
-        if (is_array($speaker) && strcasecmp(trim($speaker['npc_name'] ?? ''), $raw) === 0) {
-            return $npcMaster->getById((int)$speaker['id']);
-        }
+        if (strcasecmp($raw, 'The Narrator') === 0) { return null; }
+        // No speaker-global bridge: runtime callers pass the exact physical row; a bare name that several
+        // rows share returns null below instead of borrowing whichever actor happens to be speaking.
 
         $clean = preg_replace('/\s*\((?:far away|too far away|busy|hostile|in combat|dead|disabled|unavailable)\)\s*$/iu', '', $raw);
         $clean = trim(preg_replace('/\s+/u', ' ', (string)$clean));
@@ -688,12 +897,17 @@ class RelationshipManager {
      *
      * @return array ['aff' => int, 'type' => string, 'tier' => string]
      */
-    public static function getRelationship($npcName, $targetName) {
+    public static function getRelationship($npcName, $targetName, array $roster = []) {
+        // Runtime read: typed edges only. Ambiguous names and unattributed legacy name entries read as
+        // strangers here; the raw stored map remains available to admin readers via getRelationships().
         $rels = self::getRelationships($npcName);
-        $targetName = self::normalizeTargetName($targetName);
-
-        if (isset($rels[$targetName])) {
-            $rel = $rels[$targetName];
+        $identity = self::resolveTargetIdentity($targetName, $roster);
+        if (($identity['kind'] ?? '') === 'unknown' && ($identity['label'] ?? '') !== '') {
+            // A non-actor name reads only an entry explicitly classified as a concept.
+            $identity = ['kind' => 'concept', 'key' => $identity['label'], 'label' => $identity['label']];
+        }
+        $rel = self::runtimeEdge($rels, $identity);
+        if ($rel !== null) {
             $rel['tier'] = self::getTierLabel($rel['aff'] ?? 0);
             return $rel;
         }
@@ -803,13 +1017,25 @@ class RelationshipManager {
             $lines[] = $playerLine;
         }
 
-        // Add nearby NPCs only
-        foreach ($nearbyNpcs as $target) {
-            $target = trim($target);
-            if (empty($target) || strtolower($target) === 'player') continue;
-
-            if (isset($rels[$target])) {
-                $r = $rels[$target];
+        // Add nearby NPCs only. Members may be exact rows, roster entries, typed identities or names;
+        // a name shared by several actors is skipped rather than shown with another actor's edge.
+        $roster = self::rosterTargets($nearbyNpcs);
+        $identities = [];
+        foreach ($roster as $member) {
+            if (!is_array($member) && (trim((string)$member) === '' || strtolower(trim((string)$member)) === 'player')) { continue; }
+            $identity = self::resolveTargetIdentity($member, array_filter($roster, 'is_array'));
+            if (in_array($identity['kind'] ?? '', ['actor', 'concept'], true)) {
+                $identities[$identity['kind'] . ':' . $identity['key']] = $identity;
+            }
+        }
+        $labelCounts = [strtolower($playerDisplayName) => 1];
+        foreach ($identities as $identity) {
+            $labelCounts[strtolower((string)$identity['label'])] = ($labelCounts[strtolower((string)$identity['label'])] ?? 0) + 1;
+        }
+        foreach ($identities as $identity) {
+            $target = self::renderTargetLabel($identity, $labelCounts);
+            $r = self::runtimeEdge($rels, $identity);
+            if ($r !== null) {
                 $aff = $r['aff'] ?? 0;
                 $type = ucfirst($r['type'] ?? 'neutral');
                 $tier = self::getTierLabel($aff);
@@ -840,7 +1066,7 @@ class RelationshipManager {
     }
 
     private static function buildRelationshipHeading($npcName) {
-        $npcName = trim((string)$npcName);
+        $npcName = trim((string)(is_array($npcName) ? ($npcName['npc_name'] ?? '') : $npcName));
         if ($npcName === '') {
             return "[RELATIONSHIPS]";
         }
@@ -900,144 +1126,165 @@ class RelationshipManager {
      * @param string $npcName The speaking NPC
      * @return string Cleaned response with commands stripped
      */
-    public static function parseChanges($aiResponse, $npcName) {
+    public static function parseChanges($aiResponse, $npcName, array $roster = []) {
         require_once __DIR__ . "/core/npc_master.class.php";
         $npcMaster = new NpcMaster();
         $npcData = self::resolveNpcByName($npcName);
+        $clean = preg_replace('/#(REL|TYPE):[^#]+#/', '', $aiResponse);
 
         if (!$npcData) {
             // Can't update relationships for unknown NPC
-            return preg_replace('/#(REL|TYPE):[^#]+#/', '', $aiResponse);
+            return $clean;
         }
 
+        // Typed endpoints: "Label [key]", an actor key, a captured scene row, the player, or an explicit
+        // concept entry. Ambiguous or unknown names are refused instead of choosing a row by label.
         $extended = json_decode($npcData['extended_data'] ?? '{}', true) ?: [];
         $rels = self::normalizeRelationshipMap($extended['relationships'] ?? []);
-        $changed = false;
-
-        // Parse affinity changes: #REL:Target=+5# or #REL:Target=-10#
-        if (preg_match_all('/#REL:([^=]+)=([+-]?\d+)#/', $aiResponse, $matches)) {
-            foreach ($matches[1] as $i => $target) {
-                $target = self::normalizeTargetName($target);
-                if (in_array(strtolower($target), ['the narrator', 'narrator'], true)) continue; // never track the narrator as a relationship
-                $delta = (int)$matches[2][$i];
-
-                // Initialize if doesn't exist
-                if (!isset($rels[$target])) {
-                    $rels[$target] = ['aff' => 0, 'type' => 'neutral'];
-                }
-
-                // Apply delta with bounds
-                $oldAff = $rels[$target]['aff'];
-                $rels[$target]['aff'] = max(-100, min(100, $oldAff + $delta));
-
-                error_log("[REL] $npcName -> $target: " . sprintf("%+d", $delta) .
-                          " (was $oldAff, now " . $rels[$target]['aff'] . ")");
-                $changed = true;
-            }
-        }
-
-        // Parse type changes: #TYPE:Target=Romantic#
-        // The model may select a built-in type or an existing player-created custom
-        // type. It may never create a new type merely by emitting a new word.
         $allowedCustomTypes = self::getCustomRelationshipTypes($rels);
-        if (preg_match_all('/#TYPE:([^=]+)=([a-zA-Z][a-zA-Z0-9_-]{0,49})#/', $aiResponse, $matches)) {
-            foreach ($matches[1] as $i => $target) {
-                $target = self::normalizeTargetName($target);
-                if (in_array(strtolower($target), ['the narrator', 'narrator'], true)) continue; // never track the narrator as a relationship
-                $rawType = trim($matches[2][$i]);
-                $newType = self::canonicalizeRelationshipType($rawType, $allowedCustomTypes);
-
-                if ($newType === null) {
-                    error_log("[REL] Rejected invented relationship type '$rawType' for $npcName -> $target");
+        $roster = self::rosterTargets($roster);
+        $edits = [];
+        $pattern = '/#(REL|TYPE):([^=#]+)=([+-]?\d+|[a-zA-Z][a-zA-Z0-9_-]{0,49})#/';
+        if (preg_match_all($pattern, (string)$aiResponse, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as [$all, $command, $rawTarget, $value]) {
+                $identity = self::commandTargetIdentity($rels, $rawTarget, $roster);
+                if ($identity === null) {
+                    error_log("[REL] Refused {$command} for unresolved or ambiguous target '" . trim($rawTarget) . "'");
                     continue;
                 }
-
-                if (!isset($rels[$target])) {
-                    $rels[$target] = ['aff' => 0, 'type' => 'neutral'];
+                if ($command === 'REL') {
+                    if (!preg_match('/^[+-]?\d+$/', $value)) { continue; }
+                    $edits[] = [$identity, (int)$value, null];
+                } else {
+                    $newType = self::canonicalizeRelationshipType($value, $allowedCustomTypes);
+                    if ($newType === null) {
+                        error_log("[REL] Rejected invented relationship type '$value' for target '" . trim($rawTarget) . "'");
+                        continue;
+                    }
+                    $edits[] = [$identity, null, $newType];
                 }
-                $oldType = $rels[$target]['type'];
-                $rels[$target]['type'] = $newType;
-
-                error_log("[REL] $npcName -> $target: type $oldType -> $newType");
-                $changed = true;
             }
         }
-
-        // Save if changed
-        if ($changed) {
-            $extended['relationships'] = $rels;
-            $result = chimRunWithRelationshipExtendedDataWrite(function () use ($npcMaster, $npcData, $extended) {
-                return $npcMaster->updateByArray([
-                    'id' => $npcData['id'],
-                    '_profile_binding' => $npcData['_profile_binding'] ?? ':',
-                    'extended_data' => json_encode($extended, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-                ]);
-            });
-            if ($result !== false && function_exists('chimRelationshipTimelineStamp')) {
-                chimRelationshipTimelineStamp($npcData['profile_owner_npc_id'] ?? $npcData['id']);
-            }
+        if ($edits) {
+            self::writeTypedEdits($npcData, $edits, array_filter($roster, 'is_array'));
         }
 
         // Strip commands before TTS
-        return preg_replace('/#(REL|TYPE):[^#]+#/', '', $aiResponse);
+        return $clean;
+    }
+
+    /** #REL/#TYPE target: never a bare ambiguous label, never an unclassified legacy name entry. */
+    private static function commandTargetIdentity($rels, $rawTarget, array $roster) {
+        $identity = self::resolveTargetIdentity($rawTarget, $roster);
+        $kind = $identity['kind'] ?? '';
+        if ($kind === 'actor' || $kind === 'player') { return $identity; }
+        if ($kind === 'unknown' && ($identity['label'] ?? '') !== '') {
+            $concept = ['kind' => 'concept', 'key' => $identity['label'], 'label' => $identity['label']];
+            if (self::runtimeEdge($rels, $concept) !== null) { return $concept; }
+        }
+        return null;
     }
 
     /**
-     * Set relationship directly (for initialization or admin)
+     * Apply typed edits to the freshest source map inside the guarded write: the source binding and the
+     * physical keys/bindings of the source, every actor target and their keepers are rechecked under lock.
+     * The edge's other fields (custom info, notes, labels) and the manual lock are preserved.
      */
-    public static function setRelationship($npcName, $targetName, $affinity, $type = null) {
-        $targetName = self::normalizeTargetName($targetName);
+    private static function writeTypedEdits($npcData, array $edits, array $extraRows = [], $setAbsolute = false) {
         require_once __DIR__ . "/core/npc_master.class.php";
         $npcMaster = new NpcMaster();
+        $sourceId = (int)$npcData['id'];
+        $source = $npcMaster->getById($sourceId);
+        if (!$source) { return false; }
+        $expectedBindings = [];
+        $keyRows = [$source];
+        foreach ($edits as [$identity]) {
+            if (($identity['kind'] ?? '') === 'actor' && !empty($identity['npc_id'])) {
+                $expectedBindings[(int)$identity['npc_id']] = $identity['binding'];
+                $row = $GLOBALS['db']->fetchOne('SELECT * FROM core_npc_master WHERE id = ' . (int)$identity['npc_id']);
+                if (!$row || chimNpcProfileBinding($row) !== $identity['binding']) { return false; }
+                $keyRows[] = $row;
+            }
+        }
+        $expectedKeys = self::expectedKeysFor($keyRows);
+        $extended = json_decode($source['extended_data'] ?? '{}', true) ?: [];
+        if (!empty($extended['relationships_locked'])) {
+            error_log("[REL] Skipped relationship command for locked NPC {$source['npc_name']}");
+            return false;
+        }
+        $rels = self::normalizeRelationshipMap($extended['relationships'] ?? []);
+        foreach ($edits as [$identity, $delta, $type]) {
+            [$foundKey, $rel] = self::findTargetEdge($rels, $identity);
+            $rel = is_array($rel) ? $rel : ['aff' => 0, 'type' => 'neutral'];
+            $old = (int)($rel['aff'] ?? 0);
+            if ($delta !== null) {
+                $rel['aff'] = max(-100, min(100, $setAbsolute ? (int)$delta : $old + (int)$delta));
+            }
+            if ($type !== null) { $rel['type'] = $type; }
+            self::storeTargetEdge($rels, $identity, $foundKey, $rel);
+            error_log("[REL] {$source['npc_name']} -> " . ($identity['label'] ?? $identity['key']) . " ({$identity['key']}): aff {$old} -> {$rel['aff']}, type {$rel['type']}");
+        }
+        $extended['relationships'] = $rels;
+        $write = [
+            'id' => $sourceId,
+            '_profile_binding' => chimNpcProfileBinding($source),
+            '_expected_bindings' => $expectedBindings,
+            '_expected_keys' => $expectedKeys,
+            // The map written is computed from this exact read; any intervening writer changes extended_data.
+            '_commit_guard' => static function () use ($npcMaster, $sourceId, $source) {
+                $fresh = $npcMaster->getById($sourceId);
+                return is_array($fresh) && (string)$fresh['extended_data'] === (string)$source['extended_data'];
+            },
+            'extended_data' => json_encode($extended, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        ];
+        $result = chimRunWithRelationshipExtendedDataWrite(function () use ($npcMaster, $write) {
+            return $npcMaster->updateByArray($write);
+        });
+        if ($result !== false && function_exists('chimRelationshipTimelineStamp')) {
+            chimRelationshipTimelineStamp($source['profile_owner_npc_id'] ?? $sourceId);
+        }
+        return $result !== false;
+    }
+
+    /**
+     * Set relationship directly (for initialization or admin). The target may be a row/id/actor key or a
+     * name that resolves to one actor; $kind = 'concept' stores an explicit concept/faction entry.
+     */
+    public static function setRelationship($npcName, $targetName, $affinity, $type = null, $kind = null) {
         $npcData = self::resolveNpcByName($npcName);
 
         if (!$npcData) {
-            error_log("[REL] Cannot set relationship - NPC not found: $npcName");
+            error_log("[REL] Cannot set relationship - NPC not found: " . (is_array($npcName) ? ($npcName['id'] ?? '?') : $npcName));
             return false;
         }
 
-        $extended = json_decode($npcData['extended_data'] ?? '{}', true) ?: [];
-        $rels = self::normalizeRelationshipMap($extended['relationships'] ?? []);
-
-        // Initialize or update
-        if (!isset($rels[$targetName])) {
-            $rels[$targetName] = ['aff' => 0, 'type' => 'neutral'];
+        $identity = self::resolveTargetIdentity($targetName);
+        if ($kind === 'concept' && is_string($targetName) && in_array($identity['kind'] ?? '', ['unknown'], true) && trim($targetName) !== '') {
+            $identity = ['kind' => 'concept', 'key' => trim($targetName), 'label' => trim($targetName)];
         }
-
-        $rels[$targetName]['aff'] = max(-100, min(100, (int)$affinity));
+        if (!in_array($identity['kind'] ?? '', ['actor', 'player', 'concept'], true)) {
+            error_log("[REL] Cannot set relationship - target is not one typed actor/player/concept");
+            return false;
+        }
 
         // Direct/admin writes may create custom types, but known model aliases are
         // still stored canonically ("romance" becomes "romantic").
+        $storedType = null;
         if ($type !== null && is_string($type) && strlen($type) > 0 && strlen($type) <= 50) {
             $normalizedType = strtolower(trim($type));
-            $rels[$targetName]['type'] = self::TYPE_ALIASES[$normalizedType] ?? $normalizedType;
+            $storedType = self::TYPE_ALIASES[$normalizedType] ?? $normalizedType;
         }
-
-        $extended['relationships'] = $rels;
-        $result = chimRunWithRelationshipExtendedDataWrite(function () use ($npcMaster, $npcData, $extended) {
-            return $npcMaster->updateByArray([
-                'id' => $npcData['id'],
-                '_profile_binding' => $npcData['_profile_binding'] ?? ':',
-                'extended_data' => json_encode($extended, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-            ]);
-        });
-        if ($result !== false && function_exists('chimRelationshipTimelineStamp')) {
-            chimRelationshipTimelineStamp($npcData['profile_owner_npc_id'] ?? $npcData['id']);
-        }
-
-        error_log("[REL] Set $npcName -> $targetName: " . $rels[$targetName]['aff'] .
-                  " (" . $rels[$targetName]['type'] . ")");
-
-        return true;
+        return self::writeTypedEdits($npcData, [[$identity, (int)$affinity, $storedType]], [], true);
     }
 
     /**
      * Adjust relationship by delta (convenience method)
      */
     public static function adjustRelationship($npcName, $targetName, $delta) {
-        $current = self::getRelationship($npcName, $targetName);
-        $newAff = $current['aff'] + $delta;
-        return self::setRelationship($npcName, $targetName, $newAff, $current['type']);
+        $npcData = self::resolveNpcByName($npcName);
+        $identity = self::resolveTargetIdentity($targetName);
+        if (!$npcData || !in_array($identity['kind'] ?? '', ['actor', 'player', 'concept'], true)) { return false; }
+        return self::writeTypedEdits($npcData, [[$identity, (int)$delta, null]]);
     }
 
     /**
@@ -1083,32 +1330,34 @@ PROMPT;
      * @return string Prose context block for director
      */
     public static function buildDirectorContext($npcsInScene = [], $mentionedNpcs = []) {
-        // Combine and dedupe NPC lists
-        $allNpcs = array_unique(array_merge($npcsInScene, $mentionedNpcs));
-        $allNpcs = array_filter($allNpcs, function($n) {
-            $n = trim($n);
-            return !empty($n) && strtolower($n) !== 'player';
-        });
+        // Members may be exact rows, DataCloseRangeActorRoster entries or names. Names resolve only to one
+        // effective actor; ambiguous or unregistered names are skipped rather than borrowing another row.
+        $members = [];
+        foreach (array_merge(self::rosterTargets($npcsInScene), self::rosterTargets($mentionedNpcs)) as $member) {
+            if (!is_array($member)) {
+                $member = trim((string)preg_replace('/\s*\([^)]+\)/', '', (string)$member));
+                if ($member === '' || strtolower($member) === 'player') { continue; }
+            }
+            $identity = self::resolveTargetIdentity($member);
+            if (($identity['kind'] ?? '') !== 'actor' || empty($identity['npc_id'])) { continue; }
+            $members[$identity['key']] = $identity;
+        }
 
-        if (empty($allNpcs)) {
+        if (empty($members)) {
             return "";
         }
 
+        $labelCounts = [];
+        foreach ($members as $identity) {
+            $labelCounts[strtolower($identity['label'])] = ($labelCounts[strtolower($identity['label'])] ?? 0) + 1;
+        }
         $descriptions = [];
 
-        // Clean NPC names (remove status tags)
-        $cleanNpcs = [];
-        foreach ($allNpcs as $npc) {
-            $clean = trim(preg_replace('/\s*\([^)]+\)/', '', $npc));
-            if (!empty($clean)) {
-                $cleanNpcs[] = $clean;
-            }
-        }
-
         // For each NPC, describe their feelings
-        foreach ($cleanNpcs as $npc) {
-            $rels = self::getRelationships($npc);
+        foreach ($members as $sourceKey => $source) {
+            $rels = self::getRelationships((int)$source['npc_id']);
             if (empty($rels)) continue;
+            $npc = self::renderTargetLabel($source, $labelCounts);
 
             $npcDescriptions = [];
 
@@ -1118,23 +1367,21 @@ PROMPT;
                 if ($desc) $npcDescriptions[] = $desc;
             }
 
-            // How this NPC feels about other NPCs in scene
-            foreach ($cleanNpcs as $otherNpc) {
-                if ($otherNpc === $npc) continue;
-                if (isset($rels[$otherNpc])) {
-                    $desc = self::describeFeeling($npc, $otherNpc, $rels[$otherNpc]);
+            // How this NPC feels about other NPCs in scene (typed edges only)
+            foreach ($members as $otherKey => $other) {
+                if ($otherKey === $sourceKey) continue;
+                $rel = self::runtimeEdge($rels, $other);
+                if ($rel !== null) {
+                    $desc = self::describeFeeling($npc, self::renderTargetLabel($other, $labelCounts), $rel);
                     if ($desc) $npcDescriptions[] = $desc;
                 }
             }
 
-            // Subject/topic affinities (anything that's not an NPC name or Player)
-            $knownNames = array_map('strtolower', $cleanNpcs);
-            $knownNames[] = 'player';
-
+            // Subject/topic affinities: only entries explicitly classified as concepts. Unattributed
+            // legacy name entries may be people and stay out of runtime prompts.
             foreach ($rels as $target => $r) {
-                if (in_array(strtolower($target), $knownNames)) continue;
-                // This is a subject/topic affinity
-                $desc = self::describeSubjectFeeling($npc, $target, $r);
+                if (!is_array($r) || ($r['target']['kind'] ?? '') !== 'concept') continue;
+                $desc = self::describeSubjectFeeling($npc, (string)($r['target']['label'] ?? $target), $r);
                 if ($desc) $npcDescriptions[] = $desc;
             }
 

@@ -186,14 +186,17 @@ function chimActorKeyFromReference($source): ?string
     return chimIsActorKey($key) ? $key : null;
 }
 
-// Existing profile rows resolve only through their recorded stable reference, never name or runtime slot.
+// The one physical key of a profile row: its recorded placed reference, otherwise the client-assigned dyn:
+// key stored at registration. Names and runtime slots never produce a key; legacy rows return null.
 function chimNpcRowActorKey(array $row): ?string
 {
     $metadata = is_array($row['metadata'] ?? null)
         ? $row['metadata'] : (json_decode((string)($row['metadata'] ?? ''), true) ?: []);
-    return chimActorKeyFromReference($metadata['refid_source'] ?? '');
+    $key = chimActorKeyFromReference($metadata['refid_source'] ?? '');
+    if ($key !== null) { return $key; }
+    $dynamic = $metadata['actor_key'] ?? null;
+    return is_string($dynamic) && str_starts_with($dynamic, 'dyn:') && chimIsActorKey($dynamic) ? $dynamic : null;
 }
-
 // Thrown by the strict v2 boundaries: client ingress and format-2 serialization. Callers must fail the
 // event explicitly; nothing is downgraded to legacy routing or accepted partially.
 final class ChimEventIdentityException extends InvalidArgumentException
@@ -357,6 +360,19 @@ function chimEventIdentityRoles(array $payload): array
 // Request field 4 carries base64 JSON event metadata (the same field as the player routing snapshot).
 // Returns null for legacy clients, including fields that are not base64 JSON objects, and otherwise the
 // validated audience plus role keys. Throws before anything is written when an opted-in event is invalid.
+// Field index carrying event identity metadata for a request type. bored keeps field 4 as its seed actor
+// and carries identity in field 5; _speech, infonpc_close, world events and player dialogue use field 4.
+function chimEventIdentityFieldIndex(string $requestType): int
+{
+    return strtolower(trim($requestType)) === 'bored' ? 5 : 4;
+}
+
+// Decodes the identity field for a request (see chimEventIdentityFieldIndex()).
+function chimDecodeRequestEventIdentity(array $gameRequest): ?array
+{
+    return chimDecodeEventIdentityField($gameRequest[chimEventIdentityFieldIndex((string)($gameRequest[0] ?? ''))] ?? '');
+}
+
 function chimDecodeEventIdentityField($rawField): ?array
 {
     $rawField = trim((string)$rawField);
@@ -368,29 +384,108 @@ function chimDecodeEventIdentityField($rawField): ?array
     return ['participants' => $participants] + chimEventIdentityRoles($payload);
 }
 
-// Actor key for a registered actor: a placed reference stays authoritative; otherwise the client-assigned
-// dyn: key recorded at registration. Names and runtime FormIDs never produce a key.
-function chimNpcRowPhysicalKey(array $row): ?string
+// Registration of a client-keyed dynamic actor (addnpc/addbgnpc field 45 dyn:). The row is selected by
+// its key only. When the FF runtime slot is still held by another row (a recycled reference), that row
+// only releases the slot: its name, md5 selector, metadata (including its own dyn: key) and history are
+// untouched and it is never adopted. Releasing the slot, binding it to this key's row and creating that
+// row when missing commit together under a table lock; any failure rolls all of it back.
+// $create($key, $refid) must be database-only (createProfile() is); nothing external runs inside.
+// Returns [row, created].
+function chimRegisterDynamicActorRow($db, NpcMaster $npcMaster, string $actorKey, string $incomingRefid, callable $create): array
 {
-    $key = chimNpcRowActorKey($row);
-    if ($key !== null) { return $key; }
-    $metadata = is_array($row['metadata'] ?? null)
-        ? $row['metadata'] : (json_decode((string)($row['metadata'] ?? ''), true) ?: []);
-    $dynamic = $metadata['actor_key'] ?? null;
-    return is_string($dynamic) && str_starts_with($dynamic, 'dyn:') && chimIsActorKey($dynamic) ? $dynamic : null;
+    if (!str_starts_with($actorKey, 'dyn:') || !chimIsActorKey($actorKey)) {
+        throw new InvalidArgumentException('Dynamic registration requires a dyn: actor key');
+    }
+    if ($db->execQuery('BEGIN') === false) { throw new RuntimeException('Could not start dynamic actor registration'); }
+    try {
+        if ($db->execQuery('LOCK TABLE public.core_npc_master IN SHARE ROW EXCLUSIVE MODE') === false) {
+            throw new RuntimeException('Could not lock NPC identities');
+        }
+        $row = $npcMaster->getByActorKey($actorKey);
+        if ($incomingRefid !== '') {
+            $refid = $db->escape($incomingRefid);
+            // A keyless displaced row records its current selector so later edits never fall back to a
+            // name hash (NpcMaster::identityMd5); a dyn:-keyed row keeps md5 of its own key.
+            if ($db->execQuery("UPDATE public.core_npc_master SET refid = NULL,
+                    metadata = CASE WHEN COALESCE(metadata->>'actor_key', '') LIKE 'dyn:%' OR md5 IS NULL THEN metadata
+                        ELSE jsonb_set(CASE WHEN jsonb_typeof(metadata) = 'object' THEN metadata ELSE '{}'::jsonb END,
+                            '{detached_selector}', to_jsonb(md5::text)) END
+                WHERE upper(refid) = upper('{$refid}') AND id <> " . (int)($row['id'] ?? 0) . "
+                  AND COALESCE(metadata->>'refid_source', '') = ''") === false) {
+                throw new RuntimeException('Could not release a recycled dynamic reference');
+            }
+            if ($row && strtoupper((string)($row['refid'] ?? '')) !== strtoupper($incomingRefid)
+                && $db->execQuery("UPDATE public.core_npc_master SET refid = '{$refid}' WHERE id = " . (int)$row['id']) === false) {
+                throw new RuntimeException('Could not bind the dynamic reference');
+            }
+        }
+        $created = false;
+        if (!$row) {
+            $create($actorKey, $incomingRefid);
+            $row = $npcMaster->getByActorKey($actorKey);
+            if (!$row) { throw new RuntimeException('Dynamic actor profile was not created'); }
+            $created = true;
+        }
+        if ($db->execQuery('COMMIT') === false) { throw new RuntimeException('Could not commit dynamic actor registration'); }
+        return [$npcMaster->getByActorKey($actorKey), $created];
+    } catch (Throwable $error) {
+        $db->execQuery('ROLLBACK');
+        throw $error;
+    }
 }
 
-// Registration metadata may carry the client-assigned dyn: key of a dynamic actor in the same field.
-// Absent means legacy; a present value must be a canonical dyn: key or the registration is rejected.
-function chimDecodeRegistrationActorKey($rawField): ?string
+// addnpc/addbgnpc field 45 (after field 44 refid_source) carries the actor_key. Empty means legacy. A ref: key must
+// equal the key of the verified stable source; a dyn: key is only valid for an actor without one.
+// Returns the accepted key or null, and throws when the registration must be skipped.
+function chimRegistrationActorKey($rawField, ?string $referenceSource): ?string
 {
-    $rawField = trim((string)$rawField);
-    $decoded = $rawField === '' ? false : base64_decode($rawField, true);
-    $payload = is_string($decoded) && $decoded !== '' ? json_decode($decoded, true) : null;
-    if (!is_array($payload) || array_is_list($payload) || !array_key_exists('actor_key', $payload)) { return null; }
-    $key = $payload['actor_key'];
-    if (!is_string($key) || !str_starts_with($key, 'dyn:') || !chimIsActorKey($key)) {
+    $key = trim((string)$rawField);
+    if ($key === '') { return null; }
+    if (!chimIsActorKey($key) || $key === CHIM_ACTOR_KEY_PLAYER || $key === CHIM_ACTOR_KEY_NARRATOR) {
+        throw new ChimEventIdentityException(ChimEventIdentityException::ROLE_INVALID . ':actor_key');
+    }
+    $sourceKey = $referenceSource ? chimActorKeyFromReference($referenceSource) : null;
+    if (str_starts_with($key, 'ref:') ? $key !== $sourceKey : $sourceKey !== null) {
         throw new ChimEventIdentityException(ChimEventIdentityException::ROLE_INVALID . ':actor_key');
     }
     return $key;
+}
+// SpawnAgent (AIAgentAIMind.psc) reports `spawned@<display name>@<signed FormID>`. Returns the 8-hex RefID only
+// for that exact name; anything else is not a spawn of this actor.
+function chimSpawnStatusRefid(string $data, string $name): ?string
+{
+    $prefix = "spawned@{$name}@";
+    if ($name === '' || !str_starts_with($data, $prefix)) { return null; }
+    $formId = trim(substr($data, strlen($prefix)));
+    if (!preg_match('/^-?\d{1,10}$/D', $formId)) { return null; }
+    $refid = sprintf('%08X', ((int)$formId) & 0xFFFFFFFF);
+    return $refid === '00000000' ? null : $refid;
+}
+
+// Distinct spawn RefIDs for $name after an eventlog row, in first-seen order. Several RefIDs mean several actors.
+function chimSpawnStatusRefids($db, string $name, int $afterRowId = 0): array
+{
+    $prefix = $db->escape("spawned@{$name}@");
+    $rows = $db->fetchAll("SELECT data FROM eventlog WHERE rowid > " . max(0, $afterRowId) . "
+        AND type = 'status_msg' AND POSITION('{$prefix}' IN data) = 1 ORDER BY rowid ASC");
+    $refids = [];
+    foreach ((array)$rows as $row) {
+        $refid = chimSpawnStatusRefid((string)($row['data'] ?? ''), $name);
+        if ($refid !== null) { $refids[$refid] = true; }
+    }
+    return array_keys($refids);
+}
+
+// The registered row of a reported spawn: the row now holding that RefID under the requested name.
+// state: bound | unregistered (no row yet) | stale (RefID held by another name or duplicated).
+function chimSpawnedActorRow(NpcMaster $npcMaster, string $refid, string $name): array
+{
+    try {
+        $row = $npcMaster->getByRefId($refid);
+    } catch (RuntimeException $duplicate) {
+        return ['state' => 'stale', 'row' => null];
+    }
+    if (!$row) { return ['state' => 'unregistered', 'row' => null]; }
+    if (trim((string)($row['npc_name'] ?? '')) !== trim($name)) { return ['state' => 'stale', 'row' => null]; }
+    return ['state' => 'bound', 'row' => $row];
 }

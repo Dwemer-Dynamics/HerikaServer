@@ -214,7 +214,8 @@ function aiProfileGenerate(array $options): array
         $selectedEvents = [];
     }
 
-    if ($name === '') {
+    $npcId = (int)($options['npc_id'] ?? 0);
+    if ($name === '' && $npcId <= 0) {
         return [
             'done' => false,
             'error' => 'Missing NPC name.',
@@ -223,7 +224,18 @@ function aiProfileGenerate(array $options): array
     }
 
     $npcMaster = new NpcMaster();
-    $currentNpcData = $npcMaster->getByName($name);
+    // Exact selected row when the caller has one; a bare name must be a unique row (namesakes are refused).
+    $currentNpcData = $npcId > 0 ? $npcMaster->getById($npcId) : chimDynamicProfileUniqueRow($npcMaster, $name);
+    if ($currentNpcData) {
+        require_once __DIR__ . '/../../lib/core/npc_reference.php';
+        require_once __DIR__ . '/../../lib/core/npc_profile_sharing.php';
+        $name = (string)$currentNpcData['npc_name'];
+        // Captured before the model call; rechecked under row locks before the write.
+        $expectedRow = ['id' => (int)$currentNpcData['id'], 'npc_name' => $name,
+            '_profile_binding' => chimNpcProfileBinding($currentNpcData),
+            '_actor_key' => (string)chimNpcRowActorKey($currentNpcData),
+            '_timeline' => function_exists('chimRechatTimelineEpoch') ? chimRechatTimelineEpoch() : null];
+    }
     if (!$currentNpcData) {
         return [
             'done' => false,
@@ -280,8 +292,9 @@ function aiProfileGenerate(array $options): array
 
     $dynamicBiography = buildDynamicBiography($GLOBALS);
     $extendedData = $npcMaster->getExtendedData($currentNpcData);
-    if (isset($extendedData['middle_term_memory']) && is_array($extendedData['middle_term_memory']) && !empty($extendedData['middle_term_memory'])) {
-        $middle_term_memory = end($extendedData['middle_term_memory']);
+    // Only a digest whose sources all belong to this actor's current profile group.
+    if ($mtmDigest = chimMiddleTermLatestDigest($currentNpcData)) {
+        $middle_term_memory = $mtmDigest['text'];
         $dynamicBiography .= "\n\n<middle_term_memory>\nPast events\n{$middle_term_memory}\n</middle_term_memory>";
     }
 
@@ -358,7 +371,13 @@ function aiProfileGenerate(array $options): array
         ];
     }
 
-    saveDynamicProfileUpdates($name, $parsedFields, $db, false, $source);
+    if (!saveDynamicProfileUpdates($expectedRow, $parsedFields, $db, false, $source)) {
+        return [
+            'done' => false,
+            'error' => 'The NPC profile changed while generating; nothing was saved.',
+            'error_type' => 'stale_profile',
+        ];
+    }
 
     Logger::info("AI Profile Generation: Successfully generated profile for NPC '{$name}' with {$parsedFieldCount} fields");
 

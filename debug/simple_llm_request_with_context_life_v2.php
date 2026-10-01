@@ -64,6 +64,7 @@ require_once $enginePath . 'lib/core/llm_connector.class.php';
 require_once $enginePath . 'lib/core/tts_connector.class.php';
 require_once $enginePath . 'lib/lazy_xml.php';
 require_once $enginePath . 'debug/background_action_handler.php';
+require_once $enginePath . 'lib/background_life_encounters.php';
 
 // ─── Database ─────────────────────────────────────────────────────────────────
 
@@ -191,10 +192,15 @@ $npcMaster = new NpcMaster();
 $connector = new LLMConnector();
 
 $currentNpcData = $npcMaster->getByPromptIdentifier($npcName);
-if (!$currentNpcData) { return; }
+if (!$currentNpcData) {
+    error_log("[BGL RUN] NPC not found: {$npcName}");
+    return;
+}
 $workerNpcId = (int)$currentNpcData['id'];
 $workerProfileBinding = $currentNpcData['_profile_binding'];
 $npcName = $currentNpcData['npc_name'];
+// Issued-action reads for this worker: the exact row's key when keyed (NULL legacy rows not adopted), else the name.
+$GLOBALS['CHIM_BGL_ISSUED_OWNER'] = chimIssuedOwnerClause($GLOBALS['db'], chimNpcRowActorKey($currentNpcData), (string)$currentNpcData['npc_name']);
 $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] = $currentNpcData;
 $currentConnectorData = $connector->getById($GLOBALS['CORE_CONNECTOR_BGL']);
 
@@ -206,6 +212,10 @@ $npcMaster->setOldGlobalsFromCurrentNpcData($currentNpcData);
 
 $extdata = $npcMaster->getExtendedData($currentNpcData);
 $metadata = $npcMaster->getMetadata($currentNpcData);
+if (chimBglBoolean($metadata['stats']['is_dead'] ?? false)) {
+    error_log("[BGL RUN] {$npcName} is dead, skipping Background Life processing.");
+    return;
+}
 
 
 // Guard, if background_life_last_updated_ec exceeds 2, skip processing to avoid infinite loops or repeated errors
@@ -231,6 +241,15 @@ $momentum = time();
 
 $gameRequest = ['inputtext', '0', $last_gamets, $npcName];
 $npcNameEsc = $db->escape($npcName);
+// Speech the worker's selected physical row witnessed (captured speaker/audience keys); names never match.
+require_once $enginePath . 'lib/eventlog_helper.php';
+require_once $enginePath . 'lib/core/npc_reference.php';
+$bglSpeechSql = chimBuildSpeechContextWhereClause($db, $GLOBALS['HERIKA_NAME'], $currentNpcData);
+$bglMemorySql = dataGetMemoryCompanionConditionSql($GLOBALS['HERIKA_NAME'], 'companions', 'classifier', $currentNpcData);
+chimBglRetryPendingEncounterCommands($db, (int)$currentNpcData['id']);
+if (chimBglEncounterIsActiveForNpc($db, (int)$currentNpcData['id'])) {
+    return;
+}
 
 
 // Guard: Avoid running if game is paused.
@@ -245,7 +264,7 @@ if (isset($extdata["background_life_last_run"]) && $extdata["background_life_las
 
 $lastIssuedAction = $db->fetchOne(
     "SELECT gamets, action,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEsc' 
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']}
      and gamets is not null
      ORDER BY gamets DESC, ts ASC"
 );
@@ -255,7 +274,7 @@ $lastIssuedAction = $db->fetchOne(
 $spreadRumorsCooldownGamets = 48 / GAMETS_TO_HOURS;
 $recentSpreadRumor = $db->fetchOne(
     "SELECT gamets FROM actions_issued
-         WHERE actorname='$npcNameEsc'
+         WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']}
              AND action='SpreadRumors'
              AND gamets > ($last_gamets - $spreadRumorsCooldownGamets)
          ORDER BY gamets DESC, ts DESC
@@ -291,7 +310,7 @@ if (checkLastCallsFor($GLOBALS['HERIKA_NAME'])) {
 
 $lastInteractionRow = $db->fetchOne(
     "SELECT max(gamets) AS gamets FROM speech
-     WHERE speaker='$npcNameEsc' OR listener='$npcNameEsc' OR companions LIKE '%|$npcNameEsc|%'"
+     WHERE {$bglSpeechSql}"
 );
 
 if (empty($lastInteractionRow['gamets'])) {
@@ -368,7 +387,7 @@ if ($GUARD_TRAVELTO) {
 
     $actionsRows = $db->fetchAll(
         "SELECT action,actorname,gamets,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEscDb' 
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']}
        AND gamets > $lastItGamets
      ORDER BY gamets DESC, ts DESC
      LIMIT 10 OFFSET 0"
@@ -450,6 +469,7 @@ if ($GUARD_TRAVELTO) {
                         'action' => 'TeleportTo',
                         'fullcall' => "TeleportTo:{$candidateLocation['name']}:Teleporting to resolve stuck NPC",
                         'actorname' => $npcName,
+                        'actor_key' => chimNpcRowActorKey($currentNpcData),
                         'ts' => $last_ts,
                         'gamets' => $last_gamets,
                         'localts' => time(),
@@ -491,6 +511,7 @@ if ($GUARD_TRAVELTO) {
                             'action' => 'TeleportTo',
                             'fullcall' => "TeleportTo:{$candidateLocation['name']}:Teleporting to resolve stuck NPC",
                             'actorname' => $npcName,
+                            'actor_key' => chimNpcRowActorKey($currentNpcData),
                             'ts' => $last_ts,
                             'gamets' => $last_gamets,
                             'localts' => time(),
@@ -542,6 +563,7 @@ if ($GUARD_TRAVELTO) {
                         'action' => 'TeleportTo',
                         'fullcall' => "TeleportTo:{$targetNpcName}:Teleporting to resolve stuck NPC",
                         'actorname' => $npcName,
+                        'actor_key' => chimNpcRowActorKey($currentNpcData),
                         'ts' => $last_ts,
                         'gamets' => $last_gamets,
                         'localts' => time(),
@@ -582,10 +604,11 @@ $dynamicBiography = preg_replace('/<spells>.*?<\/spells>/s', '', $dynamicBiograp
 
 // ──────────────────────────────────────────────────────────────────────────────
 
-if (isset($extdata['middle_term_memory'])) {
-    $middleTermMemory = end($extdata['middle_term_memory']);
-    $middleTerm_memoryTs = array_keys($extdata['middle_term_memory']);
-    $middleTermMemorygameTs = end($middleTerm_memoryTs);
+// The usable digest and its hightide; an entry this group cannot read neither prompts nor hides summaries.
+$middleTermMemorygameTs = 0;
+if ($mtmDigest = chimMiddleTermLatestDigest($currentNpcData)) {
+    $middleTermMemory = $mtmDigest['text'];
+    $middleTermMemorygameTs = $mtmDigest['gamets'];
     $dynamicBiography .= "\n\n<middle_term_memory>\nPast events\n{$middleTermMemory}\n</middle_term_memory>";
 }
 
@@ -646,7 +669,7 @@ if ($middleTermMemorygameTs < ($lastItGamets + (24 / GAMETS_TO_HOURS)))  {
     error_log("[BGL] Last middle term memory is more recent than 24 hours from the last interaction with the player. Appending last memory to history.");
     $lastMemory=$db->fetchOne("select * from memory_summary
      where gamets_truncated>$middleTermMemorygameTs 
-     and companions like '%$npcNameEsc%' 
+     and {$bglMemorySql}
      and summary is not null
      order by gamets_truncated asc limit 1");
     if ($lastMemory) {
@@ -662,7 +685,7 @@ if ($middleTermMemorygameTs < ($lastItGamets + (24 / GAMETS_TO_HOURS)))  {
 
 $lastLocRow = $db->fetchOne(
     "SELECT location, gamets FROM speech
-     WHERE speaker='$npcNameEsc' OR listener='$npcNameEsc' OR companions LIKE '%|$npcNameEsc|%'
+     WHERE {$bglSpeechSql}
      ORDER BY gamets DESC, ts DESC"
 );
 
@@ -737,7 +760,7 @@ foreach (array_reverse($innerChatEntryRows) as $row) {
 
 $actionsRows = $db->fetchAll(
     "SELECT action,actorname,gamets,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEscDb' and action in ('TravelTo','MoveTo')
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} and action in ('TravelTo','MoveTo')
        AND gamets > $lastItGamets
      ORDER BY gamets DESC, ts DESC
      LIMIT 16 OFFSET 0"
@@ -892,6 +915,14 @@ if (isset($metadata['last_inventory_update_gamets'])) {
     ];
 }
 
+foreach (chimBglEncounterContextEvents($db, (int)$currentNpcData['id'], (float)$lastItGamets) as $encounterEvent) {
+    $bgEvents[] = [
+        'gamets' => $encounterEvent['gamets'],
+        'content' => $encounterEvent['narrative'] . ' Personal outcome: ' . $encounterEvent['applied_outcome'] . '.',
+        'type' => 'background_combat',
+    ];
+}
+
 // ─── Rumors Near Current Location ────────────────────────────────────────────
 
 if ($LAST_REPORTED_LOCATION) {
@@ -966,7 +997,7 @@ $lastMinuteNotes = "\n";
 $fortyEightHoursAgo = $last_gamets - 48 / GAMETS_TO_HOURS;
 $actionIdleRows = $db->fetchAll(
     "SELECT action,actorname,gamets,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEscDb' and action in ('Idle')
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} and action in ('Idle')
        AND gamets > $fortyEightHoursAgo
      ORDER BY gamets DESC, ts DESC
      LIMIT 10 OFFSET 0"
@@ -1024,7 +1055,7 @@ $lastMinuteNotes .= "\n";
 $fortyEightHoursAgo = $last_gamets - 48 / GAMETS_TO_HOURS;
 $actionMoveTo = $db->fetchAll(
     "SELECT action,actorname,gamets,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEscDb' and action in ('MoveTo')
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} and action in ('MoveTo')
        AND gamets > $fortyEightHoursAgo
      ORDER BY gamets DESC, ts DESC
      LIMIT 10 OFFSET 0"
@@ -1292,8 +1323,9 @@ Rules:
             $dynamicBiography = buildDynamicBiography($GLOBALS, true, true, true);
             $dynamicBiography = $npcMaster->appendBackgroundLifeGoals($dynamicBiography, $currentNpcData);
 
-            if (isset($extdata['middle_term_memory'])) {
-                $middleTermMemory = end($extdata['middle_term_memory']);
+            // Only a digest whose sources all belong to this actor's current profile group.
+            if ($mtmDigest = chimMiddleTermLatestDigest($currentNpcData)) {
+                $middleTermMemory = $mtmDigest['text'];
                 $dynamicBiography .= "\n\n<middle_term_memory>\nPast events\n{$middleTermMemory}\n</middle_term_memory>";
             }
             $history .= "\nThe Narrator: $npcName produced/consumed items while idle: $actionTextFinal $actionTextDescriptionFinal. Reasoning: $reasoning. Inventory will get updated next turn.";
@@ -1360,7 +1392,7 @@ if ($lastBackgroundAction['action'] === 'BuyItem' || $lastBackgroundAction['acti
 
 $localHoursPassed = round($last_gamets - (1 / GAMETS_TO_HOURS), 2);
 
-$tradingGuard = $db->fetchAll("select * from actions_issued where actorname='$npcNameEscDb' and action in ('BuyItem','SellItem','SellService') and gamets>$localHoursPassed order by gamets desc limit 5");
+$tradingGuard = $db->fetchAll("select * from actions_issued where {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} and action in ('BuyItem','SellItem','SellService') and gamets>$localHoursPassed order by gamets desc limit 5");
 if (sizeof($tradingGuard) > 3) {
     error_log(date("YMd H:i:s") . " [BGL RUN] HINT bypass Trading actions: because transactions>=3 in the last hour");
     $bypassTradingActions = true;
@@ -1683,6 +1715,9 @@ Note:
 PROMPT3;
 }
 
+$step2Content .= chimBglCombatActionPrompt($currentNpcData, (float)$last_gamets, $npcMaster, $db);
+$step2Content .= chimBglLootActionPrompt($currentNpcData, $npcMaster, $db);
+
 
 // Hinter
 
@@ -1890,7 +1925,36 @@ if (!empty($parsed['action'])) {
             handleSellServiceAction($actionArg, $currentNpcData, $GLOBALS['HERIKA_NAME'], $last_ts, $last_gamets, $momentum, $db);
             unset($parsed['notification']);
             unset($parsed['rumor']);
-
+            break;
+        case 'AttackNPC':
+            if (!chimBglHandleAttackNpcAction(
+                (string)$actionArg,
+                $currentNpcData,
+                (string)$parsed['reason'],
+                (float)$last_gamets,
+                (int)$last_ts,
+                (string)$LAST_REPORTED_LOCATION,
+                $npcMaster,
+                $db,
+                $connectionHandler
+            )) {
+                $recordDiaryEntry = false;
+            }
+            unset($parsed['notification'], $parsed['rumor']);
+            break;
+        case 'LootEncounter':
+            if (!chimBglHandleLootEncounterAction(
+                (int)$actionArg,
+                $currentNpcData,
+                (float)$last_gamets,
+                (int)$last_ts,
+                $npcMaster,
+                $db,
+                $connectionHandler
+            )) {
+                $recordDiaryEntry = false;
+            }
+            unset($parsed['notification'], $parsed['rumor']);
             break;
         case 'Continue':
             error_log("[BGL RUN] Chosen action: Continue. No new action will be issued. Reason: {$parsed['reason']}");
@@ -1948,8 +2012,13 @@ if ($innerThoughtBuffer && $recordInnerThoughts) {
         'location' => $lastEventParsed['location'] ?? null,
         'party' => '',
     ]);
+    // Throttle against this physical author's own notes; legacy unassigned rows only for unkeyed workers.
+    $journalAuthorKey = chimNpcRowActorKey($currentNpcData);
     $cnName = $db->escape($GLOBALS['HERIKA_NAME']);
-    $checkLatestDiaryEntry = $db->fetchOne("SELECT * FROM diarylog WHERE topic='Journal Note' AND people='$cnName' ORDER BY gamets DESC, ts DESC LIMIT 1");
+    $journalOwner = $journalAuthorKey !== null
+        ? "author_key='" . $db->escape($journalAuthorKey) . "'"
+        : "author_key IS NULL AND people='$cnName'";
+    $checkLatestDiaryEntry = $db->fetchOne("SELECT * FROM diarylog WHERE topic='Journal Note' AND $journalOwner ORDER BY gamets DESC, ts DESC LIMIT 1");
     $latestDiaryGamets = (float) $checkLatestDiaryEntry['gamets'];
     if ($last_gamets - $latestDiaryGamets < (1 / GAMETS_TO_HOURS) * 4) {
         // If the last diary entry was less than 4 hours ago, we skip adding a new diary entry to avoid cluttering the diary with too many entries in a short time.
@@ -1964,6 +2033,7 @@ if ($innerThoughtBuffer && $recordInnerThoughts) {
             'content' => convert_gamets2skyrim_long_date($last_gamets) . "\n" . trim($innerThoughtBuffer),
             'tags' => 'Auto-diary, backgroundlife',
             'people' => $GLOBALS['HERIKA_NAME'],
+            'author_key' => $journalAuthorKey,
             'location' => $lastEventParsed['location'] ?? null,
             'sess' => $momentum,
             'localts' => time(),

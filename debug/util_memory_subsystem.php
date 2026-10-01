@@ -126,7 +126,7 @@ function resyncMemorySummaries($db, $forceAll = false, $onlyFix = false)
     echo "Completing companions field (method 1)..." . PHP_EOL;
     $pfi      = ($GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["AUTO_CREATE_SUMMARY_INTERVAL"] + 0) * 100000;
 
-    $missingCompanions = $db->fetchAll("SELECT * FROM memory_summary WHERE (companions IS NULL OR companions = '') and classifier<>'diary' ORDER BY gamets_truncated ASC");
+    $missingCompanions = $db->fetchAll("SELECT * FROM memory_summary WHERE (companions IS NULL OR companions = '') and classifier<>'diary' and audience_keys IS NULL and COALESCE(partition_key, 'legacy') = 'legacy' ORDER BY gamets_truncated ASC");
     $n=0;
     foreach ($missingCompanions as $row) {
         $peopleRows = $db->fetchAll("SELECT CASE WHEN party='[]' THEN people ELSE COALESCE(people, party) END AS people FROM eventlog WHERE gamets > {$row["gamets_truncated"]}::bigint - $pfi AND gamets <= {$row["gamets_truncated"]}::bigint + $pfi");
@@ -166,7 +166,7 @@ function resyncMemorySummaries($db, $forceAll = false, $onlyFix = false)
     // --- Fix companions field (second method) ---
     echo "Completing companions field (method 2)..." . PHP_EOL;
     $n=0;
-    $missingCompanions2 = $db->fetchAll("SELECT * FROM memory_summary WHERE (companions IS NULL OR companions = '') and classifier<>'diary' ORDER BY gamets_truncated ASC");
+    $missingCompanions2 = $db->fetchAll("SELECT * FROM memory_summary WHERE (companions IS NULL OR companions = '') and classifier<>'diary' and audience_keys IS NULL and COALESCE(partition_key, 'legacy') = 'legacy' ORDER BY gamets_truncated ASC");
     foreach ($missingCompanions2 as $row) {
         $peopleRow = $db->fetchOne("SELECT STRING_AGG(DISTINCT speaker || '|' || listener, '|') AS people FROM public.memory_v WHERE gamets > {$row["gamets_truncated"]}::bigint - $pfi AND gamets <= {$row["gamets_truncated"]}::bigint + $pfi");
         $npcs      = [];
@@ -266,12 +266,11 @@ function syncIndividualMemorySummaries($db, $connectionHandler = null, $maxBatch
         $pfi = 100000;
     }
 
-    $allNpcs = $db->fetchAll("SELECT id, npc_name, core, npc_static_bio, personality, goals, speechstyle, extended_data FROM core_npc_master WHERE npc_name IS NOT NULL ORDER BY npc_name ASC");
+    $allNpcs = $db->fetchAll("SELECT id, npc_name, core, npc_static_bio, personality, goals, speechstyle, extended_data, metadata, refid FROM core_npc_master WHERE npc_name IS NOT NULL ORDER BY npc_name ASC, id ASC");
     $enabledNpcs = [];
+    // Rows are principals by stable key, never by name: a physical NPC named "The Narrator" is eligible,
+    // while the reserved Narrator profile has no physical key and is skipped below with other unkeyed rows.
     foreach ($allNpcs as $npcRow) {
-        if (($npcRow["npc_name"] ?? '') === "The Narrator") {
-            continue;
-        }
         if (isNpcIndividualMemoryEnabled($npcRow)) {
             $enabledNpcs[] = $npcRow;
         }
@@ -332,47 +331,30 @@ function syncIndividualMemorySummaries($db, $connectionHandler = null, $maxBatch
             continue;
         }
 
-        $npcEsc = $db->escape($npcName);
-        $lastScoped = $db->fetchOne("SELECT COALESCE(MAX(gamets_truncated), 0) AS max_gamets FROM memory_summary WHERE scope='$npcEsc'");
+        // A keyed row summarizes only global summaries whose exact audience includes its own physical key
+        // (not linked keys), so every source was witnessed by it; linked references read the result through
+        // key expansion while linked and lose it on unlink. Scope and partition are that stable key; the
+        // name is a label only. Unkeyed (legacy) rows get no new individual summaries: their legacy
+        // scope=name rows stay stored but nothing is attributed to them by a name.
+        require_once __DIR__ . '/../lib/core/npc_reference.php';
+        $ownKey = chimNpcRowActorKey($npcRow);
+        if ($ownKey === null) {
+            continue;
+        }
+        $ownKeyEsc = $db->escape($ownKey);
+        $individualPartition = 'individual:' . $ownKey;
+        $partitionSql = "scope='$ownKeyEsc' AND partition_key='" . $db->escape($individualPartition) . "'";
+        $lastScoped = $db->fetchOne("SELECT COALESCE(MAX(gamets_truncated), 0) AS max_gamets FROM memory_summary WHERE $partitionSql");
         $lastScopedGamets = intval($lastScoped["max_gamets"] ?? 0);
 
-        // Individual summaries are selected by NPC presence in source events/dialogue windows,
-        // not by text mention checks in global packed summaries.
         $pendingRows = $db->fetchAll("
             SELECT ms.rowid, ms.uid, ms.gamets_truncated, ms.summary, ms.packed_message
             FROM memory_summary ms
             WHERE ms.summary IS NOT NULL
               AND (ms.scope IS NULL OR ms.scope='global')
               AND ms.gamets_truncated > $lastScopedGamets
-              AND (
-                    EXISTS (
-                        SELECT 1
-                        FROM eventlog ev
-                        WHERE ev.gamets > ms.gamets_truncated - $pfi
-                          AND ev.gamets <= ms.gamets_truncated + $pfi
-                          AND (
-                                (CASE
-                                    WHEN COALESCE(ev.party, '[]') = '[]' THEN COALESCE(ev.people, '')
-                                    ELSE COALESCE(ev.people, ev.party)
-                                 END) ILIKE '%|$npcEsc|%'
-                                OR
-                                (CASE
-                                    WHEN COALESCE(ev.party, '[]') = '[]' THEN COALESCE(ev.people, '')
-                                    ELSE COALESCE(ev.people, ev.party)
-                                 END) ILIKE '%$npcEsc%'
-                              )
-                    )
-                    OR EXISTS (
-                        SELECT 1
-                        FROM memory_v mv
-                        WHERE mv.gamets > ms.gamets_truncated - $pfi
-                          AND mv.gamets <= ms.gamets_truncated + $pfi
-                          AND (
-                                LOWER(COALESCE(mv.speaker, '')) = LOWER('$npcEsc')
-                                OR LOWER(COALESCE(mv.listener, '')) = LOWER('$npcEsc')
-                              )
-                    )
-                  )
+              AND ms.audience_keys IS NOT NULL
+              AND ms.audience_keys @> ARRAY['$ownKeyEsc']::text[]
             ORDER BY ms.gamets_truncated ASC, ms.rowid ASC
             LIMIT 500
         ");
@@ -425,7 +407,7 @@ function syncIndividualMemorySummaries($db, $connectionHandler = null, $maxBatch
                 break;
             }
 
-            $previousMemoryReq = $db->fetchOne("SELECT summary FROM memory_summary WHERE scope='$npcEsc' AND summary IS NOT NULL ORDER BY gamets_truncated DESC, rowid DESC LIMIT 1");
+            $previousMemoryReq = $db->fetchOne("SELECT summary FROM memory_summary WHERE $partitionSql AND summary IS NOT NULL ORDER BY gamets_truncated DESC, rowid DESC LIMIT 1");
             $previousMemory = trim((string)($previousMemoryReq["summary"] ?? ''));
 
             $prompt = [];
@@ -458,8 +440,11 @@ function syncIndividualMemorySummaries($db, $connectionHandler = null, $maxBatch
                     'classifier' => 'individual',
                     'uid' => $uidToUse,
                     'companions' => "|{$npcName}|",
-                    'scope' => $npcName,
-                    'tags' => $tagsCol
+                    'scope' => $ownKey,
+                    'tags' => $tagsCol,
+                    'audience_keys' => '{' . json_encode($ownKey, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . '}',
+                    'partition_key' => $individualPartition,
+                    'source_refs' => json_encode(array_map(static fn($entry) => ['t' => 'memory_summary', 'id' => (int)$entry['rowid']], $batch)),
                 )
             );
 
@@ -821,7 +806,7 @@ Note: Memories are stored in memory_summary table, which holds info from events/
 
                 error_log("Using connector {$currentConnectorData["driver"]}/{$currentConnectorData["model"]}");
 
-                $results_query = "select gamets_truncated,packed_message,uid,classifier,rowid,companions from memory_summary where (gamets_truncated>{$maxRow} or summary is null)  order by gamets_truncated asc ";
+                $results_query = "select gamets_truncated,packed_message,uid,classifier,rowid,companions,partition_key from memory_summary where (gamets_truncated>{$maxRow} or summary is null)  order by gamets_truncated asc ";
                 $results       = $db->query($results_query);
 
                 $toUpdate = [];
@@ -835,7 +820,9 @@ Note: Memories are stored in memory_summary table, which holds info from events/
                     }
                 }
 
-                $prevMemory = $db->fetchOne("SELECT gamets_truncated, packed_message,  uid, classifier, rowid,companions,summary FROM memory_summary WHERE gamets_truncated < {$row["gamets_truncated"]} ORDER BY gamets_truncated DESC LIMIT 1");
+                // The previous summary comes from the same exact-audience partition only, never a global chain.
+                $prevPartitionEsc = $db->escape((string)($row["partition_key"] ?? '') !== '' ? $row["partition_key"] : 'legacy');
+                $prevMemory = $db->fetchOne("SELECT gamets_truncated, packed_message,  uid, classifier, rowid,companions,summary FROM memory_summary WHERE gamets_truncated < {$row["gamets_truncated"]} AND COALESCE(partition_key, 'legacy') = '$prevPartitionEsc' AND (scope IS NULL OR scope='global') ORDER BY gamets_truncated DESC LIMIT 1");
                 // Summarization logic begins
                 if ($row["classifier"] == "diary") {
                     $TEST_TEXT = $row["packed_message"];

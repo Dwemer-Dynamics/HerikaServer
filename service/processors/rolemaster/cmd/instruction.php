@@ -101,8 +101,8 @@ if (!isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]) ) {
             $historyData .= "Nearby eligible actors: " . implode(", ", array_values($allowedActorMap)) . "\n\n";
         }
 
-        // Build relationship context for these NPCs
-        $relContext = RelationshipManager::buildDirectorContext($nearbyNpcsList);
+        // Build relationship context from the captured roster's exact rows (same filters as above).
+        $relContext = RelationshipManager::buildDirectorContext(DataCloseRangeActorRoster($isBoredInstruction));
         if (!empty($relContext)) {
             $historyData .= "\n" . $relContext . "\n";
         }

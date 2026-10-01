@@ -324,6 +324,28 @@ if (isset($_POST["animation"])) {
     if (isset($_GET["table"]) && ($_GET["table"] == "responselog")) {
         $results = $db->fetchAll("select  A.*,ROWID FROM responselog a order by ROWID asc");
         echo "<h1 class='my-2'>Response Queue</h1>";
+        // Readable view: a line's trailing base64 response-identity field is shown as its decoded actor and
+        // listener keys. The stored wire text is unchanged and stays available through the raw view.
+        $rawResponseQueue = !empty($_GET['raw']);
+        echo $rawResponseQueue
+            ? "<p><a href='index.php?table=responselog'>Show readable view</a></p>"
+            : "<p><a href='index.php?table=responselog&amp;raw=1'>Show raw stored lines (diagnostics)</a></p>";
+        if (!$rawResponseQueue && is_array($results)) {
+            require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."core".DIRECTORY_SEPARATOR."npc_reference.php");
+            require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."core".DIRECTORY_SEPARATOR."response_identity.php");
+            foreach ($results as &$queueRow) {
+                $fields = explode('|', (string)($queueRow['text'] ?? ''));
+                $identity = count($fields) >= 4 ? chimDecodeResponseIdentityField(end($fields)) : null;
+                if ($identity !== null) {
+                    array_pop($fields);
+                    $queueRow['text'] = implode('|', $fields);
+                }
+                $queueRow['identity'] = $identity === null ? '' : trim(
+                    'actor: ' . ($identity['actor']['id'] ?? '') . ($identity['listener'] !== null ? '; listener: ' . ($identity['listener']['id'] ?? '') : '')
+                    . (count($identity['targets']) ? '; targets: ' . count($identity['targets']) : ''));
+            }
+            unset($queueRow);
+        }
         print_array_as_table($results);
     }
 

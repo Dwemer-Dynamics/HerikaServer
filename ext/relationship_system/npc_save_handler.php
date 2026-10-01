@@ -22,6 +22,11 @@ if (!class_exists('RelationshipManager')) {
     require_once $GLOBALS["ENGINE_PATH"] . "lib/relationship_manager.php";
 }
 
+if (!class_exists('ChimRelationshipFormConflict')) {
+    /** A stale relationship form (stored target or extended_data changed since it was opened). */
+    class ChimRelationshipFormConflict extends RuntimeException {}
+}
+
 // Only process if relationships_jsonb was submitted
 if (isset($_POST['relationships_jsonb']) && $_POST['relationships_jsonb'] !== '') {
     $relJsonbRaw = $_POST['relationships_jsonb'];
@@ -47,6 +52,67 @@ if (isset($_POST['relationships_jsonb']) && $_POST['relationships_jsonb'] !== ''
 
         // Get the old relationships for logging
         $oldRels = $extData['relationships'] ?? [];
+
+        // Typed targets are server-owned. A stored actor/concept edge keeps its stored target; a posted target
+        // that no longer matches it means the form is stale (refused). A new actor edge needs the selected
+        // physical row id and key, validated here and rechecked under row locks in the guarded write; it is
+        // stored under the effective (keeper) key with the selected row's label. New concepts must be explicit.
+        $storedRels = is_array($oldRels) ? $oldRels : [];
+        $postedTargets = is_array($decodedRaw = json_decode($relJsonbRaw, true)) ? $decodedRaw : [];
+        $sourceId = (int)($_POST['id'] ?? 0);
+        $sourceRow = $sourceId > 0 && isset($npc) ? $npc->getActorById($sourceId) : null;
+        $validatedRels = [];
+        $targetRows = [];
+        foreach ($relData as $relKey => $rel) {
+            $relKey = (string)$relKey;
+            $postedTarget = $postedTargets[$relKey]['target'] ?? null;
+            $storedTarget = $storedRels[$relKey]['target'] ?? null;
+            unset($rel['target'], $rel['target_npc_id']);
+            if (array_key_exists($relKey, $storedRels)) {
+                $playerTarget = $relKey === 'Player' && is_array($postedTarget) && ($postedTarget['kind'] ?? '') === 'player';
+                if ($postedTarget !== null && !$playerTarget && $postedTarget != $storedTarget) {
+                    throw new ChimRelationshipFormConflict('Relationship "' . ($storedTarget['label'] ?? $relKey)
+                        . '" no longer has that target. Reopen this NPC before saving.');
+                }
+                if (is_array($storedTarget)) { $rel['target'] = $storedTarget; }
+                $validatedRels[$relKey] = $rel;
+                continue;
+            }
+            $kind = is_array($postedTarget) ? (string)($postedTarget['kind'] ?? '') : '';
+            if ($kind === 'actor') {
+                if (!$sourceRow || ($postedTarget['key'] ?? null) !== $relKey) {
+                    throw new InvalidArgumentException('Save this NPC before choosing an actor relationship target.');
+                }
+                $taken = array_merge(array_map('strval', array_keys($storedRels)), array_map('strval', array_keys($validatedRels)),
+                    array_values(array_filter(array_map('strval', array_keys($relData)), static fn($k) => $k !== $relKey)));
+                $targetId = (int)($postedTargets[$relKey]['target_npc_id'] ?? 0);
+                [$identity, $targetRow] = RelationshipManager::validateNewActorTarget($relKey, $targetId, $sourceRow, $taken);
+                RelationshipManager::storeTargetEdge($validatedRels, $identity, null, $rel);
+                $targetRows[$targetId] = $targetRow;
+                continue;
+            }
+            if ($kind === 'concept') {
+                $label = $postedTarget['label'] ?? null;
+                if (!is_string($label) || $label !== trim($label) || $label !== $relKey || ($postedTarget['key'] ?? null) !== $relKey
+                    || chimIsActorKey($label) || RelationshipManager::normalizeTargetName($label) === 'Player') {
+                    throw new InvalidArgumentException('Invalid concept relationship "' . $relKey . '"');
+                }
+                RelationshipManager::storeTargetEdge($validatedRels, ['kind' => 'concept', 'key' => $relKey, 'label' => $label], null, $rel);
+                continue;
+            }
+            // Plain-name entries stay legacy/display-only; an actor-shaped key without a validated target is dropped.
+            if ($postedTarget === null && !RelationshipManager::isActorEdgeKey($relKey)) {
+                $validatedRels[$relKey] = $rel;
+            }
+        }
+        $relData = $validatedRels;
+        if ($targetRows) {
+            // Binding and physical/keeper keys of new actor targets are rechecked under row locks in the write.
+            foreach ($targetRows as $targetId => $targetRow) {
+                $_POST['_expected_bindings'][$targetId] = chimNpcProfileBinding($targetRow);
+            }
+            $_POST['_expected_keys'] = RelationshipManager::expectedKeysFor(array_values($targetRows));
+        }
 
         // Merge the new relationships
         $extData['relationships'] = $relData;

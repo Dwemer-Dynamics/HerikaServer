@@ -27,13 +27,42 @@ if (!$conn) {
     exit;
 }
 
-$person = isset($_GET['person']) ? trim(urldecode($_GET['person'])) : '';
-if ($person === '') {
+require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."core".DIRECTORY_SEPARATOR."npc_reference.php");
+
+// One exact author: ?author=<key>, or ?npc_id=<selected row> (its physical key), else ?person=<legacy
+// unassigned name>. A schema without author_key (older snapshots) reads legacy names only.
+$person = isset($_GET['person']) ? trim((string)$_GET['person']) : '';
+$author = isset($_GET['author']) ? trim((string)$_GET['author']) : '';
+$keyColumn = pg_query_params($conn, "SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'diarylog' AND column_name = 'author_key'", [$schema]);
+$hasAuthorKey = $keyColumn && pg_num_rows($keyColumn) > 0;
+$npcId = (int)($_GET['npc_id'] ?? 0);
+if ($author === '' && $npcId > 0) {
+    $npcResult = pg_query_params($conn, "SELECT * FROM {$schema}.core_npc_master WHERE id = $1", [$npcId]);
+    $npcRow = $npcResult ? pg_fetch_assoc($npcResult) : null;
+    if (!$npcRow) {
+        http_response_code(404);
+        echo "<p>NPC not found.</p>";
+        exit;
+    }
+    $author = (string)(chimNpcRowActorKey($npcRow) ?? '');
+    if ($author === '' && $person === '') { $person = trim((string)$npcRow['npc_name']); }
+}
+if ($author !== '') {
+    if (!$hasAuthorKey || !chimIsActorKey($author)) {
+        echo "<p>Unknown diary author.</p>";
+        exit;
+    }
+    $scopeSql = 'author_key = $1';
+    $scopeParam = $author;
+} elseif ($person !== '') {
+    $scopeSql = ($hasAuthorKey ? 'author_key IS NULL AND ' : '') . "$1 = ANY (SELECT trim(x) FROM unnest(string_to_array(trim(people, '|'), '|')) x)";
+    $scopeParam = $person;
+} else {
     echo "<p>Missing person.</p>";
     exit;
 }
 
-$result = pg_query_params($conn, "SELECT rowid, content, people, location, localts, gamets FROM {$schema}.diarylog WHERE people LIKE $1", ['%'.$person.'%']);
+$result = pg_query_params($conn, "SELECT rowid, content, people, location, localts, gamets FROM {$schema}.diarylog WHERE {$scopeSql}", [$scopeParam]);
 $entries = [];
 if ($result) {
     while ($row = pg_fetch_assoc($result)) { $entries[] = $row; }
@@ -43,6 +72,14 @@ usort($entries, function($a, $b) { return ((int)$a['localts']) - ((int)$b['local
 
 pg_close($conn);
 
+if ($author !== '') {
+    // Display label: the author's most recent recorded name; the key is never the title.
+    $person = '';
+    foreach (array_reverse($entries) as $entry) {
+        if (trim((string)$entry['people'], '|') !== '') { $person = trim((string)$entry['people'], '|'); break; }
+    }
+    if ($person === '') { $person = 'Unknown author'; }
+}
 $safeTitle = htmlspecialchars($person);
 ?>
 <!DOCTYPE html>

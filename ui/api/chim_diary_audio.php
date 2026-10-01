@@ -43,7 +43,7 @@ try {
 
     $db = $GLOBALS['db'];
     $entry = $db->fetchOne(
-        'SELECT rowid, content, people FROM public.diarylog WHERE rowid = ' . intval($entryId) . ' LIMIT 1'
+        'SELECT rowid, content, people, author_key FROM public.diarylog WHERE rowid = ' . intval($entryId) . ' LIMIT 1'
     );
     if (!is_array($entry) || empty($entry)) {
         http_response_code(404);
@@ -65,10 +65,35 @@ try {
         throw new RuntimeException('The diary author could not be determined.');
     }
 
+    // The stored author key decides the voice: a physical "The Narrator" stays physical and same-named
+    // NPCs never share audio. A linked physical author speaks with its kept profile's effective voice.
+    // Legacy unassigned rows fall back to a name only when it is unambiguous.
+    require_once($enginePath . 'lib' . DIRECTORY_SEPARATOR . 'core' . DIRECTORY_SEPARATOR . 'npc_reference.php');
+    $authorKey = $entry['author_key'] ?? null;
     $narratorManager = new Narrator();
-    $isNarrator = in_array($author, [Narrator::CANONICAL_NAME, $narratorManager->getRoleplayName()], true);
     $npcManager = new NpcMaster();
-    $npcData = $isNarrator ? $narratorManager->getNarratorData() : $npcManager->getByName($author);
+    if ($authorKey !== null && $authorKey !== '') {
+        if (!chimIsActorKey($authorKey)) {
+            throw new RuntimeException('The diary author key is invalid.');
+        }
+        $isNarrator = $authorKey === CHIM_ACTOR_KEY_NARRATOR;
+        if ($authorKey === CHIM_ACTOR_KEY_PLAYER) {
+            throw new RuntimeException('Player diary entries have no NPC voice profile.');
+        }
+        $npcData = $isNarrator ? $narratorManager->getNarratorData() : $npcManager->getByActorKey($authorKey);
+    } else {
+        $authorKey = null;
+        $isNarrator = in_array($author, [Narrator::CANONICAL_NAME, $narratorManager->getRoleplayName()], true);
+        if ($isNarrator) {
+            $npcData = $narratorManager->getNarratorData();
+        } else {
+            $namesakes = $db->fetchAll("SELECT id FROM public.core_npc_master WHERE lower(npc_name) = lower('" . $db->escape($author) . "') LIMIT 2");
+            if (is_array($namesakes) && count($namesakes) > 1) {
+                throw new RuntimeException("This unattributed diary entry matches several NPCs named {$author}.");
+            }
+            $npcData = $npcManager->getByName($author);
+        }
+    }
     if (!is_array($npcData) || empty($npcData)) {
         throw new RuntimeException("No CHIM NPC profile was found for {$author}.");
     }
@@ -114,10 +139,15 @@ try {
         'metadata' => $connectorData['metadata'] ?? '{}',
         'api_badge_id' => $connectorData['api_badge_id'] ?? null,
     ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    $playthrough = $db->fetchOne("SELECT value FROM public.core_player WHERE id = 'playthrough_id' LIMIT 1");
     $cacheSeed = 'diary-audio|' . hash('sha256', implode('|', [
         strval($entryId),
         $content,
+        hash('fnv1a64', $content),
         $author,
+        strval($authorKey ?? 'legacy'),
+        strval($playthrough['value'] ?? ''),
+        strval($npcData['id'] ?? ''),
         $voiceId,
         strval($connectorSignature),
     ]));
@@ -184,6 +214,7 @@ try {
         'success' => true,
         'audio_url' => $audioUrl,
         'author' => $author,
+        'author_key' => $authorKey,
         'voice' => $voiceId,
         'connector' => strval($connectorData['label'] ?? $driver),
         'cached' => $wasCached,

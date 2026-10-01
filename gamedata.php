@@ -78,6 +78,199 @@ $npcMaster = new NpcMaster();
 $responseBody = "OK";
 $responseIsJson = false;
 
+// Paired identity contract (docs/actor-identity.md): every actor-bearing row is resolved on its own, bulk rows
+// included. Invalid explicit identity (actor, attack target pair or nearby entry) rejects the whole request (422)
+// before any write; a stale runtime bind, duplicate key or unregistered explicit key rejects a single-actor
+// request (409, so the client retries); bulk rows that are stale or unregistered are skipped and reported per row.
+$gamedataBulkRows = ['activity_status_bulk' => 'statuses', 'transformation_state_bulk' => 'states'];
+$gamedataIdentityRows = isset($gamedataBulkRows[$data['type']])
+    ? (is_array($data[$gamedataBulkRows[$data['type']]] ?? null) ? $data[$gamedataBulkRows[$data['type']]] : [])
+    : (in_array($data['type'], $actorlessTypes, true) ? [] : [$data]);
+foreach ($gamedataIdentityRows as $gamedataIndex => $gamedataRow) {
+    if (!is_array($gamedataRow)) { continue; }
+    $gamedataResolved = gamedataResolveActor($gamedataRow, $npcMaster);
+    $gamedataStatus = $gamedataResolved['status'];
+    if ($gamedataStatus === 'invalid') {
+        gamedataRejectIdentity(422, $gamedataResolved['reason'], $gamedataIndex);
+    }
+    if (in_array($data['type'], ['activity_status', 'activity_status_bulk'], true)) {
+        $gamedataTargetError = gamedataValidateAttackTarget($gamedataRow);
+        if ($gamedataTargetError !== null) { gamedataRejectIdentity(422, $gamedataTargetError, $gamedataIndex); }
+    }
+    if (!isset($gamedataBulkRows[$data['type']]) && (in_array($gamedataStatus, ['stale', 'conflict'], true)
+        || ($gamedataStatus === 'unknown' && $gamedataResolved['reason'] === 'unregistered_actor_key'))) {
+        gamedataRejectIdentity(409, $gamedataResolved['reason'], $gamedataIndex);
+    }
+}
+if ($data['type'] === 'low_process_actors' && is_array($data['actors_nearby'] ?? null)) {
+    foreach ($data['actors_nearby'] as $gamedataIndex => $gamedataEntry) {
+        $gamedataEntryError = is_array($gamedataEntry) ? gamedataValidateNearbyEntry($gamedataEntry) : 'nearby_entry_invalid';
+        if ($gamedataEntryError !== null) { gamedataRejectIdentity(422, $gamedataEntryError, 'actors_nearby.' . $gamedataIndex); }
+    }
+}
+$GLOBALS['GAMEDATA_BULK_RESULTS'] = [];
+
+// Key/refid pair shared by actor rows, attack targets and nearby entries; null when valid.
+function gamedataPairError($key, $ref, string $prefix): ?string
+{
+    if (!is_string($key) || !chimIsActorKey($key) || $key === CHIM_ACTOR_KEY_NARRATOR) { return $prefix . '_key_invalid'; }
+    if (!is_string($ref) || !preg_match('/^[0-9A-F]{8}$/D', $ref)) { return $prefix . '_refid_invalid'; }
+    if (($key === CHIM_ACTOR_KEY_PLAYER) !== ($ref === '00000014')) { return $prefix . '_player_mismatch'; }
+    return null;
+}
+
+// C18 attack target: attack_target_key/attack_target_refid both present, both null (no known target) or a valid
+// pair. Rows from older clients carry neither and keep the display name only. Never resolved by name.
+function gamedataValidateAttackTarget(array $row): ?string
+{
+    $hasKey = array_key_exists('attack_target_key', $row);
+    if ($hasKey !== array_key_exists('attack_target_refid', $row)) { return 'attack_target_pair_incomplete'; }
+    if (!$hasKey) { return null; }
+    $key = $row['attack_target_key'];
+    $ref = $row['attack_target_refid'];
+    if ($key === null && $ref === null) { return null; }
+    if ($key === null || $ref === null) { return 'attack_target_pair_incomplete'; }
+    return gamedataPairError($key, $ref, 'attack_target');
+}
+
+// Nearby entry identity (C18 low_process_actors): fields all present or none, the pair valid and matching formId.
+function gamedataValidateNearbyEntry(array $entry): ?string
+{
+    $keyed = array_key_exists('actor_identity_version', $entry) || array_key_exists('actor_key', $entry) || array_key_exists('actor_refid', $entry);
+    if (!$keyed) { return null; }
+    if (($entry['actor_identity_version'] ?? null) !== 1) { return 'nearby_identity_version'; }
+    $error = gamedataPairError($entry['actor_key'] ?? null, $entry['actor_refid'] ?? null, 'nearby');
+    if ($error !== null) { return $error; }
+    if (isset($entry['formId']) && gamedataFormIdHex($entry['formId']) !== $entry['actor_refid']) { return 'nearby_refid_mismatch'; }
+    return null;
+}
+
+function gamedataFormIdHex($formId): string
+{
+    return strtoupper(str_pad(dechex(((int)$formId) & 0xFFFFFFFF), 8, '0', STR_PAD_LEFT));
+}
+
+// Binds a validated attack target to its exact row when that row still holds the captured runtime ref. The
+// display name comes only from the captured keyed target; a null pair clears it.
+function gamedataBindAttackTarget(array $row, NpcMaster $npcMaster): array
+{
+    if (!array_key_exists('attack_target_key', $row)) { return $row; }
+    $key = $row['attack_target_key'];
+    $row['attack_target_npc_id'] = null;
+    if ($key === null) {
+        unset($row['attack_target']);
+        $row['attack_target_binding'] = 'none';
+        return $row;
+    }
+    if ($key === CHIM_ACTOR_KEY_PLAYER) {
+        $row['attack_target_binding'] = 'player';
+        return $row;
+    }
+    try {
+        $target = $npcMaster->getByActorKey($key);
+    } catch (RuntimeException $e) {
+        $target = null;
+    }
+    if (!$target) {
+        $row['attack_target_binding'] = 'unregistered';
+    } elseif (NpcMaster::normalizeRefId($target['refid'] ?? '') !== $row['attack_target_refid']) {
+        $row['attack_target_binding'] = 'stale';
+    } else {
+        $row['attack_target_binding'] = 'npc';
+        $row['attack_target_npc_id'] = (int)$target['id'];
+    }
+    return $row;
+}
+
+function gamedataBulkResult($index, string $status, string $reason = ''): void
+{
+    $GLOBALS['GAMEDATA_BULK_RESULTS'][] = ['index' => $index, 'status' => $status, 'reason' => $reason];
+}
+
+// Bulk rows that did not resolve to an applied write are reported, never counted as applied.
+function gamedataBulkApply(array $row, $index, NpcMaster $npcMaster, string $metadataKey): void
+{
+    $resolved = gamedataResolveActor($row, $npcMaster);
+    if ($resolved['status'] !== 'npc') {
+        gamedataBulkResult($index, 'skipped', $resolved['reason'] !== '' ? $resolved['reason'] : $resolved['status']);
+        return;
+    }
+    if ($metadataKey === 'activity_status') { $row = gamedataBindAttackTarget($row, $npcMaster); }
+    $ok = chimApplyNpcMetadataUpdatesByName($resolved['row'], [$metadataKey => $row]);
+    gamedataBulkResult($index, $ok ? 'applied' : 'skipped', $ok ? '' : (isset($resolved['row']['_expected_refid']) ? 'stale_runtime_ref' : 'write_failed'));
+}
+
+function gamedataRejectIdentity(int $code, string $reason, $index): void
+{
+    http_response_code($code);
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => false, 'error' => 'actor_identity', 'reason' => $reason, 'index' => $index]);
+    Logger::warn("[gamedata.php] Rejected actor identity ({$code} {$reason}) row {$index}");
+    exit;
+}
+
+// One actor row: 'player' (core_player only), 'npc' (exact row), 'unknown' (safe ignore), 'stale', 'conflict'
+// or 'invalid'. Rows without identity fields keep the unique-name legacy lookup; any identity field makes the
+// row strict with no name fallback.
+function gamedataResolveActor(array $item, NpcMaster $npcMaster): array
+{
+    $type = (string)($item['actor_type'] ?? '');
+    $keyed = array_key_exists('actor_identity_version', $item) || array_key_exists('actor_key', $item) || array_key_exists('actor_refid', $item);
+    if (!$keyed) {
+        if ($type === 'player') { return ['status' => 'player', 'reason' => '']; }
+        $row = $npcMaster->getByName((string)($item['actor_name'] ?? ''));
+        return $row ? ['status' => 'npc', 'row' => $row, 'reason' => ''] : ['status' => 'unknown', 'reason' => 'legacy_name_unresolved'];
+    }
+    $key = $item['actor_key'] ?? null;
+    $ref = $item['actor_refid'] ?? null;
+    if (($item['actor_identity_version'] ?? null) !== 1) { return ['status' => 'invalid', 'reason' => 'unsupported_identity_version']; }
+    if (!in_array($type, ['npc', 'player'], true)) { return ['status' => 'invalid', 'reason' => 'actor_type_invalid']; }
+    if (!is_string($key) || !chimIsActorKey($key) || $key === CHIM_ACTOR_KEY_NARRATOR) { return ['status' => 'invalid', 'reason' => 'actor_key_invalid']; }
+    if (!is_string($ref) || !preg_match('/^[0-9A-F]{8}$/D', $ref)) { return ['status' => 'invalid', 'reason' => 'actor_refid_invalid']; }
+    if (($key === CHIM_ACTOR_KEY_PLAYER) !== ($type === 'player') || ($type === 'player' && $ref !== '00000014')) {
+        return ['status' => 'invalid', 'reason' => 'actor_type_mismatch'];
+    }
+    if ($type === 'player') { return ['status' => 'player', 'reason' => '']; }
+    try {
+        $row = $npcMaster->getByActorKey($key);
+    } catch (RuntimeException $e) {
+        return ['status' => 'conflict', 'reason' => 'duplicate_actor_key'];
+    }
+    if (!$row) { return ['status' => 'unknown', 'reason' => 'unregistered_actor_key']; }
+    if (NpcMaster::normalizeRefId($row['refid'] ?? '') !== $ref) { return ['status' => 'stale', 'reason' => 'stale_runtime_ref']; }
+    $row['_expected_refid'] = $ref;
+    return ['status' => 'npc', 'row' => $row, 'reason' => ''];
+}
+
+// The exact NPC row for a handler, or null (player, unregistered, stale). Keyed rows carry _expected_refid.
+function gamedataActorRow(array $item, NpcMaster $npcMaster): ?array
+{
+    $resolved = gamedataResolveActor($item, $npcMaster);
+    if ($resolved['status'] !== 'npc') {
+        if ($resolved['status'] !== 'player') { Logger::debug("[gamedata.php] Ignored actor row: {$resolved['reason']}"); }
+        return null;
+    }
+    return $resolved['row'];
+}
+
+// Physical metadata of the exact row; a keyed row writes only while it still holds the bound runtime ref.
+function gamedataUpdateMetadata(NpcMaster $npcMaster, ?array $row, array $setValues): bool
+{
+    if (!$row || (int)($row['id'] ?? 0) <= 0) { return false; }
+    $expected = isset($row['_expected_refid']) ? (string)$row['_expected_refid'] : null;
+    $ok = $npcMaster->updateMetadataKeysById((int)$row['id'], $setValues, [], $expected);
+    if (!$ok && $expected !== null) { $GLOBALS['GAMEDATA_STALE_WRITE'] = true; }
+    return $ok;
+}
+
+function gamedataApplyMetadata(?array $row, array $updates): bool
+{
+    if (!$row) { return false; }
+    $ok = chimApplyNpcMetadataUpdatesByName($row, $updates);
+    if (!$ok && isset($row['_expected_refid'])) { $GLOBALS['GAMEDATA_STALE_WRITE'] = true; }
+    return $ok;
+}
+
 try {
     if (($data['actor_type'] ?? '') === 'player') {
         chimMaybeSyncPlayerName($data['actor_name'] ?? null, true);
@@ -180,6 +373,17 @@ try {
             exit;
     }
 
+    if (!empty($GLOBALS['GAMEDATA_STALE_WRITE']) && !isset($gamedataBulkRows[$data['type']])) {
+        gamedataRejectIdentity(409, 'stale_runtime_ref', 0);
+    }
+    if (isset($gamedataBulkRows[$data['type']])) {
+        $gamedataResults = $GLOBALS['GAMEDATA_BULK_RESULTS'];
+        $gamedataApplied = count(array_filter($gamedataResults, function ($r) { return $r['status'] === 'applied'; }));
+        $gamedataSkipped = count(array_filter($gamedataResults, function ($r) { return $r['status'] === 'skipped'; }));
+        $responseBody = json_encode(['ok' => true, 'applied' => $gamedataApplied, 'skipped' => $gamedataSkipped,
+            'complete' => $gamedataSkipped === 0, 'rows' => $gamedataResults]);
+        $responseIsJson = true;
+    }
     if ($responseIsJson) {
         header('Content-Type: application/json');
     }
@@ -218,27 +422,22 @@ function handleEquipmentUpdate(array $data, NpcMaster $npcMaster): void
             Logger::warn("[gamedata.php] Could not save player equipment to core_player: " . $e->getMessage());
         }
 
-        // For backward compatibility, also try to update NPC record if it exists
-        $currentData = $npcMaster->getByName($actorName);
-        if ($currentData) {
-            $npcMaster->updateMetadataKeysByName($actorName, [
-                'equipment' => buildEquipmentMetadataValue($equipment),
-            ]);
-        }
+        // Typed player data lives only in core_player; an NPC namesake is never written.
 
         return; // Done with player, exit early
     }
 
     // Handle NPC equipment
-    $currentData = $npcMaster->getByName($actorName);
+    $currentData = gamedataActorRow($data, $npcMaster);
 
     if (!$currentData) {
         // NPC not in database yet - this is normal, they haven't been encountered
         return;
     }
 
-    $npcMaster->updateMetadataKeysByName($actorName, [
+    gamedataUpdateMetadata($npcMaster, $currentData, [
         'equipment' => buildEquipmentMetadataValue($equipment),
+        'last_equipment_update_gamets' => $data['gamets'] ?? null,
     ]);
 
     Logger::debug("[gamedata.php] Updated equipment for {$actorType}: {$actorName}");
@@ -246,12 +445,12 @@ function handleEquipmentUpdate(array $data, NpcMaster $npcMaster): void
 
 function handleFurnitureUpdate(array $data, NpcMaster $npcMaster): void
 {
-    $currentData = $npcMaster->getByName($data['actor_name']);
+    $currentData = gamedataActorRow($data, $npcMaster);
     if (!$currentData) {
         return;
     }
 
-    chimApplyNpcMetadataUpdatesByName($data['actor_name'], [
+    gamedataApplyMetadata($currentData, [
         'activity_status' => [
             'furniture_name' => $data['furniture'] ?? '',
             'timestamp' => $data['timestamp'] ?? chimActivityStatusNowMs(),
@@ -262,13 +461,13 @@ function handleFurnitureUpdate(array $data, NpcMaster $npcMaster): void
 
 function handleActivityStatusUpdate(array $data, NpcMaster $npcMaster): void
 {
-    $currentData = $npcMaster->getByName($data['actor_name']);
+    $currentData = gamedataActorRow($data, $npcMaster);
     if (!$currentData) {
         return;
     }
 
-    chimApplyNpcMetadataUpdatesByName($data['actor_name'], [
-        'activity_status' => $data,
+    gamedataApplyMetadata($currentData, [
+        'activity_status' => gamedataBindAttackTarget($data, $npcMaster),
     ]);
 }
 
@@ -279,19 +478,17 @@ function handleActivityStatusBulkUpdate(array $data, NpcMaster $npcMaster): void
         return;
     }
 
-    foreach ($data['statuses'] as $statusRow) {
+    foreach ($data['statuses'] as $index => $statusRow) {
         if (!is_array($statusRow) || empty($statusRow['actor_name'])) {
+            gamedataBulkResult($index, 'skipped', 'row_invalid');
+            continue;
+        }
+        if (($statusRow['actor_type'] ?? '') === 'player') {
+            gamedataBulkResult($index, 'noop', 'player_activity_not_stored');
             continue;
         }
 
-        $currentData = $npcMaster->getByName($statusRow['actor_name']);
-        if (!$currentData) {
-            continue;
-        }
-
-        chimApplyNpcMetadataUpdatesByName($statusRow['actor_name'], [
-            'activity_status' => $statusRow,
-        ]);
+        gamedataBulkApply($statusRow, $index, $npcMaster, 'activity_status');
     }
 }
 
@@ -308,12 +505,12 @@ function handleTransformationStateUpdate(array $data, NpcMaster $npcMaster): voi
         return;
     }
 
-    $currentData = $npcMaster->getByName($data['actor_name']);
+    $currentData = gamedataActorRow($data, $npcMaster);
     if (!$currentData) {
         return;
     }
 
-    chimApplyNpcMetadataUpdatesByName($data['actor_name'], [
+    gamedataApplyMetadata($currentData, [
         'transformation_state' => $data,
     ]);
 }
@@ -325,8 +522,9 @@ function handleTransformationStateBulkUpdate(array $data, NpcMaster $npcMaster):
         return;
     }
 
-    foreach ($data['states'] as $stateRow) {
+    foreach ($data['states'] as $index => $stateRow) {
         if (!is_array($stateRow) || empty($stateRow['actor_name'])) {
+            gamedataBulkResult($index, 'skipped', 'row_invalid');
             continue;
         }
 
@@ -335,20 +533,15 @@ function handleTransformationStateBulkUpdate(array $data, NpcMaster $npcMaster):
                 require_once(__DIR__ . "/lib/core/player.class.php");
                 $player = new Player();
                 $player->setJson('transformation_state', chimSanitizeTransformationStatePayload($stateRow));
+                gamedataBulkResult($index, 'applied');
             } catch (Exception $e) {
                 Logger::warn("[gamedata.php] Could not save player transformation_state during bulk update: " . $e->getMessage());
+                gamedataBulkResult($index, 'skipped', 'write_failed');
             }
             continue;
         }
 
-        $currentData = $npcMaster->getByName($stateRow['actor_name']);
-        if (!$currentData) {
-            continue;
-        }
-
-        chimApplyNpcMetadataUpdatesByName($stateRow['actor_name'], [
-            'transformation_state' => $stateRow,
-        ]);
+        gamedataBulkApply($stateRow, $index, $npcMaster, 'transformation_state');
     }
 }
 
@@ -422,6 +615,8 @@ function buildInventoryMetadataValue(array $items): array
                 'count' => intval($item['count']),
                 'keywords' => isset($item['keywords']) ? sanitizeItemKeywordList($item['keywords']) : [],
                 'goldvalue' => isset($item['goldvalue']) ? intval($item['goldvalue']) : 0,
+                'equipped' => !empty($item['equipped']),
+                'is_quest_item' => !empty($item['is_quest_item']),
             ];
             $pluginRow = chimGetLoadedGamePluginByRuntimeFormId($item['baseid']);
             $pluginName = ($pluginRow !== null) ? ($pluginRow['plugin_name'] ?? '') : '';
@@ -436,6 +631,8 @@ function buildInventoryMetadataValue(array $items): array
                     ],
                     ["baseid" => $item['baseid'], "plugin" => $pluginName]
                 );
+            } else {
+                error_log("[buildInventoryMetadataValue] Plugin name for baseid {$item['baseid']} is empty. Item name: {$item['name']}");
             }
         }
     }
@@ -464,6 +661,9 @@ function buildStatsMetadataValue(array $stats): array
         'stamina' => isset($stats['stamina']) ? floatval($stats['stamina']) : 0,
         'stamina_max' => isset($stats['stamina_max']) ? floatval($stats['stamina_max']) : 0,
         'scale' => isset($stats['scale']) ? floatval($stats['scale']) : 1.0,
+        'is_essential' => !empty($stats['is_essential']),
+        'is_protected' => !empty($stats['is_protected']),
+        'is_dead' => !empty($stats['is_dead']),
     ];
 }
 
@@ -512,13 +712,7 @@ function handleInventoryUpdate(array $data, NpcMaster $npcMaster): void
             Logger::warn("[gamedata.php] Could not save player inventory to core_player: " . $e->getMessage());
         }
 
-        // For backward compatibility, also try to update NPC record if it exists
-        $currentData = $npcMaster->getByName($actorName);
-        if ($currentData) {
-            $npcMaster->updateMetadataKeysByName($actorName, [
-                'inventory' => buildInventoryMetadataValue($items),
-            ]);
-        }
+        // Typed player data lives only in core_player; an NPC namesake is never written.
 
         chimQuestEngineSyncPlayerInventory($inventoryData, $data['gamets'] ?? null);
 
@@ -528,18 +722,18 @@ function handleInventoryUpdate(array $data, NpcMaster $npcMaster): void
     }
 
     // Handle NPC inventory
-    $currentData = $npcMaster->getByName($actorName);
+    $currentData = gamedataActorRow($data, $npcMaster);
 
     if (!$currentData) {
         // NPC not in database yet - this is normal, they haven't been encountered
         return;
     }
 
-    $npcMaster->updateMetadataKeysByName($actorName, [
+    gamedataUpdateMetadata($npcMaster, $currentData, [
         'inventory' => buildInventoryMetadataValue($items),
     ]);
 
-    $npcMaster->updateMetadataKeysByName($actorName, [
+    gamedataUpdateMetadata($npcMaster, $currentData, [
         'last_inventory_update_gamets' => $data['gamets'] ?? null,
     ]);
 
@@ -704,27 +898,21 @@ function handleSkillsUpdate(array $data, NpcMaster $npcMaster): void
             Logger::warn("[gamedata.php] Could not save player skills to core_player: " . $e->getMessage());
         }
 
-        // For backward compatibility, also try to update NPC record if it exists
-        $currentData = $npcMaster->getByName($actorName);
-        if ($currentData) {
-            $npcMaster->updateMetadataKeysByName($actorName, [
-                'skills' => buildSkillsMetadataValue($skills),
-            ]);
-        }
+        // Typed player data lives only in core_player; an NPC namesake is never written.
 
         Logger::debug("[gamedata.php] Updated skills for player: {$actorName}");
         return; // Done with player, exit early
     }
 
     // Handle NPC skills
-    $currentData = $npcMaster->getByName($actorName);
+    $currentData = gamedataActorRow($data, $npcMaster);
 
     if (!$currentData) {
         // NPC not in database yet - this is normal, they haven't been encountered
         return;
     }
 
-    $npcMaster->updateMetadataKeysByName($actorName, [
+    gamedataUpdateMetadata($npcMaster, $currentData, [
         'skills' => buildSkillsMetadataValue($skills),
     ]);
 
@@ -759,28 +947,23 @@ function handleStatsUpdate(array $data, NpcMaster $npcMaster): void
             Logger::warn("[gamedata.php] Could not save player stats to core_player: " . $e->getMessage());
         }
 
-        // For backward compatibility, also try to update NPC record if it exists
-        $currentData = $npcMaster->getByName($actorName);
-        if ($currentData) {
-            $npcMaster->updateMetadataKeysByName($actorName, [
-                'stats' => buildStatsMetadataValue($stats),
-            ]);
-        }
+        // Typed player data lives only in core_player; an NPC namesake is never written.
 
         Logger::debug("[gamedata.php] Updated stats for player: {$actorName}");
         return; // Done with player, exit early
     }
 
     // Handle NPC stats
-    $currentData = $npcMaster->getByName($actorName);
+    $currentData = gamedataActorRow($data, $npcMaster);
 
     if (!$currentData) {
         // NPC not in database yet - this is normal, they haven't been encountered
         return;
     }
 
-    $npcMaster->updateMetadataKeysByName($actorName, [
+    gamedataUpdateMetadata($npcMaster, $currentData, [
         'stats' => buildStatsMetadataValue($stats),
+        'last_stats_update_gamets' => $data['gamets'] ?? null,
     ]);
 
     Logger::debug("[gamedata.php] Updated stats for {$actorType}: {$actorName}");
@@ -808,14 +991,14 @@ function handleSpellsUpdate(array $data, NpcMaster $npcMaster): void
     $spells = $data['spells'];
 
     // Handle NPC spells
-    $currentData = $npcMaster->getByName($actorName);
+    $currentData = gamedataActorRow($data, $npcMaster);
 
     if (!$currentData) {
         // NPC not in database yet - this is normal, they haven't been encountered
         return;
     }
 
-    $npcMaster->updateMetadataKeysByName($actorName, [
+    gamedataUpdateMetadata($npcMaster, $currentData, [
         'spells' => buildSpellsMetadataValue($spells),
         'spells_updated' => time(),
     ]);
@@ -963,7 +1146,7 @@ function handleLowProcessActorsUpdate(array $data, NpcMaster $npcMaster): void
 
     $actorList = isset($data['actors_nearby']) && is_array($data['actors_nearby']) ? $data['actors_nearby'] : [];
 
-    $currentData = $npcMaster->getByName($data['actor_name']);
+    $currentData = gamedataActorRow($data, $npcMaster);
     if ($currentData) {
         $extendedData = $npcMaster->getMetadata(($currentData));
         // Ensure the history bucket exists and is always an array.
@@ -971,11 +1154,24 @@ function handleLowProcessActorsUpdate(array $data, NpcMaster $npcMaster): void
             $extendedData['low_process_actors'] = [];
         }
 
+        // refid => display name stays the shape existing readers use; C18 keyed entries also keep their exact
+        // key/refid (and the row id while it still holds that ref) in the parallel low_process_actor_keys map.
         $actorSanitizedList = [];
-        foreach ($data['actors_nearby'] as $k => $v) {
-            $unsignedInt = (intval($v["formId"]) + 0) & 0xFFFFFFFF;
-            $hexRefId = strtoupper(str_pad(dechex($unsignedInt), 8, '0', STR_PAD_LEFT));
-            $actorSanitizedList[$hexRefId] = $v["name"];
+        $actorKeyList = [];
+        foreach ($actorList as $v) {
+            if (!is_array($v) || !isset($v['formId'])) { continue; }
+            $hexRefId = gamedataFormIdHex($v['formId']);
+            $actorSanitizedList[$hexRefId] = (string)($v['name'] ?? '');
+            if (isset($v['actor_key'])) {
+                $entry = ['actor_key' => $v['actor_key'], 'actor_refid' => $v['actor_refid'], 'npc_id' => null];
+                if ($v['actor_key'] !== CHIM_ACTOR_KEY_PLAYER) {
+                    try { $nearbyRow = $npcMaster->getByActorKey($v['actor_key']); } catch (RuntimeException $e) { $nearbyRow = null; }
+                    if ($nearbyRow && NpcMaster::normalizeRefId($nearbyRow['refid'] ?? '') === $v['actor_refid']) {
+                        $entry['npc_id'] = (int)$nearbyRow['id'];
+                    }
+                }
+                $actorKeyList[$hexRefId] = $entry;
+            }
         }
 
         // Store current nearby actors snapshot keyed by game timestamp.
@@ -987,15 +1183,21 @@ function handleLowProcessActorsUpdate(array $data, NpcMaster $npcMaster): void
         }
         $gametsKey = isset($data['gamets']) ? (string) $data['gamets'] : (string) time();
         $extendedData['low_process_actors'][$gametsKey] = $actorSanitizedList;
+        $keySnapshots = is_array($extendedData['low_process_actor_keys'] ?? null) ? $extendedData['low_process_actor_keys'] : [];
+        $keySnapshots[$gametsKey] = $actorKeyList;
 
         // Keep entries ordered by timestamp and retain only the 5 most recent snapshots.
         ksort($extendedData['low_process_actors'], SORT_NUMERIC);
         if (count($extendedData['low_process_actors']) > 5) {
             $extendedData['low_process_actors'] = array_slice($extendedData['low_process_actors'], -5, null, true);
         }
+        $keySnapshots = array_intersect_key($keySnapshots, $extendedData['low_process_actors']);
 
-        $currentData = $npcMaster->setMetadata($currentData, $extendedData);
-        $npcMaster->updateByArray($currentData);
+        // Physical metadata of the exact row only; never a whole-row write of linked profile fields.
+        gamedataUpdateMetadata($npcMaster, $currentData, [
+            'low_process_actors' => $extendedData['low_process_actors'],
+            'low_process_actor_keys' => $keySnapshots,
+        ]);
 
         Logger::debug("[gamedata.php] Updated low_process_actors list for {$data['actor_name']}: " . count($actorList) . " actor(s)");
         error_log("[gamedata.php] Updated low_process_actors list for {$data['actor_name']}: " . count($actorList) . " actor(s)");

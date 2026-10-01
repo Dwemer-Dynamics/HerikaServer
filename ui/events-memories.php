@@ -608,6 +608,7 @@ require_once(LIB_PATH .DIRECTORY_SEPARATOR."{$GLOBALS["DBDRIVER"]}.class.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."misc_ui_functions.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."chat_helper_functions.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."eventlog_helper.php");
+require_once(LIB_PATH .DIRECTORY_SEPARATOR."core".DIRECTORY_SEPARATOR."npc_reference.php");
 
 // Include game timestamp utilities
 require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."utils_game_timestamp.php");
@@ -965,17 +966,23 @@ function getTimeColor($time) {
                     if ($key === 'data') {
                         // Assign Events value
                         $mappedRow[$columnHeaders[$key] ?? $key] = $value;
-                        // Derive People Present from JSON in original data if available
-                        $peoplePresent = trim((string)($row['people'] ?? ''));
+                        // People Present shows participant names via the shared identity parser, never stored
+                        // identity JSON; the raw column stays available in the eventlog API raw export.
+                        $participantNames = function (array $items) {
+                            $items = array_map(function ($item) { return is_array($item) ? (object)$item : $item; }, $items);
+                            return implode(', ', array_column(chimReadStoredEventParticipants($items), 'name'));
+                        };
+                        $rawPeople = trim((string)($row['people'] ?? ''));
+                        $peoplePresent = $rawPeople === '' ? '' : implode(', ', array_column(chimParseEventParticipants($rawPeople)['participants'], 'name'));
                         $raw = $row['data'] ?? '';
                         if ($peoplePresent === '' && is_string($raw) && $raw !== '') {
                             $j = json_decode($raw, true);
                             if (is_array($j)) {
                                 if (!empty($j['people'])) {
-                                    if (is_array($j['people'])) { $peoplePresent = implode(', ', array_map('strval', $j['people'])); }
+                                    if (is_array($j['people'])) { $peoplePresent = $participantNames($j['people']); }
                                     else { $peoplePresent = (string)$j['people']; }
                                 } else if (!empty($j['companions'])) {
-                                    if (is_array($j['companions'])) { $peoplePresent = implode(', ', array_map('strval', $j['companions'])); }
+                                    if (is_array($j['companions'])) { $peoplePresent = $participantNames($j['companions']); }
                                     else { $peoplePresent = (string)$j['companions']; }
                                 } else if (!empty($j['speaker'])) {
                                     $peoplePresent = (string)$j['speaker'];

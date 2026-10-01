@@ -7,7 +7,7 @@ const CHIM_SHARED_NPC_FIELDS = [
     'profile_id', 'dynamic_profile', 'core', 'tags',
 ];
 const CHIM_SHARED_NPC_EXTENDED = [
-    'middle_term_memory', 'middle_term_enabled', 'individual_memory_enabled',
+    'middle_term_memory', 'middle_term_memory_provenance', 'middle_term_memory_dormant', 'middle_term_enabled', 'individual_memory_enabled',
     'auto_diary_enabled', 'auto_diary_wait_enabled', 'salutation_after_a_while',
     'relationships', 'relationships_locked', 'relationships_analyzed', 'relationships_inferred',
     'relationships_last_eval', 'relationships_model', 'relationships_updated',
@@ -281,7 +281,8 @@ function chimNpcAlternateGroup(array $row): ?string
 function chimNpcAutoLinkProfile(array $actor): bool
 {
     $group = chimNpcAlternateGroup($actor);
-    if ($group === null || (int)$actor['id'] <= 1) { return false; }
+    // Row id 1 is an ordinary physical row; the Narrator's conceptual id 1 has no reference source (no group).
+    if ($group === null || (int)$actor['id'] <= 0) { return false; }
     $db = $GLOBALS['db'];
     $definition = chimNpcAlternateReferenceGroups()[$group] ?? null;
     if (!$definition) { return false; }
@@ -316,7 +317,7 @@ function chimNpcAutoLinkProfile(array $actor): bool
             $metadata = chimNpcProfileJson($row['metadata']);
             $source = chimParseNpcReferenceSource($metadata['refid_source'] ?? '');
             $refid = NpcMaster::normalizeRefId($row['refid'] ?? '');
-            if ((int)$row['id'] <= 1 || !empty($metadata['_chim_auto_link_disabled']) || !$source ||
+            if ((int)$row['id'] <= 0 || !empty($metadata['_chim_auto_link_disabled']) || !$source ||
                 isset($seen[strtolower($source['stable_key'])]) || $refid === '' || str_starts_with($refid, 'FF') ||
                 !chimStableFormReferenceEquals($source['stable_key'], chimConvertRuntimeFormIdToStableReference($refid))) {
                 $eligible = false;
@@ -419,30 +420,118 @@ function chimNpcProfileActorKeys(array $actor): array
 {
     $keys = [];
     foreach (array_merge([$actor], chimNpcProfileMembers($actor)) as $member) {
-        $key = chimNpcRowPhysicalKey($member);
+        $key = chimNpcRowActorKey($member);
         if ($key !== null && !in_array($key, $keys, true)) { $keys[] = $key; }
     }
     return $keys;
 }
 
-// Read name-scoped summaries across a verified linked name change, without absorbing unrelated namesakes.
-function chimNpcProfileMemoryNames(array $actor): array
+// Middle-term digests are derived from the physical keys whose summaries (and predecessor digest) fed
+// them. Provenance sits beside the text in extended_data.middle_term_memory_provenance, keyed by the same
+// gamets. A digest is usable only while every source key belongs to the requesting actor's current
+// profile group and its text is unchanged; legacy or edited entries stay stored for display/admin only.
+// Origin 'manual' is stamped only by the NPC manager's server handler for the row group it loaded.
+function chimMiddleTermDigestProvenance(array $sourceKeys, array $groupKeys, string $binding, int $ownerId,
+    array $summaryRowids, string $text, string $origin = 'generated'): array
 {
-    $names = [$actor['npc_name']];
-    $group = chimNpcAlternateGroup($actor);
-    if ($group === null) { return $names; }
-    $ownerId = (int)($actor['profile_owner_npc_id'] ?? $actor['id']);
-    foreach (chimNpcProfileMembers($actor) as $member) {
-        $name = $member['npc_name'];
-        if (in_array($name, $names, true) || strpbrk($name, '%_|') !== false ||
-            chimNpcAlternateGroup($member) !== $group) { continue; }
-        $escaped = $GLOBALS['db']->escape($name);
-        $unrelated = $GLOBALS['db']->fetchOne("SELECT id FROM core_npc_master
-            WHERE lower(btrim(npc_name)) = lower(btrim('{$escaped}'))
-            AND COALESCE(profile_owner_npc_id, id) <> {$ownerId} LIMIT 1");
-        if (!$unrelated) { $names[] = $name; }
+    $sourceKeys = array_values(array_unique(array_filter($sourceKeys, 'chimIsActorKey')));
+    $groupKeys = array_values(array_unique(array_filter($groupKeys, 'chimIsActorKey')));
+    sort($sourceKeys); sort($groupKeys);
+    return [
+        'v' => 1, 'origin' => $origin, 'source_keys' => $sourceKeys, 'group_keys' => $groupKeys,
+        'profile_binding' => $binding, 'owner_npc_id' => $ownerId,
+        'summary_rowids' => array_values(array_map('intval', $summaryRowids)),
+        'text_sha256' => hash('sha256', $text),
+    ];
+}
+
+function chimMiddleTermDigestValid($text, $provenance, array $currentKeys): bool
+{
+    if (!is_string($text) || trim($text) === '' || !is_array($provenance) || (int)($provenance['v'] ?? 0) !== 1
+        || !in_array($provenance['origin'] ?? '', ['generated', 'manual'], true) || !hash_equals((string)($provenance['text_sha256'] ?? ''), hash('sha256', $text))) {
+        return false;
     }
-    return $names;
+    $sourceKeys = $provenance['source_keys'] ?? null;
+    if (!is_array($sourceKeys) || !$sourceKeys) { return false; }
+    foreach ($sourceKeys as $key) {
+        if (!chimIsActorKey($key) || !in_array($key, $currentKeys, true)) { return false; }
+    }
+    return true;
+}
+
+// Usable digests for the requesting (effective) actor row, gamets ascending. Rows without a stable key
+// (including the reserved Narrator profile) have no current group and therefore read none.
+function chimMiddleTermValidDigests($actor, ?int $maxGamets = null): array
+{
+    if (!is_array($actor) || (int)($actor['id'] ?? 0) <= 1) { return []; }
+    $extended = chimNpcProfileJson($actor['extended_data'] ?? null);
+    $digests = is_array($extended['middle_term_memory'] ?? null) ? $extended['middle_term_memory'] : [];
+    $provenance = is_array($extended['middle_term_memory_provenance'] ?? null) ? $extended['middle_term_memory_provenance'] : [];
+    if (!$digests || !$provenance) { return []; }
+    $currentKeys = chimNpcRowActorKey($actor) !== null || !empty($actor['profile_owner_npc_id'])
+        ? chimNpcProfileActorKeys($actor) : [];
+    $valid = [];
+    foreach ($digests as $gamets => $text) {
+        if (!is_numeric($gamets) || ($maxGamets !== null && (int)$gamets > $maxGamets)) { continue; }
+        if (chimMiddleTermDigestValid($text, $provenance[$gamets] ?? null, $currentKeys)) {
+            $valid[(int)$gamets] = ['gamets' => (int)$gamets, 'text' => $text, 'provenance' => $provenance[$gamets]];
+        }
+    }
+    ksort($valid, SORT_NUMERIC);
+    return $valid;
+}
+
+function chimMiddleTermLatestDigest($actor, ?int $maxGamets = null): ?array
+{
+    $valid = chimMiddleTermValidDigests($actor, $maxGamets);
+    return $valid ? end($valid) : null;
+}
+
+// Manual edits of the latest middle-term digest are owner-scoped. The replaced entry keeps its text and
+// provenance in middle_term_memory_dormant; new text gets server-stamped manual provenance for this row's
+// current profile group. Unchanged text leaves the digest and its provenance untouched.
+function chimMiddleTermApplyManualDigest(array &$extended, string $latest, array $row): void
+{
+    $memories = is_array($extended['middle_term_memory'] ?? null) ? $extended['middle_term_memory'] : [];
+    $provenance = is_array($extended['middle_term_memory_provenance'] ?? null) ? $extended['middle_term_memory_provenance'] : [];
+    $dormant = is_array($extended['middle_term_memory_dormant'] ?? null) ? $extended['middle_term_memory_dormant'] : [];
+    $latestKey = empty($memories) ? null : array_key_last($memories);
+    if ($latest === ($latestKey === null ? '' : trim((string)$memories[$latestKey]))) {
+        return;
+    }
+    $groupKeys = chimNpcRowActorKey($row) !== null || !empty($row['profile_owner_npc_id'])
+        ? chimNpcProfileActorKeys($row) : [];
+    sort($groupKeys);
+    if ($latestKey !== null) {
+        // Archive the replaced entry once: a generated/legacy/other-group original keeps its provenance for
+        // unlink and audit. A manual draft of this same profile owner and key group (whichever member edited
+        // it) is simply replaced, so repeated edits do not grow the dormant list.
+        $old = $provenance[$latestKey] ?? null;
+        $oldGroup = is_array($old['group_keys'] ?? null) ? $old['group_keys'] : null;
+        if (is_array($oldGroup)) { sort($oldGroup); }
+        $sameManualDraft = is_array($old) && ($old['origin'] ?? '') === 'manual' && $oldGroup === $groupKeys
+            && (int)($old['owner_npc_id'] ?? 0) === (int)($row['profile_owner_npc_id'] ?? $row['id']);
+        if (!$sameManualDraft) {
+            $dormant[] = ['gamets' => (int)$latestKey, 'text' => $memories[$latestKey], 'provenance' => $old];
+        }
+        unset($memories[$latestKey], $provenance[$latestKey]);
+    }
+    if ($latest !== '') {
+        $gamets = $latestKey ?? max(0, (int)DataLastKnownGameTS());
+        $memories[$gamets] = $latest;
+        $provenance[$gamets] = chimMiddleTermDigestProvenance($groupKeys, $groupKeys, chimNpcProfileBinding($row),
+            (int)($row['profile_owner_npc_id'] ?? $row['id']), [], $latest, 'manual');
+    }
+    ksort($memories, SORT_NUMERIC);
+    ksort($provenance, SORT_NUMERIC);
+    foreach (['middle_term_memory' => $memories, 'middle_term_memory_provenance' => $provenance,
+        'middle_term_memory_dormant' => $dormant] as $key => $value) {
+        if (empty($value)) {
+            unset($extended[$key]);
+        } else {
+            $extended[$key] = $value;
+        }
+    }
 }
 
 function chimNpcProfileIdentity(array $row): array
@@ -563,17 +652,49 @@ function chimNpcUnlinkProfiles(int $id, string $revision): void
 function chimNpcWriteSharedProfile(NpcMaster $manager, int $id, array $data): bool
 {
     $db = $GLOBALS['db'];
-    if ($db->execQuery('BEGIN') === false) { return false; }
+    // A caller already inside a transaction keeps its own boundary: use a savepoint so this helper never
+    // commits or rolls back the outer work.
+    $nested = method_exists($db, 'inTransaction') && $db->inTransaction();
+    if ($db->execQuery($nested ? 'SAVEPOINT chim_npc_shared_write' : 'BEGIN') === false) { return false; }
     try {
-        // Only active links take this path. Lock the pair in ID order to avoid opposite-actor deadlocks.
+        // Linked writes and guarded workers take this path. Lock the pair, plus any other actors whose
+        // binding the caller depends on (a relationship target), in ID order to avoid deadlocks.
+        $expected = [];
+        foreach ((array)($data['_expected_bindings'] ?? []) as $expectedId => $expectedBinding) {
+            if ((int)$expectedId > 0) { $expected[(int)$expectedId] = (string)$expectedBinding; }
+        }
+        foreach (array_keys((array)($data['_expected_keys'] ?? [])) as $keyId) {
+            if ((int)$keyId > 0 && !isset($expected[(int)$keyId])) { $lockOnly[(int)$keyId] = true; }
+        }
+        $lockIds = array_merge(array_keys($expected), array_keys($lockOnly ?? []));
+        $extraIds = $lockIds ? ' UNION SELECT unnest(ARRAY[' . implode(',', $lockIds) . '])' : '';
         $rows = $db->fetchAll("SELECT * FROM core_npc_master WHERE id IN (
             SELECT id FROM core_npc_master WHERE id = {$id}
-            UNION SELECT profile_owner_npc_id FROM core_npc_master WHERE id = {$id}
+            UNION SELECT profile_owner_npc_id FROM core_npc_master WHERE id = {$id}{$extraIds}
         ) ORDER BY id FOR UPDATE");
         $actors = array_column($rows, null, 'id');
         $actor = $actors[$id] ?? null;
         if (!$actor || ($data['_profile_binding'] ?? '') !== chimNpcProfileBinding($actor)) {
             throw new UnexpectedValueException('Profile sharing changed; reload before saving');
+        }
+        foreach ($expected as $expectedId => $expectedBinding) {
+            if (!isset($actors[$expectedId]) || chimNpcProfileBinding($actors[$expectedId]) !== $expectedBinding) {
+                throw new UnexpectedValueException('Related profile sharing changed; discard stale work');
+            }
+        }
+        // Physical actor keys captured before a model call: a canonical-key change without a sharing epoch
+        // change (reference repair, rename of a dynamic key) must also reject the stale write.
+        foreach ((array)($data['_expected_keys'] ?? []) as $keyId => $expectedKey) {
+            if (!isset($actors[(int)$keyId]) || chimNpcRowActorKey($actors[(int)$keyId]) !== (string)$expectedKey) {
+                throw new UnexpectedValueException('Related actor identity changed; discard stale work');
+            }
+        }
+        unset($data['_expected_keys']);
+        // Optional caller check (claimed job, playthrough timeline) evaluated while the rows are locked.
+        $guard = $data['_commit_guard'] ?? null;
+        unset($data['_expected_bindings'], $data['_commit_guard']);
+        if ($guard !== null && (!is_callable($guard) || $guard() !== true)) {
+            throw new UnexpectedValueException('Guarded profile write is stale');
         }
         $ownerId = (int)($actor['profile_owner_npc_id'] ?? $id);
         if ($ownerId === $id) {
@@ -602,10 +723,12 @@ function chimNpcWriteSharedProfile(NpcMaster $manager, int $id, array $data): bo
             $saved = (!$shared || $manager->updateActor($ownerId, $shared) !== false)
                 && $manager->updateActor($id, $physical) !== false;
         }
-        if (!$saved || $db->execQuery('COMMIT') === false) { throw new RuntimeException('Shared profile update failed'); }
+        if (!$saved || $db->execQuery($nested ? 'RELEASE SAVEPOINT chim_npc_shared_write' : 'COMMIT') === false) {
+            throw new RuntimeException('Shared profile update failed');
+        }
         return true;
     } catch (Throwable $error) {
-        $db->execQuery('ROLLBACK');
+        $db->execQuery($nested ? 'ROLLBACK TO SAVEPOINT chim_npc_shared_write' : 'ROLLBACK');
         error_log('[NPC PROFILE] ' . $error->getMessage());
         return false;
     }
@@ -636,7 +759,7 @@ function chimNpcRestoreSharedProfiles(NpcMaster $manager, $timestamp, bool $pres
                 unset($extended['_chim_history_source']);
                 if (!$history) {
                     // Preserve the character and link, but never carry a future personal summary backwards.
-                    unset($extended['middle_term_memory']);
+                    unset($extended['middle_term_memory'], $extended['middle_term_memory_provenance']);
                 }
                 if ($preserveRelationships) {
                     $currentExtended = chimNpcProfileJson($row['extended_data'] ?? null);
@@ -662,6 +785,10 @@ function chimNpcRestoreSharedProfiles(NpcMaster $manager, $timestamp, bool $pres
             if (is_array($extended['middle_term_memory'] ?? null)) {
                 $extended['middle_term_memory'] = array_filter($extended['middle_term_memory'],
                     static fn($key) => is_numeric($key) && (float)$key <= (float)$timestamp, ARRAY_FILTER_USE_KEY);
+                if (is_array($extended['middle_term_memory_provenance'] ?? null)) {
+                    $extended['middle_term_memory_provenance'] = array_intersect_key(
+                        $extended['middle_term_memory_provenance'], $extended['middle_term_memory']);
+                }
                 if ($manager->updateActor($id, ['extended_data' => json_encode($extended)]) === false) {
                     throw new RuntimeException('Cannot remove future personal memory');
                 }

@@ -34,6 +34,7 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'LOCATION_OGHMA', 'type' => 'boolean'],
             ['name' => 'CORE_CONNECTOR_OGHMA_CUSTOM', 'type' => 'foreign:core_llm_connector:id:label'],
             ['name' => 'OGHMA_EXTRACTOR_FALLBACK', 'type' => 'boolean'],
+            ['name' => 'OGHMA_MULTILINGUAL_ROUTING', 'type' => 'boolean'],
             ['name' => 'OGHMA_EXTRACTOR_TIMEOUT_MS', 'type' => 'integer', 'min' => 250, 'max' => 3000],
         ],
         'Memory' => [
@@ -62,9 +63,14 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'AUTOFILL_CUSTOM_PROFILES', 'type' => 'boolean'],
             ['name' => 'AUTOFILL_CUSTOM_PROFILES_TRIGGER', 'type' => 'integer', 'min' => 10, 'max' => 100],
             ['name' => 'BGL_TRIGGER_HOURS', 'type' => 'number', 'min' => 1, 'max' => 720, 'step' => 0.1, 'default' => 24],
+            // Stored as text; 'format' makes every save path validate it as a real date/time.
+            ['name' => 'SKYRIM_START_DATE', 'label' => 'Skyrim Start Date', 'type' => 'string', 'format' => 'skyrim_datetime',
+                'default' => '0201-08-17 00:00:00', 'placeholder' => '0201-08-17 00:00:00'],
             ['name' => 'END_CONVERSATION_COOLDOWN', 'type' => 'integer', 'min' => 0, 'max' => 300],
             ['name' => 'BOOK_READ_LINES_PER_BATCH', 'label' => 'Lines Before Book Comment', 'type' => 'integer', 'min' => 1, 'default' => 8],
             ['name' => 'BOOK_READING_VOICE', 'label' => 'Book Reading Voice', 'type' => 'boolean', 'default' => true],
+            ['name' => 'AUTOMATIC_ACTOR_VOICE_EFFECTS', 'label' => 'Automatic Actor Voice Effects', 'type' => 'boolean', 'default' => true,
+                'help' => 'Automatically adjust NPC voices for werewolf form, vampire lord form, combat and sneaking. Uses fresh game state and keeps the saved voice filter. Filtered speech may take longer to generate.'],
         ],
         'Quests' => [
             ['name' => 'CHIM_AI_QUEST_PROGRESSION', 'type' => 'boolean'],

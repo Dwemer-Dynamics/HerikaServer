@@ -109,8 +109,13 @@ if ($cmds[0] == "TrackAll") {
 
     // Things that happened after last iteration
     $npcNameEsc = $db->escape($GLOBALS["HERIKA_NAME"]);
+    // Speech the worker's selected physical row witnessed (captured speaker/audience keys); names never match.
+    require_once $enginePath . 'lib/eventlog_helper.php';
+    require_once $enginePath . 'lib/core/npc_reference.php';
+    $bglSpeechSql = chimBuildSpeechContextWhereClause($db, $GLOBALS['HERIKA_NAME'], $currentNpcData);
+    $bglMemorySql = dataGetMemoryCompanionConditionSql($GLOBALS['HERIKA_NAME'], 'companions', 'classifier', $currentNpcData);
     $query = "SELECT max(gamets) as  gamets from speech where
-    (speaker='$npcNameEsc' or listener='$npcNameEsc' or companions like '%|$npcNameEsc|%')
+    {$bglSpeechSql}
     ";
 
     // error_log($query);

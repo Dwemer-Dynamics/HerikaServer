@@ -404,6 +404,7 @@ function spawnBackgroundLifeNpc($npc_profile, $startingPoint, $inventoryItems)
         'action' => 'TravelTo',
         'fullcall' => 'TravelTo',
         'actorname' => $npc['npc_name'],
+        'actor_key' => chimNpcRowActorKey($npc),
         'ts' => $last_ts,
         'gamets' => $last_gamets,
         'localts' => time(),
@@ -903,6 +904,9 @@ if ($argv[1] == '16') {
 
 if ($argv[1] == '17') {
 
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName($argv[2]);
+    
     $GLOBALS["db"]->insert(
         'responselog',
         [
@@ -910,7 +914,7 @@ if ($argv[1] == '17') {
             'sent' => 0,
             'actor' => "rolemaster",
             'text' => "",
-            'action' => "rolecommand|BackgroundCmd@0x0D24507B@RemoveFromBgL",
+            'action' => "rolecommand|BackgroundCmd@0x{$npc["refid"]}@RemoveFromBgL",
             'tag' => __FILE__ . ":" . __LINE__,
         ]
     );
@@ -1656,10 +1660,34 @@ if ($argv[1] == '54') {
     $skyrimCmd = new SkyrimCommandBuilder();
     foreach ($npcs as $npc) {
 
-
-        $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x14", 0, 0, 155);
-        $skyrimCmd->send(cmd: $json);
+        // Teleport NPC to player
+        //$json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x14", 0, 0, 155);
+        //$skyrimCmd->send(cmd: $json);
+        $GLOBALS["db"]->insert(
+            'responselog',
+            [
+                'localts' => time(),
+                'sent' => 0,
+                'actor' => "rolemaster",
+                'text' => "",
+                'action' => "rolecommand|BackgroundCmd@0x{$npc["refid"]}@MoveToPlayer",
+                'tag' => __FILE__ . ":" . __LINE__,
+            ]
+        );
     }
 
 
 }
+
+if ($argv[1] == '55') {
+    $name = "Meridia";
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName($name);
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $json = $skyrimCmd->ObjectReference->MoveTo("0x{$npc["refid"]}", "0x14", 0, 0, 155);
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $json = $skyrimCmd->ObjectReference->Enable("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+}
+

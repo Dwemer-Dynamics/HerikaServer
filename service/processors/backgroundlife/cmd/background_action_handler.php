@@ -226,6 +226,7 @@ function handleTravelToAction($location, $currentNpcData, $npcName, $last_ts, $l
             'action' => "TravelTo",
             'fullcall' => "TravelTo:$resolvedLocation:{$GLOBALS["LAST_REASON"]}",
             'actorname' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),
@@ -333,6 +334,7 @@ function handleStayAtPlaceAction($location, $currentNpcData, $npcName, $last_ts,
             'action' => "Idle",
             'fullcall' => "StayAtPlace:$resolvedLocation$intentSuffix",
             'actorname' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),
@@ -397,9 +399,12 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
         '{PLAYER_NAME}' => $GLOBALS["PLAYER_NAME"]
     ]);
 
+    require_once dirname(__DIR__, 4) . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'bgl_letters.php';
+
     $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
     $dateStringSK = convert_gamets2skyrim_long_date(DataLastKnownGameTS());
-    $fullTitle = "A letter from {$GLOBALS["HERIKA_NAME"]} ($dateStringSK)";
+    // Unique, because the note image and the books row are both keyed by title.
+    $fullTitle = chimLetterUniqueTitle("A letter from {$GLOBALS["HERIKA_NAME"]} ($dateStringSK)");
 
     $contextBlock = !empty($dynamicBiography)
         ? "<character_sheet>\n{$npcName}:\n{$dynamicBiography}\n</character_sheet>\n\n"
@@ -409,6 +414,14 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
 
     $historyBlock = !empty($historyWithInnerThought)
         ? "<context_history>\n{$historyWithInnerThought}\n</context_history>\n\n"
+        : '';
+
+    // Letters from the player still waiting for an answer: this letter can be the reply.
+    $unansweredLetters = chimLetterUnansweredFromPlayer($GLOBALS["HERIKA_NAME"]);
+    $replyToLetterId = $unansweredLetters ? (int)end($unansweredLetters)['id'] : 0;
+    $unansweredBlock = $unansweredLetters
+        ? chimLetterUnansweredPromptBlock($unansweredLetters)
+            . "This letter is {$GLOBALS["HERIKA_NAME"]}'s reply to the letters above; respond to what {$GLOBALS["PLAYER_NAME"]} wrote.\n\n"
         : '';
 
     $dialoguePrompt = [
@@ -421,6 +434,7 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
             'role' => 'user',
             'content' => "{$contextBlock}"
                 . "{$historyBlock}"
+                . "{$unansweredBlock}"
                 . "(at this point {$GLOBALS["HERIKA_NAME"]} thinks to himsel/herself:{$GLOBALS['LAST_REASON']})\n"
                 . "{$letterStyle}\n"
         ],
@@ -433,7 +447,9 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
         error_log("[handleSendLetter] Failed to generate letter content for NPC: $npcName");
         return false;
     }
-    createLetter($fullTitle, $dialogueBuffer);
+    // Remember what was actually written, not the intent that led to it.
+    $letterContent = trim($dialogueBuffer);
+    createLetter($fullTitle, $letterContent);
 
     // Will make plugin to download letter image to data folder, and will be stored using title's hash as name
     $db->insert(
@@ -494,6 +510,7 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
         'action' => 'SendLetter',
         'fullcall' => "SendLetter:{$GLOBALS["PLAYER_NAME"]}",
         'actorname' => $GLOBALS["HERIKA_NAME"]  ,
+        'actor_key' => chimNpcRowActorKey($currentNpcData),
         'ts' => $last_ts,
         'gamets' => $last_gamets,
         'localts' => time(),
@@ -515,6 +532,21 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
             'localts' => time(),
         ]
     );
+
+    // book.php resolves the text by title when the player reads the note.
+    $db->insert(
+        'books',
+        [
+            'ts' => 0,
+            'gamets' => 0,
+            'content' => $letterContent,
+            'sess' => 'generated',
+            'localts' => time(),
+            'title' => $fullTitle,
+        ]
+    );
+
+    chimLetterRecordToPlayer($GLOBALS["HERIKA_NAME"], (string)$currentNpcData["refid"], $fullTitle, $letterContent, $replyToLetterId);
 
     return true;
 }
@@ -567,6 +599,7 @@ function handleReturnHome($location, $currentNpcData, $npcName, $last_ts, $last_
         'action' => 'MoveTo',
         'fullcall' => "ReturnHome",
         'actorname' => $npcName,
+        'actor_key' => chimNpcRowActorKey($currentNpcData),
         'ts' => $last_ts,
         'gamets' => $last_gamets,
         'localts' => time(),
@@ -597,50 +630,130 @@ function handleReturnHome($location, $currentNpcData, $npcName, $last_ts, $last_
 }
 
 /**
- * Resolve a target NPC by name against core_npc_master.
+ * Resolve a target NPC against core_npc_master.
  *
- * Strategy (requires pg_trgm extension, no schema changes beyond that):
- *   1. Exact case-insensitive match — fastest path, no trigram overhead.
- *   2. Trigram similarity via pg_trgm's % operator and similarity() function.
- *      The % operator filters rows whose similarity score meets the session
- *      threshold (default 0.3), and ORDER BY sim DESC returns the best match first.
+ * An exact selector is authoritative and never falls back to the name:
+ *   - a canonical actor key (ref:/dyn:),
+ *   - "Name [RefID: X]", or a separate $refid, which must belong to a row with that name.
+ * A bare name resolves only when exactly one row carries it; same-name actors are refused
+ * rather than choosing one. Trigram matching suggests a name
+ * for bare input only, and that name must then pass the same exact rule.
  *
- * @param string $targetNpcName  Raw NPC name from the LLM response
- * @param object $db             Database connection
- * @return array|null            ['name' => ..., 'refid' => ...] or null if unresolvable
+ * @param string      $targetNpcName Raw NPC selector from the LLM response
+ * @param object      $db            Database connection
+ * @param string|null $refid         Optional RefID given alongside the name (SpeakTo Name:refid)
+ * @param bool        $ambiguous     Set when the input was refused (several matching actors, or a stale/foreign selector)
+ * @return array|null ['id' => ..., 'name' => ..., 'refid' => ...] or null if unresolvable
  */
-function resolveNpcByName(string $targetNpcName, $db): ?array
+function resolveNpcByName(string $targetNpcName, $db, ?string $refid = null, &$ambiguous = false): ?array
 {
-    $targetEsc = $db->escape($targetNpcName);
+    $ambiguous = false;
+    $targetNpcName = trim($targetNpcName);
+    $npcMaster = new NpcMaster();
+    $row = null;
+    $selector = null;
+
+    try {
+        if (chimIsActorKey($targetNpcName) && preg_match('/^(ref|dyn):/', $targetNpcName)) {
+            $selector = $targetNpcName;
+            $row = $npcMaster->getByActorKey($targetNpcName);
+        } elseif (preg_match('/^(.*?)\s*\[RefID:\s*(?:0x)?([0-9a-f]{1,8})\]\s*$/i', $targetNpcName, $m)) {
+            $selector = $targetNpcName;
+            $targetNpcName = trim($m[1]);
+            $row = $npcMaster->getByRefId($m[2]);
+        } elseif ($refid !== null && NpcMaster::normalizeRefId($refid) !== '' && NpcMaster::normalizeRefId($refid) !== '00000000') {
+            $selector = "$targetNpcName:$refid";
+            $row = $npcMaster->getByRefId($refid);
+        }
+    } catch (RuntimeException $error) {
+        // Duplicate keys or RefIDs: refuse instead of picking one.
+        error_log("[resolveNpcByName] Refused '$targetNpcName': " . $error->getMessage());
+        $ambiguous = true;
+        return null;
+    }
+
+    if ($selector !== null) {
+        // A RefID names a physical slot; a recycled slot now held by someone else is not the requested actor.
+        if ($row && $targetNpcName !== '' && !chimIsActorKey($targetNpcName)
+            && mb_strtolower(trim((string)$row['npc_name'])) !== mb_strtolower($targetNpcName)) {
+            error_log("[resolveNpcByName] Selector '$selector' belongs to '{$row['npc_name']}', not '$targetNpcName'; refused.");
+            $ambiguous = true;
+            return null;
+        }
+        if (!$row || NpcMaster::normalizeRefId($row['refid'] ?? '') === '') {
+            $nameEsc = $db->escape($targetNpcName);
+            $known = $row || $targetNpcName === '' || chimIsActorKey($targetNpcName) || $db->fetchOne(
+                "SELECT 1 AS known FROM core_npc_master WHERE lower(npc_name) = lower('$nameEsc') LIMIT 1");
+            if (!$known) {
+                // A name nobody has met yet: the caller may create its profile (legacy SpeakTo behaviour).
+                return null;
+            }
+            error_log("[resolveNpcByName] Exact selector '$selector' is not a current actor; refused.");
+            $ambiguous = true;
+            return null;
+        }
+        return ['id' => (int)$row['id'], 'name' => $row['npc_name'], 'refid' => $row['refid']];
+    }
+
+    $resolveExactName = static function (string $name) use ($db, &$ambiguous): ?array {
+        $nameEsc = $db->escape($name);
+        $rows = (array)$db->fetchAll(
+            "SELECT id, npc_name AS name, refid
+             FROM core_npc_master
+             WHERE lower(npc_name) = lower('$nameEsc')
+             ORDER BY id"
+        );
+        if (count($rows) > 1) {
+            // Same-name actors (bound twins or a bound/legacy mix) are never chosen between.
+            error_log("[resolveNpcByName] '$name' matches several actors; refused without choosing one.");
+            $ambiguous = true;
+            return null;
+        }
+        if (!$rows || empty($rows[0]['refid'])) {
+            return null;
+        }
+        return ['id' => (int)$rows[0]['id'], 'name' => $rows[0]['name'], 'refid' => $rows[0]['refid']];
+    };
 
     // Step 1 — exact case-insensitive match (avoids trigram scan entirely)
-    $exact = $db->fetchOne(
-        "SELECT npc_name AS name, refid
-         FROM core_npc_master
-         WHERE lower(npc_name) = lower('$targetEsc')
-         LIMIT 1"
-    );
-    if (!empty($exact['refid'])) {
+    $exact = $resolveExactName($targetNpcName);
+    if ($exact !== null || $ambiguous) {
         return $exact;
     }
 
-    // Step 2 — trigram similarity (pg_trgm). The % operator uses the GIN/GiST index
-    // when available but works without one. similarity() scores 0..1; higher is closer.
+    // Step 2 — trigram similarity (pg_trgm) proposes a name, which must then resolve exactly.
+    $targetEsc = $db->escape($targetNpcName);
     $best = $db->fetchOne(
-        "SELECT npc_name AS name, refid,
-                similarity(npc_name, '$targetEsc') AS sim
+        "SELECT npc_name AS name, similarity(npc_name, '$targetEsc') AS sim
          FROM core_npc_master
-         WHERE npc_name % '$targetEsc'
+         WHERE npc_name % '$targetEsc' AND refid IS NOT NULL AND BTRIM(refid) <> ''
          ORDER BY sim DESC
          LIMIT 1"
     );
 
-    if (!empty($best['refid'])) {
-        error_log("[resolveNpcByName] Trigram match: '$targetNpcName' → '{$best['name']}' (similarity={$best['sim']})");
-        return $best;
+    if (!empty($best['name'])) {
+        $match = $resolveExactName($best['name']);
+        if ($match !== null) {
+            error_log("[resolveNpcByName] Trigram match: '$targetNpcName' → '{$match['name']}' (similarity={$best['sim']})");
+        }
+        return $match;
     }
 
     return null;
+}
+
+// Profile of the exact row a command was addressed to, never a same-name twin. Only a profile just created
+// for an unseen name has no row id; its name lookup keeps the unique/legacy-unassigned rule.
+function backgroundLifeTargetProfile(NpcMaster $npcMaster, array $targetNpc): ?array
+{
+    if (empty($targetNpc['id'])) {
+        return $npcMaster->getByName((string)($targetNpc['name'] ?? ''));
+    }
+    $row = $npcMaster->getById($targetNpc['id']);
+    if (!$row || NpcMaster::normalizeRefId($row['refid'] ?? '') !== NpcMaster::normalizeRefId($targetNpc['refid'] ?? '')) {
+        return null;
+    }
+    return $row;
 }
 
 /**
@@ -657,11 +770,12 @@ function resolveNpcByName(string $targetNpcName, $db): ?array
  */
 function handleMoveToAction($targetNpcName, $currentNpcData, $npcName, $last_ts, $last_gamets, $momentum, $db)
 {
-    $targetNpc = resolveNpcByName($targetNpcName, $db);
+    $targetNpc = resolveNpcByName($targetNpcName, $db, null, $targetRefused);
 
     if ($targetNpc === null) {
         error_log("[handleMoveToAction] Target NPC not found: $targetNpcName");
-        $locationCandidate = resolveTravelLocation($targetNpcName, $currentNpcData, $db);
+        // A refused actor selector is not reinterpreted as a place.
+        $locationCandidate = $targetRefused ? null : resolveTravelLocation($targetNpcName, $currentNpcData, $db);
 
         if ($locationCandidate && isset($locationCandidate["sim"]) && $locationCandidate["sim"] > _LOCATION_RESOLVE_SIM_THRESHOLD) {
             $db->insert('eventlog', [
@@ -745,6 +859,7 @@ function handleMoveToAction($targetNpcName, $currentNpcData, $npcName, $last_ts,
         'action' => 'MoveTo',
         'fullcall' => "MoveTo:$resolvedName",
         'actorname' => $npcName,
+        'actor_key' => chimNpcRowActorKey($currentNpcData),
         'ts' => $last_ts,
         'gamets' => $last_gamets,
         'localts' => time(),
@@ -786,6 +901,60 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
 
     if ($targetNpc === null) {
         error_log("[handleFindNPCAction] Target NPC not found: $targetNpcName");
+
+        if ($targetNpcName==$GLOBALS["PLAYER_NAME"]) {
+
+            $resolvedName = $GLOBALS["PLAYER_NAME"];
+            $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData['refid']));
+            $targetRefHexString = "0x00000014";
+
+            $db->insert('responselog', [
+                'localts' => time(),
+                'sent' => 0,
+                'actor' => 'rolemaster',
+                'text' => '',
+                'action' => "rolecommand|BackgroundCmd@$refHexString@MoveTo/$targetRefHexString",
+                'tag' => '',
+            ]);
+
+            $db->insert('eventlog', [
+                'ts' => $last_ts + 1,
+                'gamets' => $last_gamets + 20,
+                'type' => 'innerchat',
+                'data' => "The Narrator: $npcName locates $resolvedName at $lastReportedLocation, and walks towards him/her.",
+                'sess' => $momentum,
+                'localts' => time(),
+                'people' => $npcName,
+                'location' => null,
+                'party' => '',
+            ]);
+
+            $db->insert('actions_issued', [
+                'action' => 'MoveTo',
+                'fullcall' => "MoveTo:$targetRefHexString:$resolvedName",
+                'actorname' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
+                'ts' => $last_ts,
+                'gamets' => $last_gamets,
+                'localts' => time(),
+                'original' => 'backgroundaction',
+            ]);
+
+            // Insert bgl_history log entry
+            $db->insert(
+                'bgl_history',
+                [
+                    'npc' => $npcName,
+                    'ts' => $last_ts,
+                    'gamets' => $last_gamets,
+                    'localts' => time(),
+                    'data' => "$npcName moves toward $resolvedName. Reason: {$GLOBALS["LAST_REASON"]}",
+                    'category' => 'move',
+                ]
+            );
+            return true;
+        }
+
         $db->insert('eventlog', [
             'ts' => $last_ts,
             'gamets' => $last_gamets + 10,
@@ -829,8 +998,8 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
     // If the NPC belongs to any vendor factions, we can assume it's a trader 
     // We can check and publish stock later
     $npcMaster = new NpcMaster();
-    $targetNpcData = $npcMaster->getByName($resolvedName);
-    $factions = $npcMaster->getNpcFactions($targetNpcData);
+    $targetNpcData = backgroundLifeTargetProfile($npcMaster, $targetNpc);
+    $factions = $npcMaster->getNpcFactions($targetNpcData ?: []);
     $factionsArray = [];
     foreach ($factions as $faction) {
         $factionsArray[] = $faction["formid"];
@@ -863,6 +1032,7 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         'action' => 'FindNPC',
         'fullcall' => "FindNPC:$resolvedName",
         'actorname' => $npcName,
+        'actor_key' => chimNpcRowActorKey($currentNpcData),
         'ts' => $last_ts,
         'gamets' => $last_gamets,
         'localts' => time(),
@@ -899,8 +1069,8 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         // Check if NPC to speak to is a vender/trader. We publish stock.
         $stockString = "";
         $npcMaster = new NpcMaster();
-        $targetNpcData = $npcMaster->getByName($resolvedName);
-        $factions = $npcMaster->getNpcFactions($targetNpcData);
+        $targetNpcData = backgroundLifeTargetProfile($npcMaster, $targetNpc);
+        $factions = $npcMaster->getNpcFactions($targetNpcData ?: []);
         $factionsArray = [];
         foreach ($factions as $faction) {
             $factionsArray[] = $faction["formid"];
@@ -944,6 +1114,7 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
             'action' => 'MoveTo',
             'fullcall' => "MoveTo:$targetRefHexString:$resolvedName",
             'actorname' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),
@@ -1043,7 +1214,7 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
 {
 
     // Check first if name comes in the form of "NPC NAME" or "NPCname:refid);
-    if (strpos($targetNpcName, ':') !== false) {
+    if (strpos($targetNpcName, ':') !== false && !preg_match('/\[RefID:|^(ref|dyn):/i', trim($targetNpcName))) {
         $parts = explode(':', $targetNpcName);
         $targetNpcName = trim($parts[0]);
         $targetRefid = trim($parts[1]);
@@ -1053,7 +1224,13 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         $targetRefid = "0";
     }
 
-    $targetNpc = resolveNpcByName($targetNpcName, $db);
+    $targetNpc = resolveNpcByName($targetNpcName, $db, $targetRefid, $targetRefused);
+
+    if ($targetNpc === null && $targetRefused) {
+        // Same-name actors, or a RefID that is stale or belongs to someone else: never pick or create one.
+        error_log("[handleSpeakToAction] Target NPC refused: $targetNpcName");
+        return false;
+    }
 
     if ($targetNpc === null) {
         error_log("[handleSpeakToAction] Target NPC not found: $targetNpcName, trying to create profile.");
@@ -1077,8 +1254,8 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
     // Check if NPC to speak to is a vender/dtrader. We pusblish stock.
     $stockString = "";
     $npcMaster = new NpcMaster();
-    $targetNpcData = $npcMaster->getByName($resolvedName);
-    $factions = $npcMaster->getNpcFactions($targetNpcData);
+    $targetNpcData = backgroundLifeTargetProfile($npcMaster, $targetNpc);
+    $factions = $npcMaster->getNpcFactions($targetNpcData ?: []);
     $factionsArray = [];
     foreach ($factions as $faction) {
         $factionsArray[] = $faction["formid"];
@@ -1088,8 +1265,8 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
     // If the NPC belongs to any vendor factions, we can assume it's a trader 
     // We can check and publish stock later
     $npcMaster = new NpcMaster();
-    $targetNpcData = $npcMaster->getByName($resolvedName);
-    $factions = $npcMaster->getNpcFactions($targetNpcData);
+    $targetNpcData = backgroundLifeTargetProfile($npcMaster, $targetNpc);
+    $factions = $npcMaster->getNpcFactions($targetNpcData ?: []);
     $factionsArray = [];
     foreach ($factions as $faction) {
         $factionsArray[] = $faction["formid"];
@@ -1154,6 +1331,7 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         'action' => 'SpeakTo',
         'fullcall' => "SpeakTo:$resolvedName",
         'actorname' => $npcName,
+        'actor_key' => chimNpcRowActorKey($currentNpcData),
         'ts' => $last_ts,
         'gamets' => $last_gamets,
         'localts' => time(),
@@ -1164,14 +1342,19 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
     if ($connectionHandler !== null) {
 
         $npcMaster = new NpcMaster();
-        $targetNpcData = $npcMaster->getByName($resolvedName);
+        $targetNpcData = backgroundLifeTargetProfile($npcMaster, $targetNpc);
+        if (!$targetNpcData) {
+            error_log("[handleSpeakToAction] Target profile for $resolvedName is no longer bound to the addressed actor; skipping dialogue.");
+            return true;
+        }
         $extdata = $npcMaster->getExtendedData($targetNpcData);
 
 
         $targetNpcDataBasicProfile = "";
 
-        if (isset($extdata['middle_term_memory'])) {
-            $middleTermMemory = end($extdata['middle_term_memory']);
+        // Only a digest whose sources all belong to this actor's current profile group.
+        if ($mtmDigest = chimMiddleTermLatestDigest($targetNpcData)) {
+            $middleTermMemory = $mtmDigest['text'];
 
         }
         $targetNpcDataBasicProfile .= "Name: {$targetNpcData['npc_name']}\n";
@@ -1184,7 +1367,9 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         $targetNpcDataBasicProfile .= "Skills: {$targetNpcData['skills']}\n";
         $targetNpcDataBasicProfile .= "Speechstyle: {$targetNpcData['speechstyle']}\n";
         $targetNpcDataBasicProfile .= "Goals: {$targetNpcData['goals']}\n";
-        $targetNpcDataBasicProfile .= "Memories: {$middleTermMemory}\n";
+        if (isset($middleTermMemory)) {
+            $targetNpcDataBasicProfile .= "Memories: {$middleTermMemory}\n";
+        }
 
         $contextBlock = !empty($dynamicBiography)
             ? "<character_sheet>\n{$npcName}:\n{$dynamicBiography}\n</character_sheet>\n\n"
@@ -1194,7 +1379,7 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
             ? "<character_sheet>\n{$resolvedName}:\n{$targetNpcDataBasicProfile}\n</character_sheet>\n\n"
             : '';
 
-        foreach (DataLastDataExpandedFor($targetNpcData['npc_name'], -10) as $row) {
+        foreach (DataLastDataExpandedFor($targetNpcData['npc_name'], -10, "", $targetNpcData) as $row) {
             $historicTarget[] = $row["content"];
 
         }
@@ -1402,6 +1587,7 @@ function handleSpreadRumorsAction($rumorDescription, $currentNpcData, $npcName, 
         'action' => 'SpreadRumors',
         'fullcall' => "SpreadRumors:$rumorDescription",
         'actorname' => $npcName,
+        'actor_key' => chimNpcRowActorKey($currentNpcData),
         'ts' => $last_ts,
         'gamets' => $last_gamets,
         'localts' => time(),
@@ -1499,6 +1685,7 @@ function handleGiveGoldToAction($actionArgument, $currentNpcData, $npcName, $las
             'action' => 'GiveGoldTo',
             'fullcall' => "GiveGoldTo:$resolvedName:$gold",
             'actorname' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),
@@ -1658,6 +1845,7 @@ function handleSellServiceAction($actionArgument, $currentNpcData, $npcName, $la
             'action' => 'SellService',
             'fullcall' => "SellService:$resolvedName:$service:$gold",
             'actorname' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),
@@ -1895,6 +2083,7 @@ function handleTradeItemsAction($tradeType, $actionArgument, $currentNpcData, $n
             'action' => $tradeType,
             'fullcall' => "$tradeType:$resolvedName:$itemId:$count:" . ($tradeType === 'GiveItemTo' ? 0 : $gold),
             'actorname' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),

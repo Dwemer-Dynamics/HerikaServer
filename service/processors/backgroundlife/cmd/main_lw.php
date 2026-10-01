@@ -48,7 +48,7 @@ require_once $enginePath . 'lib/core/core_profiles.class.php';
 require_once $enginePath . 'lib/core/llm_connector.class.php';
 require_once $enginePath . 'lib/core/tts_connector.class.php';
 require_once $enginePath . 'lib/lazy_xml.php';
-require_once $enginePath . 'debug/background_action_handler.php';
+require_once $enginePath . 'service/processors/backgroundlife/cmd/background_action_handler.php';
 
 // ─── Database ─────────────────────────────────────────────────────────────────
 
@@ -168,16 +168,22 @@ $dynamicBiography = $npcMaster->appendBackgroundLifeGoals($dynamicBiography, $cu
 $extended_data = $npcMaster->getExtendedData($currentNpcData);
 $metadata = $npcMaster->getMetadata($currentNpcData);
 
-if (isset($extended_data["middle_term_memory"])) {
-    $middle_term_memory = end($extended_data["middle_term_memory"]);
+// Only a digest whose sources all belong to this actor's current profile group.
+if ($mtmDigest = chimMiddleTermLatestDigest($currentNpcData)) {
+    $middle_term_memory = $mtmDigest['text'];
     $dynamicBiography .= "\n\n<middle_term_memory>\nPast events\n{$middle_term_memory}\n</middle_term_memory>";
 
 }
 
 // Things that happened after last iteration
 $npcNameEsc = $db->escape($GLOBALS["HERIKA_NAME"]);
+// Speech the worker's selected physical row witnessed (captured speaker/audience keys); names never match.
+require_once $enginePath . 'lib/eventlog_helper.php';
+require_once $enginePath . 'lib/core/npc_reference.php';
+$bglSpeechSql = chimBuildSpeechContextWhereClause($db, $GLOBALS['HERIKA_NAME'], $currentNpcData);
+$bglMemorySql = dataGetMemoryCompanionConditionSql($GLOBALS['HERIKA_NAME'], 'companions', 'classifier', $currentNpcData);
 $query = "SELECT max(gamets) as  gamets from speech where
-    (speaker='$npcNameEsc' or listener='$npcNameEsc' or companions like '%|$npcNameEsc|%')
+    {$bglSpeechSql}
     ";
 
 error_log($query);
@@ -238,7 +244,7 @@ foreach ($contextDataHistoric as $element) {
 $history .= "\nNote: {$GLOBALS["PLAYER_NAME"]} leaves and is absent from this point on.\n</last_dialogue>\n";
 
 $query = "SELECT location,gamets from speech where
-    (speaker='$npcNameEsc' or listener='$npcNameEsc' or companions like '%|$npcNameEsc|%')
+    {$bglSpeechSql}
     order by gamets desc,ts desc
     ";
 
@@ -519,6 +525,16 @@ if ($fullMode) {
 
 $promptContent .= "<text>\n$buffer\n</text>\n\n";
 
+// Player letters waiting for an answer. When present, the notification letter is the reply.
+require_once $enginePath . 'lib/bgl_letters.php';
+$unansweredLetters = $lettersEnabled ? chimLetterUnansweredFromPlayer($GLOBALS["HERIKA_NAME"]) : [];
+$replyToLetterId = $unansweredLetters ? (int)end($unansweredLetters)['id'] : 0;
+if ($unansweredLetters) {
+    $promptContent .= chimLetterUnansweredPromptBlock($unansweredLetters)
+        . "{$GLOBALS["HERIKA_NAME"]} has received the letters above from {$GLOBALS["PLAYER_NAME"]} by courier. "
+        . "If {$GLOBALS["HERIKA_NAME"]} writes a <notification>, it is the reply to them.\n\n";
+}
+
 $promptContent .= $innerThoughtStyle . "\n\n";
 
 // Hardcoded action definitions
@@ -631,7 +647,8 @@ if (is_array($parsed)) {
 
     if ($parsed["notification"] && $lettersEnabled) {
         $dateStringSK = convert_gamets2skyrim_long_date(DataLastKnownGameTS());
-        $fullTitle = "A letter from {$GLOBALS["HERIKA_NAME"]} ($dateStringSK)";
+        // Unique, because the note image and the books row are both keyed by title.
+        $fullTitle = chimLetterUniqueTitle("A letter from {$GLOBALS["HERIKA_NAME"]} ($dateStringSK)");
 
         // This is going to create a picture with the letter.
         createLetter($fullTitle, $parsed["notification"]);
@@ -757,6 +774,8 @@ if (is_array($parsed)) {
                 'title' => $fullTitle
             )
         );
+
+        chimLetterRecordToPlayer($GLOBALS["HERIKA_NAME"], (string)$currentNpcData["refid"], $fullTitle, $parsed["notification"], $replyToLetterId);
     }
 
     if ($parsed["rumor"]) {
@@ -795,7 +814,8 @@ $db->insert(
     ]
 );
 
-logMemory($GLOBALS["HERIKA_NAME"], $GLOBALS["HERIKA_NAME"], trim($buffer), $momentum, $last_gamets, 'backgroundlife_diary', $last_ts);
+logMemory($GLOBALS["HERIKA_NAME"], $GLOBALS["HERIKA_NAME"], trim($buffer), $momentum, $last_gamets, 'backgroundlife_diary', $last_ts,
+    chimNpcRowActorKey($currentNpcData)); // The worker's physical row, never the name.
 // Mark NPC as background_life_enabled
 $npcManager = new NpcMaster();
 $npcData = $npcManager->getById($workerNpcId);
