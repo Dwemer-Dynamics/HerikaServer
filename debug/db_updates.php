@@ -8650,7 +8650,9 @@ if ($checkVersion('npc_plugin_extended_data') < 20260919001) {
 }
 
 // Two-way courier letters between the player and Background Life NPCs (lib/bgl_letters.php).
-if ($checkVersion("bgl_letters") < 20260924001) {
+// Both steps are idempotent and rerun when lib/identity_schema_readiness.php reports courier_refid missing.
+$bglLettersRepair = $identityRepairNeeded("bgl_letters");
+if ($bglLettersRepair || $checkVersion("bgl_letters") < 20260924001) {
     Logger::debug("Applying bgl_letters 20260924001 - create player/NPC letter correspondence table");
 
     $db->execQuery("
@@ -8686,7 +8688,7 @@ if ($checkVersion("bgl_letters") < 20260924001) {
 }
 
 // The exact RefID of the spawned courier, so arrival, greeting and Despawn never address a namesake courier.
-if ($checkVersion("bgl_letters") < 20260930001) {
+if ($bglLettersRepair || $checkVersion("bgl_letters") < 20260930001) {
     Logger::debug("Applying bgl_letters 20260930001 - add courier_refid");
     $db->execQuery("ALTER TABLE public.bgl_letters ADD COLUMN IF NOT EXISTS courier_refid varchar");
     $updateVersion("bgl_letters", 20260930001);
