@@ -529,6 +529,17 @@ final class FormReferenceSupportTest extends TestCase
         $this->assertNull(chimRegistrationActorKey('', 'Skyrim.esm|0001BDE8'));
         $this->assertSame('ref:skyrim.esm|0001BDE8', chimRegistrationActorKey('ref:skyrim.esm|0001BDE8', 'Skyrim.esm|0001BDE8'));
         $this->assertSame($dyn, chimRegistrationActorKey($dyn, null));
+        // The ref: key's `|` survives the request split; only the registration payload is rejoined.
+        $fields = array_fill(0, 46, '');
+        [$fields[0], $fields[4], $fields[44], $fields[45]] = ['Astrid', '0001BDE8', 'Skyrim.esm/0001BDE8', 'ref:skyrim.esm|0001BDE8'];
+        foreach (['addnpc', 'ADDBGNPC'] as $type) {
+            $request = chimJoinRegistrationRequestFields(explode('|', "{$type}|1|2|" . implode('@', $fields)));
+            $this->assertCount(4, $request);
+            $this->assertSame($type, $request[0]);
+            $this->assertSame('ref:skyrim.esm|0001BDE8', chimRegistrationActorKey(explode('@', $request[3])[45], 'Skyrim.esm|0001BDE8'));
+        }
+        $this->assertSame(['addnpc', '1', '2', 'Astrid@Base'], chimJoinRegistrationRequestFields(['addnpc', '1', '2', 'Astrid@Base']));
+        $this->assertSame(['inputtext', '1', '2', 'a', 'b'], chimJoinRegistrationRequestFields(['inputtext', '1', '2', 'a', 'b']));
         foreach ([[$dyn, 'Skyrim.esm|0001BDE8'], ['ref:skyrim.esm|00012345', 'Skyrim.esm|0001BDE8'], ['player', null], ['Astrid', null]] as [$key, $source]) {
             try {
                 chimRegistrationActorKey($key, $source);

@@ -450,6 +450,14 @@ function chimRegistrationActorKey($rawField, ?string $referenceSource): ?string
     }
     return $key;
 }
+// addnpc/addbgnpc are `type|ts|gamets|Name@…` with no field 4: the @ payload is the last request field and
+// its ref: actor_key (field 45) contains `|`. Rejoins what the request split cut; other types are unchanged.
+function chimJoinRegistrationRequestFields(array $gameRequest): array
+{
+    $type = strtolower(trim((string)($gameRequest[0] ?? '')));
+    if (($type !== 'addnpc' && $type !== 'addbgnpc') || count($gameRequest) <= 4) { return $gameRequest; }
+    return array_merge(array_slice($gameRequest, 0, 3), [implode('|', array_slice($gameRequest, 3))]);
+}
 // SpawnAgent (AIAgentAIMind.psc) reports `spawned@<display name>@<signed FormID>`. Returns the 8-hex RefID only
 // for that exact name; anything else is not a spawn of this actor.
 function chimSpawnStatusRefid(string $data, string $name): ?string

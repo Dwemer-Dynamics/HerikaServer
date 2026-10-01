@@ -139,6 +139,8 @@ MAIN FLOW
 ***********************/
 
 $gameRequest = explode("|", $receivedData);
+require_once __DIR__ . "/lib/core/npc_reference.php";
+$gameRequest = chimJoinRegistrationRequestFields($gameRequest);
 $GLOBALS["gameRequest"] = &$gameRequest;
 if (chimInteractionIsTrigger($gameRequest[0])) chimInteractionRequire();
 unset($GLOBALS["CHIM_TURN_PEOPLE_SNAPSHOT"]);
