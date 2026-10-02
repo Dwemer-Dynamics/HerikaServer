@@ -762,28 +762,21 @@ function chimNpcManagerAction(array $input): array
     ];
 }
 
-function chimNpcManagerList(array $profiles): array
+// Member-level list predicates on table alias $alias ('' for the bare table); null when the filter is unused.
+function chimNpcManagerListPredicates(string $alias = ''): array
 {
-    $page = max(1, (int)($_GET['page'] ?? 1));
-    $limit = max(1, min(100, (int)($_GET['limit'] ?? 40)));
-    $offset = ($page - 1) * $limit;
-    $conditions = ["npc_name IS NOT NULL", "btrim(npc_name) <> ''"];
+    $p = $alias === '' ? '' : $alias . '.';
+    // nearby combines nearby_refid (exact RefID) and nearby_name (name only, not proof of proximity).
+    $predicates = ['search' => null, 'nearby' => null, 'nearby_refid' => null, 'nearby_name' => null];
 
     $search = trim((string)($_GET['search'] ?? ''));
     if ($search !== '') {
         $escaped = $GLOBALS['db']->escape('%' . $search . '%');
         $normalizedSearch = preg_replace('/^0x/i', '', $search);
         $escapedNormalized = $GLOBALS['db']->escape('%' . $normalizedSearch . '%');
-        $conditions[] = "(npc_name ILIKE '{$escaped}' OR race ILIKE '{$escaped}' OR refid ILIKE '{$escaped}'
-            OR replace(lower(refid), '0x', '') LIKE lower('{$escapedNormalized}')
-            OR metadata::text ILIKE '{$escaped}')";
-    }
-
-    $profileId = (int)($_GET['profile_id'] ?? 0);
-    if ($profileId > 0) {
-        $conditions[] = "(CASE WHEN profile_owner_npc_id IS NULL THEN profile_id ELSE
-            (SELECT owner.profile_id FROM core_npc_master owner WHERE owner.id = core_npc_master.profile_owner_npc_id)
-            END) = {$profileId}";
+        $predicates['search'] = "({$p}npc_name ILIKE '{$escaped}' OR {$p}race ILIKE '{$escaped}' OR {$p}refid ILIKE '{$escaped}'
+            OR replace(lower({$p}refid), '0x', '') LIKE lower('{$escapedNormalized}')
+            OR {$p}metadata::text ILIKE '{$escaped}')";
     }
 
     $refids = array_values(array_filter(array_map('trim', explode(',', (string)($_GET['refids'] ?? '')))));
@@ -794,15 +787,47 @@ function chimNpcManagerList(array $profiles): array
             $escapedRefids = array_map(static function ($value) {
                 return "'" . $GLOBALS['db']->escape(strtolower($value)) . "'";
             }, $refids);
-            $nearbyConditions[] = 'lower(refid) IN (' . implode(',', $escapedRefids) . ')';
+            $predicates['nearby_refid'] = "lower({$p}refid) IN (" . implode(',', $escapedRefids) . ')';
+            $nearbyConditions[] = $predicates['nearby_refid'];
         }
         if (!empty($names)) {
             $escapedNames = array_map(static function ($value) {
                 return "'" . $GLOBALS['db']->escape($value) . "'";
             }, $names);
-            $nearbyConditions[] = 'npc_name IN (' . implode(',', $escapedNames) . ')';
+            $predicates['nearby_name'] = "{$p}npc_name IN (" . implode(',', $escapedNames) . ')';
+            $nearbyConditions[] = $predicates['nearby_name'];
         }
-        $conditions[] = '(' . implode(' OR ', $nearbyConditions) . ')';
+        $predicates['nearby'] = '(' . implode(' OR ', $nearbyConditions) . ')';
+    }
+
+    return $predicates;
+}
+
+function chimNpcManagerList(array $profiles): array
+{
+    if (chimNpcManagerBool($_GET['collapse_shared'] ?? false)) {
+        return chimNpcManagerListCollapsed($profiles);
+    }
+
+    $page = max(1, (int)($_GET['page'] ?? 1));
+    $limit = max(1, min(100, (int)($_GET['limit'] ?? 40)));
+    $offset = ($page - 1) * $limit;
+    $conditions = ["npc_name IS NOT NULL", "btrim(npc_name) <> ''"];
+
+    $predicates = chimNpcManagerListPredicates();
+    if ($predicates['search'] !== null) {
+        $conditions[] = $predicates['search'];
+    }
+
+    $profileId = (int)($_GET['profile_id'] ?? 0);
+    if ($profileId > 0) {
+        $conditions[] = "(CASE WHEN profile_owner_npc_id IS NULL THEN profile_id ELSE
+            (SELECT owner.profile_id FROM core_npc_master owner WHERE owner.id = core_npc_master.profile_owner_npc_id)
+            END) = {$profileId}";
+    }
+
+    if ($predicates['nearby'] !== null) {
+        $conditions[] = $predicates['nearby'];
     }
 
     $where = implode(' AND ', $conditions);
@@ -828,6 +853,155 @@ function chimNpcManagerList(array $profiles): array
         'npcs' => array_map(static function ($row) use ($profileMap) {
             return chimNpcManagerCard(chimNpcEffectiveProfile($row), $profileMap);
         }, (array)$rows),
+        'profiles' => array_map(static function ($profile) {
+            return ['id' => $profile['id'], 'label' => $profile['label']];
+        }, $profiles),
+        'pagination' => [
+            'page' => $page,
+            'limit' => $limit,
+            'total' => $total,
+            'pages' => max(1, (int)ceil($total / $limit)),
+        ],
+    ];
+}
+
+const CHIM_NPC_MANAGER_CARD_MEMBER_LIMIT = 25;
+
+// Opt-in (collapse_shared=1) list with one card per kept profile: explicitly linked references appear once,
+// as their keeper (owner row); unlinked rows, including same-name namesakes, stay separate cards. Search and
+// nearby filters match any physical member, the profile filter the keeper; all run before LIMIT/OFFSET.
+// duplicate_count counts keeper cards sharing the keeper's name. card.profile_sharing.members lists up to
+// CHIM_NPC_MANAGER_CARD_MEMBER_LIMIT physical members (keeper, exact nearby RefID, nearby name, search match
+// first) in the detail identity shape; member_count is the full total and truncated members open by id.
+function chimNpcManagerListCollapsed(array $profiles): array
+{
+    $page = max(1, (int)($_GET['page'] ?? 1));
+    $limit = max(1, min(100, (int)($_GET['limit'] ?? 40)));
+    $offset = ($page - 1) * $limit;
+    $predicates = chimNpcManagerListPredicates('m');
+
+    // A row whose owner is missing or itself linked keeps its own group, as the uncollapsed list shows it.
+    $memberCte = "npc_member AS (
+            SELECT m.*, COALESCE(owner.id, m.id) AS _group_id
+            FROM core_npc_master m
+            LEFT JOIN core_npc_master owner
+                ON owner.id = m.profile_owner_npc_id AND owner.profile_owner_npc_id IS NULL
+        )";
+    $having = [];
+    foreach (['search', 'nearby'] as $filter) {
+        if ($predicates[$filter] !== null) {
+            $having[] = "bool_or({$predicates[$filter]})";
+        }
+    }
+    $groupCte = "grouped AS (
+            SELECT m._group_id, COUNT(*) AS member_total
+            FROM npc_member m
+            GROUP BY m._group_id"
+        . (empty($having) ? '' : ' HAVING ' . implode(' AND ', $having)) . "
+        )";
+
+    $keeperConditions = ["k.npc_name IS NOT NULL", "btrim(k.npc_name) <> ''"];
+    $profileId = (int)($_GET['profile_id'] ?? 0);
+    if ($profileId > 0) {
+        $keeperConditions[] = "k.profile_id = {$profileId}";
+    }
+    $keeperWhere = implode(' AND ', $keeperConditions);
+
+    $countRow = $GLOBALS['db']->fetchOne(
+        "WITH {$memberCte}, {$groupCte}
+         SELECT COUNT(*) AS total
+         FROM grouped g
+         JOIN core_npc_master k ON k.id = g._group_id
+         WHERE {$keeperWhere}"
+    );
+    $total = (int)($countRow['total'] ?? 0);
+    $rows = (array)$GLOBALS['db']->fetchAll(
+        "WITH {$memberCte}, {$groupCte},
+        name_counts AS (
+            SELECT lower(npc_name) AS normalized_name, COUNT(*) AS duplicate_count
+            FROM npc_member
+            WHERE _group_id = id
+            GROUP BY lower(npc_name)
+        )
+         SELECT k.*, g.member_total AS _member_total, name_counts.duplicate_count
+         FROM grouped g
+         JOIN core_npc_master k ON k.id = g._group_id
+         LEFT JOIN name_counts ON name_counts.normalized_name = lower(k.npc_name)
+         WHERE {$keeperWhere}
+         ORDER BY k.npc_favorite DESC NULLS LAST, k.npc_name ASC, k.id ASC
+         LIMIT {$limit} OFFSET {$offset}"
+    );
+
+    // One bounded query for the page's members: at most CHIM_NPC_MANAGER_CARD_MEMBER_LIMIT per card.
+    $membersByGroup = [];
+    $keeperIds = array_values(array_filter(array_map(static fn($row) => (int)($row['id'] ?? 0), $rows)));
+    if (!empty($keeperIds)) {
+        $idList = implode(',', $keeperIds);
+        $nearbyRefidFlag = $predicates['nearby_refid'] ?? 'FALSE';
+        $nearbyNameFlag = $predicates['nearby_name'] ?? 'FALSE';
+        $matchFlag = $predicates['search'] ?? 'FALSE';
+        $memberLimit = CHIM_NPC_MANAGER_CARD_MEMBER_LIMIT;
+        // Same grouping as member_total, so a chained or dangling owner never adds rows to another card.
+        $memberRows = (array)$GLOBALS['db']->fetchAll(
+            "WITH {$memberCte}
+            SELECT * FROM (
+                SELECT flagged.*, ROW_NUMBER() OVER (
+                    PARTITION BY flagged._group_id
+                    ORDER BY flagged.is_keeper DESC, flagged.is_nearby_refid DESC, flagged.is_nearby_name DESC,
+                        flagged.is_match DESC, flagged.id ASC
+                ) AS member_rank
+                FROM (
+                    SELECT m.id, m.npc_name, m.refid, m.metadata, m.profile_owner_npc_id, m._group_id,
+                        CASE WHEN m.id = m._group_id THEN 1 ELSE 0 END AS is_keeper,
+                        CASE WHEN {$nearbyRefidFlag} THEN 1 ELSE 0 END AS is_nearby_refid,
+                        CASE WHEN {$nearbyNameFlag} THEN 1 ELSE 0 END AS is_nearby_name,
+                        CASE WHEN {$matchFlag} THEN 1 ELSE 0 END AS is_match
+                    FROM npc_member m
+                    WHERE m._group_id IN ({$idList})
+                ) flagged
+            ) ranked
+            WHERE member_rank <= {$memberLimit}
+            ORDER BY _group_id, member_rank"
+        );
+        foreach ($memberRows as $member) {
+            $metadata = chimNpcManagerDecodeJson($member['metadata'] ?? '{}');
+            $membersByGroup[(int)$member['_group_id']][] = [
+                'id' => (int)$member['id'],
+                'name' => trim((string)($member['npc_name'] ?? '')),
+                'refid' => trim((string)($member['refid'] ?? '')),
+                'refid_source' => (string)($metadata['refid_source'] ?? ''),
+                'profile_owner_npc_id' => isset($member['profile_owner_npc_id'])
+                    ? (int)$member['profile_owner_npc_id'] : null,
+                'actor_key' => chimNpcRowActorKey($member),
+                'keeper' => (int)$member['is_keeper'] === 1,
+                // Only an exact RefID match is proximity; a name match may be any same-name actor.
+                'nearby' => (int)$member['is_nearby_refid'] === 1,
+                'nearby_name' => (int)$member['is_nearby_name'] === 1,
+                'matched' => (int)$member['is_match'] === 1,
+            ];
+        }
+    }
+
+    $profileMap = chimNpcManagerProfileMap($profiles);
+    $cards = [];
+    foreach ($rows as $row) {
+        $memberTotal = max(1, (int)($row['_member_total'] ?? 1));
+        $row['_has_shared_profile'] = $memberTotal > 1;
+        $card = chimNpcManagerCard(chimNpcEffectiveProfile($row), $profileMap);
+        $members = $membersByGroup[$card['id']] ?? [];
+        // Detail semantics: linked/automatic follow the group size; members use the detail identity fields.
+        $card['profile_sharing']['linked'] = $memberTotal > 1;
+        $card['profile_sharing']['automatic'] = $memberTotal > 1 && $card['profile_sharing']['automatic'];
+        $card['profile_sharing']['members'] = $members;
+        $card['profile_sharing']['member_count'] = $memberTotal;
+        $card['profile_sharing']['members_truncated'] = count($members) < $memberTotal;
+        $card['member_count'] = $memberTotal;
+        $cards[] = $card;
+    }
+
+    return [
+        'collapsed_shared' => true,
+        'npcs' => $cards,
         'profiles' => array_map(static function ($profile) {
             return ['id' => $profile['id'], 'label' => $profile['label']];
         }, $profiles),

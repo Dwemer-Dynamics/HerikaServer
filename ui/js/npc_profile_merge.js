@@ -343,6 +343,19 @@
             }
             copy.append(name, identityMeta(member));
             item.appendChild(copy);
+            // Linked actors are folded into the kept profile's card, so their own RefID editor
+            // is reached from here. Only offered where the list page can open the editor.
+            if (typeof window.NPC_OPEN_EDITOR === 'function' && member.id) {
+                const edit = element('button', 'npc-merge-edit', 'Edit');
+                edit.type = 'button';
+                edit.setAttribute('aria-label', `Edit ${member.name || 'NPC'}, RefID ${refidText(member.refid)}`);
+                edit.addEventListener('click', () => {
+                    const memberId = String(member.id);
+                    close();
+                    window.NPC_OPEN_EDITOR(memberId);
+                });
+                item.appendChild(edit);
+            }
             sharedList.appendChild(item);
         });
 
@@ -554,7 +567,7 @@
             owner_id: Number(state.keepId),
             other_id: Number(otherId),
             revision: state.revision
-        }, 'Merging profiles...', 'Profiles merged. Both actor cards now show Shared profile.');
+        }, 'Merging profiles...', 'Profiles merged. The kept profile\'s card now lists the linked actor.');
     }
 
     function unlinkProfile() {
