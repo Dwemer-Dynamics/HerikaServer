@@ -1739,6 +1739,7 @@ if (!function_exists('renderNpcToolbar')) {
               <button id="npc_import_btn" type="button" class="npc-toolbar-btn npc-toolbar-btn-uniform npc-toolbar-btn-action" title="Import NPC from JSON file">📥 Import NPC</button>
               <button id="rel_bulk_build_btn" type="button" class="npc-toolbar-btn npc-toolbar-btn-uniform npc-toolbar-btn-action" title="Build JSONB relationships from Oghma text data for all NPCs">🔗 Build Relationships</button>
               <button id="npc_bulk_switch_profile_btn" type="button" class="npc-toolbar-btn npc-toolbar-btn-uniform npc-toolbar-btn-action npc-toolbar-btn-switch" title="Switch all NPCs from one profile to another">🔀 Mass Switch Profile</button>
+              <button type="button" class="npc-toolbar-btn npc-toolbar-btn-uniform npc-toolbar-btn-action npc-refgroup-open" title="Actors that are one character and share a profile" aria-haspopup="dialog" aria-controls="npc_refgroup_modal"><span aria-hidden="true">👥</span> Reference Groups</button>
               <button id="npc_bulk_unlock_btn" type="button" class="npc-toolbar-btn npc-toolbar-btn-uniform npc-toolbar-btn-action" title="Unlock every NPC profile except The Narrator">🔓 Unlock All Profiles</button>
               <button id="npc_bulk_delete_btn" type="button" class="npc-toolbar-btn npc-toolbar-btn-uniform npc-toolbar-btn-danger" title="Delete all unlocked NPCs (excludes The Narrator and locked)">❌ Delete All Profiles</button>
             </div>
@@ -4660,6 +4661,28 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
     .npc-merge-actions { justify-content:stretch; }
     .npc-merge-actions button { flex:1 1 auto; }
 }
+/* --- Reference groups dialog (reuses the merge dialog panels) --- */
+.npc-refgroup-container { max-width:760px; }
+.npc-refgroup-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }
+.npc-refgroup-list { max-height:48vh; }
+.npc-refgroup-item { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px; padding:8px 10px; border:1px solid #4a4a4a; border-radius:6px; background:#242424; }
+.npc-refgroup-item.is-disabled { border-style:dashed; background:#1f1f1f; }
+.npc-refgroup-item.is-disabled .npc-refgroup-name > span:first-child { color:#9aa3ae; }
+.npc-refgroup-copy { display:flex; flex-direction:column; gap:3px; min-width:0; flex:1 1 260px; }
+.npc-refgroup-name { display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:#e9efff; font-weight:700; font-size:13px; overflow-wrap:anywhere; }
+.npc-refgroup-badge { padding:1px 8px; border:1px solid #4a4a4a; border-radius:999px; background:#2f2f2f; color:#cfd9ea; font-size:11px; font-weight:600; white-space:nowrap; }
+.npc-refgroup-badge.is-custom { border-color:#2f6f57; background:#153228; color:#a7e8bc; }
+.npc-refgroup-badge.is-off { border-color:#7d2f2f; background:#2c1b1b; color:#ffb3b3; }
+.npc-refgroup-row-actions button { padding:6px 12px; }
+.npc-refgroup-field { display:flex; flex-direction:column; gap:4px; color:#e9efff; font-size:12.5px; font-weight:600; }
+.npc-refgroup-field input, .npc-refgroup-field textarea { width:100%; box-sizing:border-box; padding:8px; border-radius:6px; border:1px solid #4a4a4a; background:#2a2a2a; color:#e9efff; font-family:inherit; font-size:13px; font-weight:400; }
+.npc-refgroup-field textarea { font-family:"Consolas","Courier New",monospace; resize:vertical; }
+.npc-refgroup-field input:focus-visible, .npc-refgroup-field textarea:focus-visible, #npc_refgroup_enabled:focus-visible { outline:2px solid rgb(242, 124, 17); outline-offset:1px; }
+.npc-refgroup-hint { color:#9fb1c9; font-size:11.5px; font-weight:400; }
+#npc_refgroup_close:focus-visible, .pagination.npc-toolbar .npc-refgroup-open:focus-visible { outline:2px solid rgb(242, 124, 17); outline-offset:2px; }
+@media (max-width: 480px) {
+    .npc-refgroup-row-actions { width:100%; }
+}
 .npc-identity-label { display:block; font-weight:700; color:rgb(242, 124, 17); }
 .npc-identity-readonly { display:flex; flex-direction:column; gap:6px; padding:10px 12px; border:1px solid #3a3a3a; border-radius:8px; background:rgba(26, 26, 26, 0.6); }
 .npc-identity-row { color:#e0e0e0; font-size:13px; line-height:1.4; overflow-wrap:anywhere; }
@@ -5549,6 +5572,57 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
           <button type="button" id="npc_merge_submit" class="npc-merge-primary" disabled>Merge profiles</button>
         </div>
       </section>
+    </div>
+  </div>
+</div>
+
+<!-- Reference groups: plugin actors that share one profile automatically. -->
+<div id="npc_refgroup_modal" class="modal-backdrop" style="z-index:10004;" role="dialog" aria-modal="true" aria-labelledby="npc_refgroup_title" aria-describedby="npc_refgroup_intro">
+  <div class="modal-container npc-refgroup-container">
+    <div class="modal-header">
+      <h2 class="modal-title" id="npc_refgroup_title">Reference groups</h2>
+      <div class="modal-actions">
+        <button type="button" id="npc_refgroup_close" class="btn-cancel">Close</button>
+      </div>
+    </div>
+    <div class="modal-body npc-merge-body">
+      <p class="npc-merge-intro" id="npc_refgroup_intro">Actors listed in one enabled group are the same character and share a profile automatically. Editing a built-in group saves your own copy; Reset restores the original.</p>
+      <p id="npc_refgroup_status" class="npc-merge-status" role="status" aria-live="polite"></p>
+      <p id="npc_refgroup_error" class="npc-merge-error" role="alert" hidden></p>
+
+      <section id="npc_refgroup_list_panel" class="npc-merge-panel" aria-labelledby="npc_refgroup_list_heading">
+        <div class="npc-refgroup-head">
+          <h3 id="npc_refgroup_list_heading">Groups</h3>
+          <div class="npc-merge-actions">
+            <button type="button" id="npc_refgroup_add" class="npc-merge-primary" data-refgroup-busy>+ Add group</button>
+          </div>
+        </div>
+        <ul id="npc_refgroup_list" class="npc-merge-list npc-refgroup-list" aria-labelledby="npc_refgroup_list_heading"></ul>
+      </section>
+
+      <form id="npc_refgroup_form" class="npc-merge-panel" hidden aria-labelledby="npc_refgroup_form_heading" novalidate>
+        <h3 id="npc_refgroup_form_heading">Add custom group</h3>
+        <p id="npc_refgroup_form_note" class="npc-merge-note" hidden>Saving stores your own copy of this built-in group.</p>
+        <div class="npc-refgroup-field">
+          <label for="npc_refgroup_name">Character name</label>
+          <input type="text" id="npc_refgroup_name" maxlength="128" autocomplete="off" required>
+        </div>
+        <div class="npc-refgroup-field">
+          <label for="npc_refgroup_plugin">Plugin file</label>
+          <input type="text" id="npc_refgroup_plugin" maxlength="254" autocomplete="off" spellcheck="false" placeholder="Skyrim.esm" aria-describedby="npc_refgroup_plugin_hint" required>
+          <span class="npc-refgroup-hint" id="npc_refgroup_plugin_hint">ESM, ESP or ESL filename.</span>
+        </div>
+        <div class="npc-refgroup-field">
+          <label for="npc_refgroup_ids">Local FormIDs</label>
+          <textarea id="npc_refgroup_ids" rows="4" spellcheck="false" placeholder="0001BDE8&#10;0004D6D1" aria-describedby="npc_refgroup_ids_hint" required></textarea>
+          <span class="npc-refgroup-hint" id="npc_refgroup_ids_hint">2 to 32 IDs, one per line, without the load-order prefix.</span>
+        </div>
+        <label class="npc-merge-confirm"><input type="checkbox" id="npc_refgroup_enabled" checked> <span>Enabled</span></label>
+        <div class="npc-merge-actions">
+          <button type="button" id="npc_refgroup_cancel">Cancel</button>
+          <button type="submit" id="npc_refgroup_save" class="npc-merge-primary" data-refgroup-busy>Save group</button>
+        </div>
+      </form>
     </div>
   </div>
 </div>
@@ -7557,6 +7631,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
     </div>
 
     <script src="<?php echo $webRoot; ?>/ui/js/npc_profile_merge.js" defer></script>
+    <script src="<?php echo $webRoot; ?>/ui/js/npc_reference_groups.js" defer></script>
 
 </main>
 
