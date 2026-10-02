@@ -30,7 +30,7 @@ function pts_ensure_functions($conn): bool {
     if ($checkResult && pg_num_rows($checkResult) > 0) {
         $row = pg_fetch_assoc($checkResult);
         if (pts_clone_function_is_current($row['function_definition'] ?? null)
-            && pg_fetch_result(pg_query($conn, "SELECT COALESCE((SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='chim_meta' AND p.proname='playthrough_api_version'),'')='SELECT 6' AND to_regprocedure('chim_meta.playthrough_identity(text)') IS NOT NULL AND to_regprocedure('chim_meta.prepare_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.validate_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.sync_playthrough_comments(text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough_upgraded(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.capture_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.clone_selected_schema(text,text,text[])') IS NOT NULL"), 0, 0) === 't') {
+            && pg_fetch_result(pg_query($conn, "SELECT COALESCE((SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='chim_meta' AND p.proname='playthrough_api_version'),'')='SELECT 11' AND to_regprocedure('chim_meta.playthrough_identity(text)') IS NOT NULL AND to_regprocedure('chim_meta.prepare_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.validate_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.sync_playthrough_comments(text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough_upgraded(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.capture_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.clone_selected_schema(text,text,text[])') IS NOT NULL"), 0, 0) === 't') {
             return true;
         }
 
@@ -123,8 +123,12 @@ function pts_schema_exists($conn, string $schemaName): bool {
     return pg_num_rows($result) > 0;
 }
 
-/** Prepare and validate a private copy within the caller's transaction. */
-function pts_prepare_playthrough($conn, string $schemaName): string {
+/**
+ * Prepare and validate a private copy within the caller's transaction.
+ * Export passes $validateRestore=false: it never activates the copy, so it skips the
+ * rolled-back restore into public tables and runs its own private checks instead.
+ */
+function pts_prepare_playthrough($conn, string $schemaName, bool $validateRestore = true): string {
     if (pg_transaction_status($conn) !== PGSQL_TRANSACTION_INTRANS) throw new RuntimeException('Restore preparation requires a transaction');
     if (!pts_ensure_functions($conn)) throw new RuntimeException('Playthrough database functions are unavailable');
     $result = @pg_query_params($conn,
@@ -134,6 +138,7 @@ function pts_prepare_playthrough($conn, string $schemaName): string {
     $stage = pg_fetch_result($result, 0, 0);
     require_once __DIR__ . '/playthrough_migrations.php';
     pts_migrate_prepared_playthrough($conn, $stage);
+    if (!$validateRestore) return $stage;
     $result = @pg_query_params($conn,
         "SELECT chim_meta.validate_playthrough($1, ARRAY(SELECT jsonb_array_elements_text($2::jsonb)))",
         [$stage, json_encode(pts_playthrough_tables())]);

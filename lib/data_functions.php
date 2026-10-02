@@ -11,6 +11,7 @@ require_once(__DIR__."/emote_moods.php");
 require_once(__DIR__."/core/activity_status.php");
 require_once(__DIR__."/core/transformation_state.php");
 require_once(__DIR__."/core/game_plugins.php");
+require_once(__DIR__."/core/npc_commitments.php");
 require_once(__DIR__."/core/event_type.php");
 require_once(__DIR__."/core/npc_master.class.php");
 require_once(__DIR__."/core/core_profiles.class.php");
@@ -1494,6 +1495,16 @@ function DataLastInfoFor($actorBeingCalled, $lastNelements = -2,$addNPCDescripti
         }
         $GLOBALS["PROMPT_NEARBY_SECTIONS"] .= "\n" . $heldItemsContext;
     }
+
+    $taskActor = trim((string)($GLOBALS['HERIKA_NAME'] ?? ''));
+    $taskGamets = (int)($GLOBALS['gameRequest'][2] ?? 0);
+    $taskContext = chimCommitmentFormatContext($taskActor, $taskGamets);
+    if ($taskContext !== '') {
+        if (!isset($GLOBALS['PROMPT_NEARBY_SECTIONS'])) {
+            $GLOBALS['PROMPT_NEARBY_SECTIONS'] = '';
+        }
+        $GLOBALS['PROMPT_NEARBY_SECTIONS'] .= "\n" . $taskContext;
+    }
     
     /*
     if (!isset($GLOBALS["IS_NPC"]) || !$GLOBALS["IS_NPC"])
@@ -2581,7 +2592,7 @@ function herikaShouldExcludeEventFromPromptContext(array $row): bool
     return false;
 }
 
-function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
+function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="", int $thoughtNpcId = 0) {
 
     global $db;
 
@@ -2643,9 +2654,9 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
       when type='ext_held_item_pickup' or type='ext_held_item_drop' then 'HELD_ITEM' 
       when type like 'ext_%' then 'PLUGIN'
       else '' 
-    end as subtype,a.data  as data , gamets,localts,type,location
+    end as subtype,a.data as data, a.private_thought, a.delivery_state, a.rowid, gamets,localts,type,location
     FROM  eventlog a WHERE
-    type<>'combatend'
+    type<>'combatend' AND type<>'prechat'
     and type<>'bored' and type<>'init' and type<>'infoloc' and type<>'info' and type<>'funcret' and type<>'book'
     and type<>'addnpc' and type<>'infonpc' and type<>'infoitems'
     and type<>'updateprofile' and type<>'rechat' and type<>'setconf' and  type<>'status_msg'  and type<>'user_input'
@@ -2741,6 +2752,8 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
     }
 
     $orderedData = array_reverse($rawDataReFiltered);
+    require_once __DIR__ . '/npc_private_thoughts.php';
+    $thoughtOwner = chimPrivateThoughtOwner($actor, $thoughtNpcId);
 
     //$orderedData = array_slice($orderedData, $lastNelements);
 
@@ -2982,6 +2995,7 @@ New setting: $currentLocation
             $lastTimeCategory = $currentTimeCategory;
         }
         
+        $rowData .= chimPrivateThoughtAnnotation($row, $thoughtOwner, $currentGameTs);
         $row= array('role' => $lastSpeaker, 'content' => trim($rowData),'subtype'=>$row["subtype"]?:strtoupper($lastSpeaker),'type'=>$row["type"],'gamets'=>$row["gamets"]);
         $lastDialogFull[] = $row;
         $previousRow=$row;
@@ -3318,12 +3332,12 @@ function replaceRoles($lastDialogFull,$actor,$lastNelements) {
 
 }
 
-function DataLastDataExpandedFor($actor, $lastNelements = -10,$sqlfilter="")
+function DataLastDataExpandedFor($actor, $lastNelements = -10,$sqlfilter="", int $thoughtNpcId = 0)
 {
 
     $localStartTime=microtime(true);
 
-    $ctx1=buildHistoricContext($actor, $lastNelements ,$sqlfilter);    
+    $ctx1=buildHistoricContext($actor, $lastNelements ,$sqlfilter, $thoughtNpcId);
     error_log("[buildHistoricContext] Elapsed time: " . (microtime(true) - $localStartTime) . " seconds");
 
 
@@ -5898,15 +5912,12 @@ function chimFindSupersedingUserInput($db, $requestTimestamp, $currentRequestTyp
 }
 
 function call_llm() {
-    global $contextData, $gameRequest, $receivedData, $startTime, $db;
-    global $ERROR_TRIGGERED, $talkedSoFar, $alreadysent, $FUNCTIONS_ARE_ENABLED;
-    global $overrideParameters, $request;
-    
-    // Call the internal function (which now handles fallback itself)
-    return call_llm_internal();
+    require_once __DIR__ . '/provider_recovery.php';
+    return chimCallWithProviderRecovery('call_llm_internal');
 }
 
 function call_llm_internal() {
+    if (isset($GLOBALS['CHIM_PRIVATE_THOUGHT_TURN'])) $GLOBALS['CHIM_PRIVATE_THOUGHT_TURN']['event_id'] = 0;
     chimInteractionRequire();
     global $contextData, $gameRequest, $receivedData, $startTime, $db;
     global $ERROR_TRIGGERED, $talkedSoFar, $alreadysent, $FUNCTIONS_ARE_ENABLED;
@@ -5961,7 +5972,7 @@ function call_llm_internal() {
         die('X-CUSTOM-CLOSE');
     };
 
-    // Check once before opening the connector. Later checks run only at speech boundaries.
+    // Check before opening; supported streams also poll while waiting, and speech checks again.
     $abortForSupersedingUserInput('before_llm');
 
     /*
@@ -5974,154 +5985,16 @@ function call_llm_internal() {
         require(__DIR__."/../processor/player_tts.php");
     }
 
+    if (property_exists($connectionHandler, 'recoveryPoll')) $connectionHandler->recoveryPoll = $abortForSupersedingUserInput;
+    $diagnosticIndex = $GLOBALS['CHIM_PROVIDER_DIAGNOSTIC_INDEX'] ?? null;
+    if ($diagnosticIndex !== null) $GLOBALS['CHIM_REQUEST_PERFORMANCE']['providers'][$diagnosticIndex]['_handler'] = $connectionHandler;
     $connectionHandler->open($contextData,$overrideParameters);
     $connectionOpened = $connectionHandler->primary_handler !== false;
     snapshot_response_prompt_debug_data();
-    error_log("[FALLBACK DEBUG] Checking primary_handler status: " . ($connectionHandler->primary_handler === false ? "FALSE" : "OK"));
-    
-    if ($connectionHandler->primary_handler === false) {
-        error_log("[FALLBACK DEBUG] primary_handler is false, checking fallback conditions");
-        
-        // Check if we should try fallback BEFORE sending error message
-        if (!isset($GLOBALS["IN_FALLBACK_MODE"])) {
-            $shouldTryFallback = false;
-            $fallbackConnectorId = null;
-            
-            if (isset($GLOBALS["CHIM_CORE_CURRENT_PROFILE_DATA"])) {
-                $profileData = $GLOBALS["CHIM_CORE_CURRENT_PROFILE_DATA"];
-                $fallbackConnectorId = class_exists('LLMRandomizer')
-                    ? LLMRandomizer::getConnectorIdForField($profileData, "llm_fallback_id")
-                    : ($profileData["llm_fallback_id"] ?? null);
-                error_log("[FALLBACK DEBUG] Fallback connector ID from profile: " . ($fallbackConnectorId ?? "NULL"));
-                
-                // Check if fallback is enabled in metadata
-                if (!empty($profileData["metadata"])) {
-                    $metadata = is_string($profileData["metadata"]) 
-                        ? json_decode($profileData["metadata"], true) 
-                        : $profileData["metadata"];
-                    if (is_array($metadata)) {
-                        $fallbackEnabled = !empty($metadata["LLM_FALLBACK_ENABLED"]);
-                        error_log("[FALLBACK DEBUG] Fallback enabled in metadata: " . ($fallbackEnabled ? "YES" : "NO"));
-                        $currentConnectorId = $GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]["id"] ?? null;
-                        error_log("[FALLBACK DEBUG] Current connector ID: " . ($currentConnectorId ?? "NULL"));
-                        $shouldTryFallback = $fallbackEnabled && $fallbackConnectorId && $fallbackConnectorId != $currentConnectorId;
-                        error_log("[FALLBACK DEBUG] Should try fallback: " . ($shouldTryFallback ? "YES" : "NO"));
-                    }
-                }
-            }
-            
-            if ($shouldTryFallback) {
-                error_log("[FALLBACK] Primary connector failed (connection error). Attempting fallback connector ID: {$fallbackConnectorId}");
-                
-                // Set fallback mode flag to prevent player TTS reprocessing
-                $GLOBALS["IN_FALLBACK_MODE"] = true;
-                
-                // Load and try fallback connector
-                $connector = new LLMConnector();
-                $fallbackConnectorData = $connector->getById($fallbackConnectorId);
-                
-                if ($fallbackConnectorData) {
-                    error_log("[FALLBACK] Loaded fallback connector: {$fallbackConnectorData["driver"]}/{$fallbackConnectorData["model"]}");
-                    $GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"] = $fallbackConnectorData;
-                    $connector->setOldGlobals($fallbackConnectorData);
-                    
-                    error_log("[FALLBACK] Recursively retrying with fallback connector");
-                    // Recursively retry with fallback (flag stays set throughout retry)
-                    $result = call_llm_internal();
-                    
-                    // Clear fallback mode flag after retry completes
-                    unset($GLOBALS["IN_FALLBACK_MODE"]);
-                    
-                    return $result;
-                } else {
-                    error_log("[FALLBACK] Fallback connector ID {$fallbackConnectorId} not found.");
-                    unset($GLOBALS["IN_FALLBACK_MODE"]);
-                }
-            }
-        } else {
-            error_log("[FALLBACK DEBUG] Already in fallback mode, not retrying");
-        }
-        
-        // No fallback or fallback also failed - send error message
-        error_log("[FALLBACK DEBUG] Sending ERROR_OPENAI message to user");
-        $db->insert(
-            'log',
-            array(
-                'localts' => time(),
-                'prompt' => nl2br((json_encode($GLOBALS["DEBUG_DATA"], JSON_PRETTY_PRINT))),
-                'response' => ((print_r(error_get_last(), true))),
-                'url' => nl2br(("$receivedData in " . (microtime(true) - $startTime) . " secs "))
-            )
-        );
-        if (Translation::isEnabled()) {
-            Translation::translate($GLOBALS["ERROR_OPENAI"]);
-            Translation::$sentences = [Translation::$response];
-        }        
-        returnLines([$GLOBALS["ERROR_OPENAI"]], true, $abortForSupersedingUserInput);
-        
-        $ERROR_TRIGGERED=true;
-        @ob_end_flush();
-
-        Logger::error(print_r(error_get_last(), true));
-        return false;
-    }
-
-    // Check for error response code
+    $GLOBALS['CHIM_PROVIDER_ATTEMPT']['handler'] = $connectionHandler;
     $statusCode = method_exists($connectionHandler, 'getHttpStatusCode') ? $connectionHandler->getHttpStatusCode() : 200;
-    if ($statusCode >= 300) {
-        // Check if we should try fallback BEFORE sending error message
-        if (!isset($GLOBALS["IN_FALLBACK_MODE"])) {
-            $shouldTryFallback = false;
-            $fallbackConnectorId = null;
-            
-            if (isset($GLOBALS["CHIM_CORE_CURRENT_PROFILE_DATA"])) {
-                $profileData = $GLOBALS["CHIM_CORE_CURRENT_PROFILE_DATA"];
-                $fallbackConnectorId = class_exists('LLMRandomizer')
-                    ? LLMRandomizer::getConnectorIdForField($profileData, "llm_fallback_id")
-                    : ($profileData["llm_fallback_id"] ?? null);
-                
-                // Check if fallback is enabled in metadata
-                if (!empty($profileData["metadata"])) {
-                    $metadata = is_string($profileData["metadata"]) 
-                        ? json_decode($profileData["metadata"], true) 
-                        : $profileData["metadata"];
-                    if (is_array($metadata)) {
-                        $fallbackEnabled = !empty($metadata["LLM_FALLBACK_ENABLED"]);
-                        $currentConnectorId = $GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]["id"] ?? null;
-                        $shouldTryFallback = $fallbackEnabled && $fallbackConnectorId && $fallbackConnectorId != $currentConnectorId;
-                    }
-                }
-            }
-            
-            if ($shouldTryFallback) {
-                error_log("[FALLBACK] Primary connector failed (HTTP {$statusCode}). Attempting fallback connector ID: {$fallbackConnectorId}");
-                
-                // Set fallback mode flag to prevent player TTS reprocessing
-                $GLOBALS["IN_FALLBACK_MODE"] = true;
-                
-                // Load and try fallback connector
-                $connector = new LLMConnector();
-                $fallbackConnectorData = $connector->getById($fallbackConnectorId);
-                
-                if ($fallbackConnectorData) {
-                    $GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"] = $fallbackConnectorData;
-                    $connector->setOldGlobals($fallbackConnectorData);
-                    
-                    // Recursively retry with fallback (flag stays set throughout retry)
-                    $result = call_llm_internal();
-                    
-                    // Clear fallback mode flag after retry completes
-                    unset($GLOBALS["IN_FALLBACK_MODE"]);
-                    
-                    return $result;
-                } else {
-                    error_log("[FALLBACK] Fallback connector ID {$fallbackConnectorId} not found.");
-                    unset($GLOBALS["IN_FALLBACK_MODE"]);
-                }
-            }
-        }
-        
-        Logger::error("LLM provider error response code: $statusCode");
+    if ($connectionHandler->primary_handler === false || $statusCode >= 300) {
+        if ($connectionOpened) $connectionHandler->close();
         return false;
     }
 
@@ -6179,9 +6052,11 @@ function call_llm_internal() {
             $GLOBALS["DEBUG_DATA"]["perf"][]=(microtime(true) - $startTime)." secs in openai stream";
 
             if ($gameRequest[0] != "diary") {
+                $GLOBALS['CHIM_PROVIDER_ATTEMPT']['committed'] = true;
                 returnLines($sentences, true, $abortForSupersedingUserInput);
                 $INCREMENTAL_SENTENCESIZE=MINIMUM_SENTENCE_SIZE;
             } else { //why is the diary talking? is this correct?
+                $GLOBALS['CHIM_PROVIDER_ATTEMPT']['committed'] = true;
                 $talkedSoFar[md5(implode(" ", $sentences))]=implode(" ", $sentences);
             }
 
@@ -6194,6 +6069,15 @@ function call_llm_internal() {
     } // --- end while
     
     
+    if (method_exists($connectionHandler, 'recoveryUsable') && !$connectionHandler->recoveryUsable()) {
+        $outputWasValid = false;
+    }
+    if (!$outputWasValid) {
+        $GLOBALS['CHIM_PROVIDER_ATTEMPT']['failure'] = $connectionHandler->recoveryFailure ?? 'invalid';
+        $connectionHandler->close();
+        return false;
+    }
+
     if ($outputWasValid && trim($buffer)) {
         Logger::info("REMAINING DATA <$buffer>");
         $sentences=split_sentences_stream(cleanResponse(trim($buffer)));
@@ -6211,8 +6095,10 @@ function call_llm_internal() {
         $GLOBALS["DEBUG_DATA"]["response"][]=["raw"=>$buffer,"processed"=>implode("|", $sentences)];
         $GLOBALS["DEBUG_DATA"]["perf"][]=(microtime(true) - $startTime)." secs in openai stream";
         if ($gameRequest[0] != "diary") {
+            $GLOBALS['CHIM_PROVIDER_ATTEMPT']['committed'] = true;
             returnLines($sentences, true, $abortForSupersedingUserInput);
         } else {
+            $GLOBALS['CHIM_PROVIDER_ATTEMPT']['committed'] = true;
             $talkedSoFar[md5(implode(" ", $sentences))]=implode(" ", $sentences);
         }
         $totalBuffer.=trim($buffer);
@@ -6220,6 +6106,7 @@ function call_llm_internal() {
     }
 
     if ($GLOBALS["FUNCTIONS_ARE_ENABLED"] && $outputWasValid)  {
+        $GLOBALS['CHIM_PROVIDER_ATTEMPT']['committed'] = true;
         $actions=$connectionHandler->processActions();
         if (isset($GLOBALS["action_post_process_fnct"])) {
             $actions=$GLOBALS["action_post_process_fnct"]($actions);
@@ -6689,7 +6576,13 @@ function call_llm_internal() {
         }
     }
     
-    $connectionHandler->close('standard');
+    $completedResponse = $connectionHandler->close('standard');
+    if ($outputWasValid && !$ERROR_TRIGGERED && is_string($completedResponse)
+        && method_exists($connectionHandler, 'hasCompletedPrivateThoughtResponse')
+        && $connectionHandler->hasCompletedPrivateThoughtResponse()) {
+        require_once __DIR__ . '/npc_private_thoughts.php';
+        chimStorePrivateThoughtResponse($completedResponse);
+    }
     //fwrite($fileLog, $totalBuffer . PHP_EOL); // Write the line to the file with a line break // DEBUG CODE
 
 

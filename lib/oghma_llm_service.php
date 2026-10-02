@@ -160,12 +160,15 @@ function callLLMFast($contextData, $customParms = []) {
     // Build the request
     $url = $connectorData["url"];
     $model = $connectorData["model"];
-    $apiKeyId = $connectorData["api_badge_id"];
+    $apiKeyId = $connectorData["api_badge_id"] ?? null;
     
     // Get API key
-    $apiBadge = new ApiBadge();
-    $apiKeyData = $apiBadge->getById($apiKeyId);
-    $apiKey = $apiKeyData["api_key"];
+    $apiKey = '';
+    if ($apiKeyId !== null && $apiKeyId !== '') {
+        $apiBadge = new ApiBadge();
+        $apiKeyData = $apiBadge->getById($apiKeyId);
+        $apiKey = is_array($apiKeyData) ? (string) ($apiKeyData['api_key'] ?? '') : '';
+    }
     
     // Prepare request data
     $data = [
@@ -179,10 +182,14 @@ function callLLMFast($contextData, $customParms = []) {
     // Prepare headers
     $headers = [
         'Content-Type: application/json',
-        'Authorization: Bearer ' . $apiKey,
         'HTTP-Referer: https://dwemerdynamics.com/',
         'X-Title: Dwemer Dynamics - Oghma Topic Extraction'
     ];
+    if ($apiKey !== '') $headers[] = 'Authorization: Bearer ' . $apiKey;
+    $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+    if (!empty($customParms['disable_reasoning']) && ($host === 'openrouter.ai' || str_ends_with($host, '.openrouter.ai'))) {
+        $data['reasoning'] = ['enabled' => false, 'exclude' => true];
+    }
     
     // Add provider-specific headers if needed
     if (isset($connectorData["provider"]) && !empty($connectorData["provider"])) {
@@ -203,19 +210,29 @@ function callLLMFast($contextData, $customParms = []) {
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
     
-    if ($httpCode !== 200) {
-        error_log("[OGHMA LLM] HTTP error $httpCode: $response");
+    if ($response === false || $httpCode !== 200) {
+        error_log("[OGHMA LLM] HTTP error $httpCode");
         return false;
     }
     
     $responseData = json_decode($response, true);
     
     if (!isset($responseData['choices'][0]['message']['content'])) {
-        error_log("[OGHMA LLM] Invalid response format: " . substr($response, 0, 200));
+        error_log("[OGHMA LLM] Invalid response format");
         return false;
     }
     
-    return $responseData['choices'][0]['message']['content'];
+    $content = $responseData['choices'][0]['message']['content'];
+    if (is_array($content)) {
+        $parts = [];
+        foreach ($content as $part) {
+            if (is_array($part) && ($part['type'] ?? '') === 'text' && is_string($part['text'] ?? null)) {
+                $parts[] = $part['text'];
+            }
+        }
+        $content = implode('', $parts);
+    }
+    return is_string($content) ? $content : false;
 }
 
 ?>

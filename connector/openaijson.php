@@ -3,8 +3,11 @@
 $enginePath = dirname((__FILE__)) . DIRECTORY_SEPARATOR."..".DIRECTORY_SEPARATOR;
 require_once($enginePath . "lib" .DIRECTORY_SEPARATOR."tokenizer_helper_functions.php");
 
+require_once __DIR__ . '/../lib/provider_stream.php';
+
 class openaijson
 {
+    use ChimProviderStream;
     public $primary_handler;
     public $name;
 
@@ -898,7 +901,9 @@ class openaijson
 
         $context = stream_context_create($options);
         
+        $this->recoveryStart($timeout);
         $this->primary_handler = fopen($this->_url, 'r', false, $context);
+        $this->recoveryHeaders();
         if (!$this->primary_handler) {
             $error=error_get_last();
             Logger::error(trim(print_r($error,true)));
@@ -922,7 +927,7 @@ class openaijson
             $status_code = isset($matches[0]) ? intval($matches[0]) : 0;
 
             if ($status_code >= 300) {
-                $response = stream_get_contents($this->primary_handler);
+                $response = $this->recoveryRead(true);
                 $error_message = "Request to openaijson connector failed: {$this->_url} {$status_line}.\n Response body: {$response}.\n model: {$this->_model}";
                 trigger_error($error_message, E_USER_WARNING);
 
@@ -1028,6 +1033,13 @@ class openaijson
         return $content; // not a reasoning model, return content w/o processing
     }
 
+    private $privateThoughtFinishReason = null;
+
+    public function hasCompletedPrivateThoughtResponse(): bool
+    {
+        return $this->privateThoughtFinishReason === 'stop';
+    }
+
     public function process()
     {
         global $alreadysent;
@@ -1037,10 +1049,13 @@ class openaijson
         if (!$this->primary_handler) {
             $line = "";
         } else if (!$this->_is_streaming) {
-            $line = stream_get_contents($this->primary_handler);
+            $line = $this->recoveryRead(true);
         } else {
-            $line = fgets($this->primary_handler);
+            $line = $this->recoveryRead();
         }
+
+        $this->recoveryObserve($line, !$this->_is_streaming);
+        if ($this->recoveryFailure !== null) return -1;
 
         $buffer="";
         $totalBuffer="";
@@ -1098,6 +1113,7 @@ class openaijson
 
         // process any remaining reasoning content on stream completion
         if (is_array($data) && isset($data["choices"][0]["finish_reason"]) && $data["choices"][0]["finish_reason"] !== null) {
+            $this->privateThoughtFinishReason = $data['choices'][0]['finish_reason'];
             $this->_stopProc = true;
             if (!empty($this->_output_buffer)) {
                 $clean_remain = $this->removeChainOfThought("");
@@ -1178,7 +1194,7 @@ class openaijson
             $this->_output_buffer = "";
         }
         
-        if ($this->primary_handler) {
+        if (is_resource($this->primary_handler)) {
             fclose($this->primary_handler);
         }
 
@@ -1275,7 +1291,7 @@ class openaijson
 
     public function isDone()
     {
-        return $this->_stopProc || !$this->primary_handler || feof($this->primary_handler);
+        return $this->_stopProc || !$this->primary_handler || $this->recoveryStreamDone();
     }
 
     public function fast_request($contextData, $customParms,$callName='')

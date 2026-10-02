@@ -371,9 +371,12 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
         '{PLAYER_NAME}' => $GLOBALS["PLAYER_NAME"]
     ]);
 
+    require_once dirname(__DIR__, 4) . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'bgl_letters.php';
+
     $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
     $dateStringSK = convert_gamets2skyrim_long_date(DataLastKnownGameTS());
-    $fullTitle = "A letter from {$GLOBALS["HERIKA_NAME"]} ($dateStringSK)";
+    // Unique, because the note image and the books row are both keyed by title.
+    $fullTitle = chimLetterUniqueTitle("A letter from {$GLOBALS["HERIKA_NAME"]} ($dateStringSK)");
 
     $contextBlock = !empty($dynamicBiography)
         ? "<character_sheet>\n{$npcName}:\n{$dynamicBiography}\n</character_sheet>\n\n"
@@ -383,6 +386,14 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
 
     $historyBlock = !empty($historyWithInnerThought)
         ? "<context_history>\n{$historyWithInnerThought}\n</context_history>\n\n"
+        : '';
+
+    // Letters from the player still waiting for an answer: this letter can be the reply.
+    $unansweredLetters = chimLetterUnansweredFromPlayer($GLOBALS["HERIKA_NAME"]);
+    $replyToLetterId = $unansweredLetters ? (int)end($unansweredLetters)['id'] : 0;
+    $unansweredBlock = $unansweredLetters
+        ? chimLetterUnansweredPromptBlock($unansweredLetters)
+            . "This letter is {$GLOBALS["HERIKA_NAME"]}'s reply to the letters above; respond to what {$GLOBALS["PLAYER_NAME"]} wrote.\n\n"
         : '';
 
     $dialoguePrompt = [
@@ -395,6 +406,7 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
             'role' => 'user',
             'content' => "{$contextBlock}"
                 . "{$historyBlock}"
+                . "{$unansweredBlock}"
                 . "(at this point {$GLOBALS["HERIKA_NAME"]} thinks to himsel/herself:{$GLOBALS['LAST_REASON']})\n"
                 . "{$letterStyle}\n"
         ],
@@ -407,7 +419,9 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
         error_log("[handleSendLetter] Failed to generate letter content for NPC: $npcName");
         return false;
     }
-    createLetter($fullTitle, $dialogueBuffer);
+    // Remember what was actually written, not the intent that led to it.
+    $letterContent = trim($dialogueBuffer);
+    createLetter($fullTitle, $letterContent);
 
     // Will make plugin to download letter image to data folder, and will be stored using title's hash as name
     $db->insert(
@@ -489,6 +503,21 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
             'localts' => time(),
         ]
     );
+
+    // book.php resolves the text by title when the player reads the note.
+    $db->insert(
+        'books',
+        [
+            'ts' => 0,
+            'gamets' => 0,
+            'content' => $letterContent,
+            'sess' => 'generated',
+            'localts' => time(),
+            'title' => $fullTitle,
+        ]
+    );
+
+    chimLetterRecordToPlayer($GLOBALS["HERIKA_NAME"], (string)$currentNpcData["refid"], $fullTitle, $letterContent, $replyToLetterId);
 
     return true;
 }
@@ -757,6 +786,59 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
 
     if ($targetNpc === null) {
         error_log("[handleFindNPCAction] Target NPC not found: $targetNpcName");
+
+        if ($targetNpcName==$GLOBALS["PLAYER_NAME"]) {
+
+            $resolvedName = $GLOBALS["PLAYER_NAME"];
+            $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData['refid']));
+            $targetRefHexString = "0x00000014";
+
+            $db->insert('responselog', [
+                'localts' => time(),
+                'sent' => 0,
+                'actor' => 'rolemaster',
+                'text' => '',
+                'action' => "rolecommand|BackgroundCmd@$refHexString@MoveTo/$targetRefHexString",
+                'tag' => '',
+            ]);
+
+            $db->insert('eventlog', [
+                'ts' => $last_ts + 1,
+                'gamets' => $last_gamets + 20,
+                'type' => 'innerchat',
+                'data' => "The Narrator: $npcName locates $resolvedName at $lastReportedLocation, and walks towards him/her.",
+                'sess' => $momentum,
+                'localts' => time(),
+                'people' => $npcName,
+                'location' => null,
+                'party' => '',
+            ]);
+
+            $db->insert('actions_issued', [
+                'action' => 'MoveTo',
+                'fullcall' => "MoveTo:$targetRefHexString:$resolvedName",
+                'actorname' => $npcName,
+                'ts' => $last_ts,
+                'gamets' => $last_gamets,
+                'localts' => time(),
+                'original' => 'backgroundaction',
+            ]);
+
+            // Insert bgl_history log entry
+            $db->insert(
+                'bgl_history',
+                [
+                    'npc' => $npcName,
+                    'ts' => $last_ts,
+                    'gamets' => $last_gamets,
+                    'localts' => time(),
+                    'data' => "$npcName moves toward $resolvedName. Reason: {$GLOBALS["LAST_REASON"]}",
+                    'category' => 'move',
+                ]
+            );
+            return true;
+        }
+
         $db->insert('eventlog', [
             'ts' => $last_ts,
             'gamets' => $last_gamets + 10,
@@ -1155,7 +1237,9 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         $targetNpcDataBasicProfile .= "Skills: {$targetNpcData['skills']}\n";
         $targetNpcDataBasicProfile .= "Speechstyle: {$targetNpcData['speechstyle']}\n";
         $targetNpcDataBasicProfile .= "Goals: {$targetNpcData['goals']}\n";
-        $targetNpcDataBasicProfile .= "Memories: {$middleTermMemory}\n";
+        if (isset($middleTermMemory)) {
+            $targetNpcDataBasicProfile .= "Memories: {$middleTermMemory}\n";
+        }
 
         $contextBlock = !empty($dynamicBiography)
             ? "<character_sheet>\n{$npcName}:\n{$dynamicBiography}\n</character_sheet>\n\n"

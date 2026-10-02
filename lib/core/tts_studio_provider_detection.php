@@ -21,27 +21,55 @@ if (!function_exists('chimTtsStudioNormalizeProviderIdentity')) {
     }
 }
 
+// Prefer the provider default over an alphabetical test connector, without changing assignments.
+function chimTtsStudioSelectPocketTtsConnector(array $rows, int $playerId, array $profileUsage, string $defaultUrl, callable $resolveUrl): array
+{
+    $preferred = $rows[0];
+    $preferredId = intval($preferred['id']);
+    if ($preferredId === $playerId || ($profileUsage[$preferredId] ?? 0) > 0) {
+        return $preferred;
+    }
+    $defaultUrl = preg_replace('~/v1/audio/speech$~', '', rtrim($defaultUrl, '/'));
+    foreach ($rows as $row) {
+        $url = preg_replace('~/v1/audio/speech$~', '', rtrim($resolveUrl($row), '/'));
+        if ($defaultUrl !== '' && $url === $defaultUrl) {
+            return $row;
+        }
+    }
+    return $preferred;
+}
+
 if (!function_exists('chimTtsStudioClassifyPocketTtsRuntime')) {
     function chimTtsStudioClassifyPocketTtsRuntime(
         string $endpoint,
         array $metadata,
         array $healthProbe,
         array $modelsProbe,
-        array $speakersProbe
+        array $speakersProbe,
+        string $standardProvider = ''
     ): array {
         if (chimTtsStudioProbeSucceeded($healthProbe) && chimTtsStudioProbeSucceeded($modelsProbe)) {
+            $hasPocketTts = false;
+            foreach (($modelsProbe['decoded']['data'] ?? []) as $model) {
+                if (($model['family'] ?? '') === 'pocket_tts' || ($model['id'] ?? '') === 'pocket-tts') {
+                    $hasPocketTts = true;
+                    break;
+                }
+            }
             return [
-                'reachable' => true,
+                'reachable' => $hasPocketTts,
                 'mode' => 'audio_cpp',
-                'reason' => 'audio.cpp health and models endpoints responded',
+                'reason' => $hasPocketTts ? 'audio.cpp PocketTTS model is available' : 'audio.cpp is online but does not advertise a PocketTTS model',
             ];
         }
 
         if (chimTtsStudioProbeSucceeded($speakersProbe) && is_array($speakersProbe['decoded'] ?? null)) {
             return [
-                'reachable' => true,
+                'reachable' => $standardProvider === '' || $standardProvider === 'pockettts',
                 'mode' => 'standard',
-                'reason' => 'Standard PocketTTS speakers endpoint responded',
+                'reason' => ($standardProvider === '' || $standardProvider === 'pockettts')
+                    ? 'Standard PocketTTS speakers endpoint responded'
+                    : 'Endpoint belongs to ' . $standardProvider . ', not PocketTTS',
             ];
         }
 

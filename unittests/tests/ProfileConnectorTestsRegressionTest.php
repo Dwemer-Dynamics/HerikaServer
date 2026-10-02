@@ -4,6 +4,20 @@ use PHPUnit\Framework\TestCase;
 
 final class ProfileConnectorTestsRegressionTest extends TestCase
 {
+    public function testCapabilityChecksRejectPartialJsonAndUnexpectedActions(): void
+    {
+        require_once dirname(__DIR__, 2) . '/lib/connector_capability_test.php';
+        $reply = ['character' => 'Test', 'listener' => 'Player', 'message' => 'Hello',
+            'mood' => 'neutral', 'action' => 'Talk', 'target' => ''];
+        $this->assertSame('pass', chimValidateConnectorDialogue(json_encode($reply), true)['dialogue']['status']);
+        $this->assertSame('fail', chimValidateConnectorDialogue('{"message":"Hello"', true)['dialogue']['status']);
+        $reply['action'] = 'Attack';
+        $this->assertSame('fail', chimValidateConnectorDialogue(json_encode($reply), true)['actions']['status']);
+        $this->assertSame('skipped', chimValidateConnectorDialogue('Hello', false)['actions']['status']);
+        $this->assertSame('warn', chimValidateConnectorVision('I cannot see images')['status']);
+        $this->assertSame('pass', chimValidateConnectorVision('red, blue')['status']);
+    }
+
     protected function setUp(): void
     {
         require_once dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'core' .

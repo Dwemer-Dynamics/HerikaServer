@@ -191,6 +191,8 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         chimDirectorActorGlobals($actors[$line['speaker']]);
         $line['actor_refid'] = $actors[$line['speaker']]['refid'] ?? '';
         $line['utterance_id'] = 'director-' . $scene['id'] . '-' . $index;
+        $GLOBALS['CHIM_SPEECH_TRACE_ID'] = $line['utterance_id'];
+        chimSpeechTrace('sentence_ready', ['sentence' => $index + 1]);
         $line['tts_cache_key'] = md5($line['utterance_id']);
         $audio = $CACHE_ENGINE_ROOT . '/soundcache/' . $line['tts_cache_key'] . '.wav';
         if (!is_file($audio) || filesize($audio) <= 44) callNpcTtsWithFallback($line['text'], 'default', $line['utterance_id']);
@@ -233,5 +235,7 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         dwemerDirectorLogError('Director publication transaction rolled back', $error);
         throw $error;
     }
+    foreach ($scene['lines'] as $line) chimSpeechTrace('queued_for_delivery', [], $line['utterance_id']);
+    unset($GLOBALS['CHIM_SPEECH_TRACE_ID']);
     Logger::info('[DIRECTOR] Authored scene queued: ' . $scene['id'] . ' lines=' . count($scene['lines']));
 }

@@ -22,6 +22,7 @@ require_once(LIB_PATH .DIRECTORY_SEPARATOR."logger.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."{$GLOBALS["DBDRIVER"]}.class.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."utils_game_timestamp.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."eventlog_helper.php");
+require_once(LIB_PATH .DIRECTORY_SEPARATOR."npc_private_thoughts.php");
 
 $db = new sql();
 
@@ -63,7 +64,7 @@ if (isset($_GET["event_types"]) && !empty($_GET["event_types"])) {
 if ($sinceGamets > 0) {
     // Filter by game timestamp - get events since a specific in-game time
     $results = $db->fetchAll(
-        "SELECT type, data, people, gamets, localts, ts, rowid
+        "SELECT type, data, people, gamets, localts, ts, rowid, delivery_state, private_thought
          FROM eventlog a
          WHERE $typeFilter
          AND gamets >= $sinceGamets
@@ -73,9 +74,9 @@ if ($sinceGamets > 0) {
 } else if ($sinceRowId > 0) {
     // Read the next contiguous rowid window so advancing the cursor cannot skip older rows in a burst.
     $results = $db->fetchAll(
-        "SELECT type, data, people, gamets, localts, ts, rowid
+        "SELECT type, data, people, gamets, localts, ts, rowid, delivery_state, private_thought
          FROM (
-             SELECT type, data, people, gamets, localts, ts, rowid
+             SELECT type, data, people, gamets, localts, ts, rowid, delivery_state, private_thought
              FROM eventlog a
              WHERE $typeFilter
              AND rowid > $sinceRowId
@@ -87,7 +88,7 @@ if ($sinceGamets > 0) {
 } else {
     // Normal paginated query - get most recent events by game timestamp (gamets)
     $results = $db->fetchAll(
-        "SELECT type, data, people, gamets, localts, ts, rowid
+        "SELECT type, data, people, gamets, localts, ts, rowid, delivery_state, private_thought
          FROM eventlog a
          WHERE $typeFilter
          ORDER BY gamets DESC, ts DESC, localts DESC, rowid DESC
@@ -158,6 +159,9 @@ $mappedResults = array_map(function ($row) use ($columnHeaders, $rawFormat) {
         $mappedRow[$outputKey] = $value;
     }
     
+    $mappedRow['private_thought'] = chimPrivateThoughtForDisplay($row);
+    if (!$rawFormat) $mappedRow['Events'] .= chimPrivateThoughtDisplayHtml($row);
+
     // Add People Present field
     $mappedRow['People Present'] = htmlspecialchars($peoplePresent);
     return $mappedRow;

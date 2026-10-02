@@ -3,8 +3,11 @@
 $enginePath = dirname((__FILE__)) . DIRECTORY_SEPARATOR."..".DIRECTORY_SEPARATOR;
 require_once($enginePath . "lib" .DIRECTORY_SEPARATOR."tokenizer_helper_functions.php");
 
+require_once __DIR__ . '/../lib/provider_stream.php';
+
 class openrouterjson
 {
+    use ChimProviderStream;
     public $primary_handler;
     public $name;
 
@@ -837,7 +840,9 @@ class openrouterjson
 
         $context = stream_context_create($options);
         
+        $this->recoveryStart($timeout);
         $this->primary_handler = $this->send($this->_url, $context);
+        $this->recoveryHeaders();
         if (!$this->primary_handler) {
             $error=error_get_last();
             Logger::error(trim(print_r($error,true)));
@@ -857,7 +862,7 @@ class openrouterjson
         } else {
             $status_code = $this->getHttpStatusCode();
             if ($status_code >= 300) {
-                $response = stream_get_contents($this->primary_handler);
+                $response = $this->recoveryRead(true);
                 //$error_message = "Request to openrouterjson connector failed: {$status_line}.\nResponse body: {$response}";
                 $error_message = "Request to openrouterjson connector failed: {$status_code}.\n Response body: {$response}.\n model: {$this->_model}";
                 trigger_error($error_message, E_USER_WARNING);
@@ -910,17 +915,16 @@ class openrouterjson
     }
 
     public function getHttpStatusCode() {
-        if (isset($GLOBALS['mockConnectorResponseMetaData'])) {
-            $responseInfo = call_user_func($GLOBALS['mockConnectorResponseMetaData']);
-        } else {
-            $responseInfo = stream_get_meta_data($this->primary_handler);
-        }
-
-        $statusLine = $responseInfo['wrapper_data'][0];
-        preg_match('/\d{3}/', $statusLine, $matches); // get three digits (200, 300, 404, etc)
-        return isset($matches[0]) ? intval($matches[0]) : null;
+        return $this->recoveryStatus;
     }
     
+
+    private $privateThoughtFinishReason = null;
+
+    public function hasCompletedPrivateThoughtResponse(): bool
+    {
+        return $this->privateThoughtFinishReason === 'stop';
+    }
 
     public function process()
     {
@@ -928,29 +932,15 @@ class openrouterjson
 
         static $numOutputTokens=0;
 
-        if (!isset($GLOBALS["patch_openrouter_timeout"]))
-            $GLOBALS["patch_openrouter_timeout"]=time();
-
         $buffer = "";
         $totalBuffer = "";
         $mangledBuffer = "";
         $finalData = "";
 
-        if ($this->isDone()) {
-            if (!$this->_buffer || empty(trim($this->_buffer))) {
-                $line = "";    
-                Logger::warn("LLM didn't output anything");
-            }
-        } else {
-            if ((time()-$GLOBALS["patch_openrouter_timeout"])>60) {
-                $this->_rawbuffer.="Error, timeout when receiving data from LLM";
-                Logger::error("Error, timeout when receiving data from LLM");
-                $this->_forcedClose=true;
-                return -1;
-            }
-            $line = fgets($this->primary_handler);
-        }
-        
+        $line = $this->recoveryRead();
+        $this->recoveryObserve($line);
+        if ($this->recoveryFailure !== null) return -1;
+
         file_put_contents(__DIR__."/../log/debugStream.log", $line, FILE_APPEND);
         $this->_rawbuffer.=$line;
         
@@ -961,6 +951,9 @@ class openrouterjson
         }
         
         $data=json_decode(substr($line, 6), true);
+        if (isset($data['choices'][0]['finish_reason'])) {
+            $this->privateThoughtFinishReason = $data['choices'][0]['finish_reason'];
+        }
 
         if ($this->_is_reasoning)
             $buffer_preamble=4096; // some reasoning models output CoT part before JSON
@@ -1048,7 +1041,7 @@ class openrouterjson
     // Method to close the data processing operation
     public function close($callName='')
     {
-        if ($this->primary_handler) {
+        if (is_resource($this->primary_handler)) {
             fclose($this->primary_handler);
         }
         // Use callName just for logging purposes.
@@ -1167,7 +1160,7 @@ class openrouterjson
     {
         if ($this->_forcedClose)
             return true;
-        return !$this->primary_handler || feof($this->primary_handler);
+        return $this->recoveryStreamDone();
     }
 
     public function setDone()
