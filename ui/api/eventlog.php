@@ -22,6 +22,7 @@ require_once(LIB_PATH .DIRECTORY_SEPARATOR."logger.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."{$GLOBALS["DBDRIVER"]}.class.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."utils_game_timestamp.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."eventlog_helper.php");
+require_once(LIB_PATH .DIRECTORY_SEPARATOR."core".DIRECTORY_SEPARATOR."npc_reference.php");
 
 $db = new sql();
 
@@ -106,16 +107,25 @@ $columnHeaders = [
 $mappedResults = array_map(function ($row) use ($columnHeaders, $rawFormat) {
     $mappedRow = [];
     
-    // Derive People Present from JSON in data if people field is empty
-    $peoplePresent = trim((string)($row['people'] ?? ''));
+    // People Present shows participant names, never stored identity JSON. Format-2 rows and typed
+    // fallback arrays use the shared display parser; the raw column stays in the raw export.
+    $participantNames = function ($participants) {
+        return implode(', ', array_column($participants, 'name'));
+    };
+    // data.people decoded as arrays: typed entries become objects for the stored-participant reader.
+    $typedItems = function (array $items) {
+        return array_map(function ($item) { return is_array($item) ? (object)$item : $item; }, $items);
+    };
+    $rawPeople = trim((string)($row['people'] ?? ''));
+    $peoplePresent = $rawPeople === '' ? '' : $participantNames(chimParseEventParticipants($rawPeople)['participants']);
     $rawData = $row['data'] ?? '';
     if ($peoplePresent === '' && is_string($rawData) && $rawData !== '') {
         $decoded = json_decode($rawData, true);
         if (is_array($decoded)) {
             if (!empty($decoded['people'])) {
-                $peoplePresent = is_array($decoded['people']) ? implode(', ', $decoded['people']) : (string)$decoded['people'];
+                $peoplePresent = is_array($decoded['people']) ? $participantNames(chimReadStoredEventParticipants($typedItems($decoded['people']))) : (string)$decoded['people'];
             } else if (!empty($decoded['companions'])) {
-                $peoplePresent = is_array($decoded['companions']) ? implode(', ', $decoded['companions']) : (string)$decoded['companions'];
+                $peoplePresent = is_array($decoded['companions']) ? $participantNames(chimReadStoredEventParticipants($typedItems($decoded['companions']))) : (string)$decoded['companions'];
             } else if (!empty($decoded['speaker'])) {
                 $peoplePresent = (string)$decoded['speaker'];
             }
@@ -160,6 +170,9 @@ $mappedResults = array_map(function ($row) use ($columnHeaders, $rawFormat) {
     
     // Add People Present field
     $mappedRow['People Present'] = htmlspecialchars($peoplePresent);
+    if ($rawFormat) {
+        $mappedRow['People (stored)'] = htmlspecialchars($rawPeople);
+    }
     return $mappedRow;
 }, $results);
 

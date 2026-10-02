@@ -122,6 +122,90 @@ function chimRequestDirectorScene($connection, array $prompt, array $actors, arr
     }
 }
 
+// Present cast by model-facing label: the captured physical roster's own rows (namesakes each keep their row,
+// labelled "Name [RefID: XXXXXXXX]" so both can participate); legacy rosters without keys fall back to a
+// unique name row. A keyed roster excludes the typed player and narrator by key, so an NPC sharing the player's
+// name (or a physical "The Narrator") stays in the cast; such an NPC is labelled with its RefID so a bare player
+// name never addresses it. Up to 12, those named in the instruction first.
+function chimDirectorCastRows($master, string $player, string $instruction): array
+{
+    $rows = [];
+    $roster = DataCloseRangeActorRoster(true);
+    $keyed = (bool)array_filter($roster, static fn($entry) => is_string($entry['key'] ?? null));
+    foreach ($roster as $entry) {
+        $name = (string)$entry['name'];
+        if ($name === '' || (!$keyed && ($name === $player || $name === 'The Narrator'))
+            || preg_match('/\((?:busy|dead|hostile|in combat|restrained|unavailable)\)/i', $name)) continue;
+        $npc = $entry['row'] ?? null;
+        if (!$npc && !$keyed) $npc = $master->getByName($name) ?: null;
+        if (!$npc || isset($rows[(int)$npc['id']])) continue;
+        $rows[(int)$npc['id']] = $npc;
+    }
+    $counts = array_count_values(array_map(static fn($npc) => mb_strtolower(trim((string)$npc['npc_name'])), $rows));
+    $cast = [];
+    foreach ($rows as $npc) {
+        $name = trim((string)$npc['npc_name']);
+        $refid = strtoupper(preg_replace('/^0X/i', '', trim((string)($npc['refid'] ?? ''))));
+        if ($counts[mb_strtolower($name)] > 1 || mb_strtolower($name) === mb_strtolower(trim($player))
+            || mb_strtolower($name) === 'the narrator') {
+            if (!preg_match('/^[0-9A-F]{1,8}$/D', $refid)) continue;  // A namesake without a reference has no exact label.
+            $name .= ' [RefID: ' . str_pad($refid, 8, '0', STR_PAD_LEFT) . ']';
+        }
+        $cast[$name] = $npc;
+    }
+    $named = static fn($label) => (int)(stripos($instruction, (string)$cast[$label]['npc_name']) !== false);
+    uksort($cast, static fn($a, $b) => $named($b) <=> $named($a));
+    return array_slice($cast, 0, 12, true);
+}
+
+// Physical binding of each cast row captured before the LLM/TTS delay: row id, canonical key (or null for an
+// unkeyed legacy row) and runtime RefID.
+function chimDirectorCastBindings(array $actors): array
+{
+    $bindings = [];
+    foreach ($actors as $label => $npc) {
+        $bindings[$label] = ['id' => (int)($npc['id'] ?? 0), 'key' => chimNpcRowActorKey($npc),
+            'refid' => NpcMaster::normalizeRefId($npc['refid'] ?? '')];
+    }
+    return $bindings;
+}
+
+// Publication re-reads the captured rows inside the transaction; a row whose key or RefID moved during
+// generation (recycled FF reference, relink, deletion) aborts the scene rather than re-keying it live.
+function chimDirectorAssertCastCurrent($db, array $bindings): void
+{
+    $ids = array_values(array_filter(array_map(static fn($b) => $b['id'], $bindings)));
+    if (!$ids) { return; }
+    $current = [];
+    foreach ($db->fetchAll('SELECT * FROM core_npc_master WHERE id IN (' . implode(',', $ids) . ') FOR UPDATE') ?: [] as $row) {
+        $current[(int)$row['id']] = $row;
+    }
+    foreach ($bindings as $label => $binding) {
+        $row = $current[$binding['id']] ?? null;
+        if (!$row || chimNpcRowActorKey($row) !== $binding['key'] || NpcMaster::normalizeRefId($row['refid'] ?? '') !== $binding['refid']) {
+            throw new RuntimeException('Director cast binding changed: ' . $label);
+        }
+    }
+}
+
+// Pending history row identity: the captured cast plus the typed player as audience (format 2), the speaker's
+// own key and the listener's key (a cast row or the typed player). Unkeyed legacy rows stay name-only; a listener
+// label outside the cast and player is never resolved by name.
+function chimDirectorLineIdentity(array $line, array $actors, array $bindings, string $player): array
+{
+    $participants = [];
+    foreach ($actors as $label => $npc) {
+        $participants[] = chimEventParticipant(trim((string)$npc['npc_name']), $bindings[$label]['key']);
+    }
+    if ($player !== '') { $participants[] = chimEventParticipant($player, CHIM_ACTOR_KEY_PLAYER); }
+    $listener = (string)($line['listener'] ?? '');
+    $listenerKey = isset($bindings[$listener]) ? $bindings[$listener]['key']
+        : ($listener !== '' && strcasecmp($listener, $player) === 0 ? CHIM_ACTOR_KEY_PLAYER : null);
+    return ['people' => chimSerializeEventParticipants($participants),
+        'speaker_key' => $bindings[$line['speaker']]['key'] ?? null,
+        'listener_keys' => $listenerKey === null ? [] : [$listenerKey], 'target_key' => null];
+}
+
 // Generate and publish one complete scene; no NPC model interprets these lines again.
 function chimGenerateDirectorScene($connection, string $instruction, string $worldContext): void
 {
@@ -133,15 +217,9 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
     $master = new NpcMaster();
     $profiles = new CoreProfile();
     $player = (string)$GLOBALS['PLAYER_NAME'];
-    $names = array_values(array_filter(array_unique(explode('|', DataBeingsInCloseRange(true))),
-        static fn($name) => $name !== '' && $name !== $player && $name !== 'The Narrator'
-            && !preg_match('/\((?:busy|dead|hostile|in combat|restrained|unavailable)\)/i', $name)));
-    usort($names, static fn($a, $b) => (int)(stripos($instruction, $b) !== false) <=> (int)(stripos($instruction, $a) !== false));
     $actors = [];
     $context = [];
-    foreach (array_slice($names, 0, 12) as $name) {
-        $npc = $master->getByName($name);
-        if (!$npc) continue;
+    foreach (chimDirectorCastRows($master, $player, $instruction) as $name => $npc) {
         $actors[$name] = $npc;
         $bio = ['name' => $name];
         foreach (['npc_static_bio', 'personality', 'speechstyle', 'occupation', 'appearance', 'skills', 'goals', 'core'] as $field) {
@@ -153,10 +231,8 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         $bio['inventory'] = array_slice(chimFormatInventoryPromptLines($metadata['inventory'] ?? []), 0, 80);
         $extended = $master->getExtendedData($npc);
         $bio['past_events'] = [];
-        foreach ($extended['middle_term_memory'] ?? [] as $gamets => $memory) {
-            if (is_numeric($gamets) && (int)$gamets <= (int)($GLOBALS['gameRequest'][2] ?? 0) && is_string($memory)) {
-                $bio['past_events'][] = mb_substr($memory, 0, 2000);
-            }
+        foreach (chimMiddleTermValidDigests($npc, (int)($GLOBALS['gameRequest'][2] ?? 0)) as $digest) {
+            $bio['past_events'][] = mb_substr($digest['text'], 0, 2000);
         }
         $bio['past_events'] = array_slice($bio['past_events'], -2);
         $context[] = $bio;
@@ -165,9 +241,12 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         dwemerDirectorLogError('No eligible Director actors');
         throw new RuntimeException('No eligible Director actors');
     }
+    $castBindings = chimDirectorCastBindings($actors);
+    // The reserved narrator joins the action catalog only; cast labels never include it, and a physical
+    // row's label is never replaced by it.
     $actionActors = $actors;
     $narrator = (new Narrator())->getNarratorData();
-    if ($narrator) $actionActors['The Narrator'] = $narrator;
+    if ($narrator && !isset($actionActors['The Narrator'])) $actionActors['The Narrator'] = $narrator;
     $catalog = chimDirectorActionCatalog($actionActors);
     (new LLMConnector())->setOldGlobals($directorConnector);
     $GLOBALS['CURRENT_CONNECTOR'] = $directorConnector['driver'];
@@ -190,6 +269,21 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         dwemerDirectorLogError('Processing line ' . $index . ' for speaker ' . $line['speaker'] . ' with text: ' . $line['text']);
         chimDirectorActorGlobals($actors[$line['speaker']]);
         $line['actor_refid'] = $actors[$line['speaker']]['refid'] ?? '';
+        // Physical endpoints of the selected rows ($actors holds only names with exactly one row). The listener
+        // is that unique row, the typed player, or null; never a nearest-name guess. Unkeyed rows stay legacy.
+        try {
+            $actorEndpoint = chimResponseEndpointForNpcRow($actors[$line['speaker']]);
+            if ($actorEndpoint !== null) {
+                $line['actor_identity'] = $actorEndpoint;
+                $listenerName = (string)($line['listener'] ?? '');
+                $line['listener_identity'] = isset($actors[$listenerName])
+                    ? chimResponseEndpointForNpcRow($actors[$listenerName])
+                    : ($listenerName !== '' && strcasecmp($listenerName, $player) === 0 ? chimResponsePlayerEndpoint() : null);
+            }
+        } catch (InvalidArgumentException $e) {
+            dwemerDirectorLogError('Director actor identity invalid: ' . $e->getMessage());
+            throw new RuntimeException('Director actor identity invalid');
+        }
         $line['utterance_id'] = 'director-' . $scene['id'] . '-' . $index;
         $GLOBALS['CHIM_SPEECH_TRACE_ID'] = $line['utterance_id'];
         chimSpeechTrace('sentence_ready', ['sentence' => $index + 1]);
@@ -202,19 +296,28 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         }
     }
     unset($line);
+    // Actions dispatch later by the selected row's key, never by re-reading the label as a name.
+    foreach ($scene['actions'] as &$sceneAction) {
+        if (isset($actors[$sceneAction['speaker']])) {
+            $sceneAction['speaker_identity'] = chimResponseEndpointForNpcRow($actors[$sceneAction['speaker']]);
+        }
+    }
+    unset($sceneAction);
     $db = $GLOBALS['db'];
     if ($db->query('BEGIN') === false) {
         dwemerDirectorLogError('Director publication failed');
         throw new RuntimeException('Director publication failed');
     }
     try {
+        chimDirectorAssertCastCurrent($db, $castBindings);
         foreach ($scene['lines'] as $index => $line) {
+            $lineIdentity = chimDirectorLineIdentity($line, $actors, $castBindings, $player);
             if (!$db->insertReturningId('eventlog', ['type' => 'chat', 'ts' => time() + $index,
                 'gamets' => (int)($GLOBALS['gameRequest'][2] ?? 0), 'localts' => time(), 'sess' => 'pending',
-                'data' => $line['speaker'] . ': ' . $line['text'] . ' ' . buildDialogueTargetSuffix($line['listener']),
-                'people' => '|' . $line['speaker'] . '|' . $line['listener'] . '|',
+                'data' => $actors[$line['speaker']]['npc_name'] . ': ' . $line['text'] . ' ' . buildDialogueTargetSuffix($line['listener']),
+                'people' => $lineIdentity['people'],
                 'location' => $GLOBALS['CACHE_LOCATION'] ?? '', 'party' => $GLOBALS['CACHE_PARTY'] ?? '',
-                'utterance_id' => $line['utterance_id'], 'delivery_state' => 'pending'], 'rowid')) {
+                'utterance_id' => $line['utterance_id'], 'delivery_state' => 'pending'] + chimEventRoleColumns($lineIdentity, false), 'rowid')) {
                 dwemerDirectorLogError('Director pending history failed');
                 throw new RuntimeException('Director pending history failed');
             }

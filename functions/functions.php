@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/../lib/vr_items.php';
+require_once __DIR__ . '/../lib/core/response_identity.php';
 
 // Functions to be provided to OpenAI
 $startTime=$GLOBALS["startTime"] ?? microtime(true);
@@ -2628,7 +2629,11 @@ function queueFunctionExecutionCommand(&$commandBuffer, &$alreadySent, $executio
         }
     }
 
-    $commandStr = $actorName . "|" . $commandChannel . "|" . $functionCodeName . "@" . strval($executionContext["parameter_string"] ?? "") . "\r\n";
+    // Identity envelope from the selected row plus exactly resolved actor arguments; invalid metadata drops it.
+    $commandStr = chimBuildCurrentCommandLine($actorName, $commandChannel, $functionCodeName . "@" . strval($executionContext["parameter_string"] ?? ""));
+    if ($commandStr === null) {
+        return false;
+    }
     $commandHash = md5($commandStr);
 
     if (isset($alreadySent[$commandHash])) {
@@ -2955,9 +2960,17 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
 
                 $actorName = trim((string)($actionParts[0] ?? ($GLOBALS['HERIKA_NAME'] ?? '')));
                 $currentGamets = (int)($gameRequest[2] ?? 0);
-                if ($actionCodeNameResolved === 'CreateTasks') {
+                // Task ownership is the selected physical row that issued the action, never a namesake by name.
+                $taskOwner = function_exists('chimResponseCurrentPhysicalRow') ? chimResponseCurrentPhysicalRow() : null;
+                if (!is_array($taskOwner) || strcasecmp(trim((string)$taskOwner['npc_name']), $actorName) !== 0) {
+                    $taskOwner = null;
+                }
+                if ($taskOwner === null) {
+                    $result = ['ok' => false, 'error' => 'task_owner_unresolved'];
+                    $message = "{$actorName} could not manage tasks: the acting NPC is not an exact selected actor.";
+                } elseif ($actionCodeNameResolved === 'CreateTasks') {
                     $result = chimCommitmentQueueCreate(
-                        $actorName,
+                        $taskOwner,
                         $payload,
                         $currentGamets,
                         (string)($gameRequest[3] ?? '')
@@ -2967,7 +2980,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                         : "{$actorName} could not queue a task: " . (string)($result['error'] ?? 'unknown error');
                 } elseif ($actionCodeNameResolved === 'ResolveTask') {
                     $result = chimCommitmentSetStatus(
-                        $actorName,
+                        $taskOwner,
                         (int)($payload['task_id'] ?? 0),
                         (string)($payload['status'] ?? ''),
                         (string)($payload['outcome'] ?? ''),
@@ -2982,7 +2995,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     }
                 } else {
                     $result = chimCommitmentSetStatus(
-                        $actorName,
+                        $taskOwner,
                         (int)($payload['task_id'] ?? 0),
                         'cancelled',
                         (string)($payload['reason'] ?? ''),
@@ -3009,6 +3022,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'action' => $actionCodeNameResolved,
                     'fullcall' => $rawParameter,
                     'actorname' => $actorName,
+                    'actor_key' => chimResponseActionActorKey($actionParts),
                     'ts' => (int)($gameRequest[1] ?? time()),
                     'gamets' => $currentGamets,
                     'localts' => time(),
@@ -3025,7 +3039,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 error_log("[ACTION POSTFILTER Drink] Executed server-side");
                 // Make NPC to toast
                 $npcMaster = new Npcmaster();
-                $npcData   = $npcMaster->getByName($actionParts[0]);
+                $npcData   = chimResponseActionActorRow($npcMaster, $actionParts);
 
                 $metadata=$npcMaster->getMetadata($npcData);
 
@@ -3046,8 +3060,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "Drink",
-                        'fullcall' =>$actionParts[0]."|".$actionParts[1]."|".$actionParts[2],
+                        'fullcall' =>chimResponseActionFullcall($actionParts),
                         'actorname'=> $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts'=>time(),
@@ -3060,7 +3075,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
             } else  if ($actionCodeNameResolved=="Toast") {
                 
                 $npcMaster = new Npcmaster();
-                $npcData   = $npcMaster->getByName($actionParts[0]);
+                $npcData   = chimResponseActionActorRow($npcMaster, $actionParts);
 
                 $skyrimCmd = new SkyrimCommandBuilder();
                 $json      = $skyrimCmd->Actor->PlayIdle("0x{$npcData["refid"]}", "0x0010528a");// Toast Start                $skyrimCmd->send($json);
@@ -3086,8 +3101,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "Toast",
-                        'fullcall' =>$actionParts[0]."|".$actionParts[1]."|".$actionParts[2],
+                        'fullcall' =>chimResponseActionFullcall($actionParts),
                         'actorname'=> $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts'=>time(),
@@ -3115,8 +3131,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "Training",
-                        'fullcall' =>$actionParts[0]."|".$actionParts[1]."|".$actionParts[2],
+                        'fullcall' =>chimResponseActionFullcall($actionParts),
                         'actorname'=> $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts'=>time(),
@@ -3197,8 +3214,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "SpawnItem",
-                        'fullcall' => $actionParts[0] . "|" . $actionParts[1] . "|" . $actionParts[2],
+                        'fullcall' => chimResponseActionFullcall($actionParts),
                         'actorname' => $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts' => time(),
@@ -3240,8 +3258,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "SpawnGold",
-                        'fullcall' => $actionParts[0] . "|" . $actionParts[1] . "|" . $actionParts[2],
+                        'fullcall' => chimResponseActionFullcall($actionParts),
                         'actorname' => $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts' => time(),
@@ -3320,8 +3339,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "SpawnNPC",
-                        'fullcall' => $actionParts[0] . "|" . $actionParts[1] . "|" . $actionParts[2],
+                        'fullcall' => chimResponseActionFullcall($actionParts),
                         'actorname' => $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts' => time(),
@@ -3386,8 +3406,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "CreateNewNPC",
-                        'fullcall' => $actionParts[0] . "|" . $actionParts[1] . "|" . $actionParts[2],
+                        'fullcall' => chimResponseActionFullcall($actionParts),
                         'actorname' => $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts' => time(),
@@ -3452,8 +3473,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "DirectorCommand",
-                        'fullcall' => $actionParts[0] . "|" . $actionParts[1] . "|" . $actionParts[2],
+                        'fullcall' => chimResponseActionFullcall($actionParts),
                         'actorname' => $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts' => time(),
@@ -3533,8 +3555,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "TeleportNPC",
-                        'fullcall' => $actionParts[0] . "|" . $actionParts[1] . "|" . $actionParts[2],
+                        'fullcall' => chimResponseActionFullcall($actionParts),
                         'actorname' => $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts' => time(),
@@ -3629,8 +3652,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "KillTarget",
-                        'fullcall' => $actionParts[0] . "|" . $actionParts[1] . "|" . $actionParts[2],
+                        'fullcall' => chimResponseActionFullcall($actionParts),
                         'actorname' => $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts' => time(),
@@ -3644,7 +3668,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
             } else if ($actionCodeNameResolved=="StartRitualCeremony") {
                 
                 $npcMaster = new Npcmaster();
-                $npcData   = $npcMaster->getByName($actionParts[0]);
+                $npcData   = chimResponseActionActorRow($npcMaster, $actionParts);
 
                 $defAnim="0x000f11e1";// IdleRitualSkull1
                 $shader="0x00050f02";// RitualSkullShader
@@ -3706,8 +3730,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "StartRitualCeremony",
-                        'fullcall' =>$actionParts[0]."|".$actionParts[1]."|".$actionParts[2],
+                        'fullcall' =>chimResponseActionFullcall($actionParts),
                         'actorname'=> $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts'=>time(),
@@ -3715,7 +3740,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     )
                 );
 
-                chimApplyNpcMetadataUpdatesByName($actionParts[0], [
+                // Exact acting row from the response envelope; null (typed/invalid/stale) writes nobody.
+                $ritualRow = chimResponseActionActorRow(new NpcMaster(), $actionParts);
+                if (is_array($ritualRow)) chimApplyNpcMetadataUpdatesByName($ritualRow, [
                     'ritual_state' => [
                         'active' => true,
                         'type' => strval($actionParts2[1] ?? ''),
@@ -3736,7 +3763,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
             } else if ($actionCodeNameResolved=="EndRitualCeremony") {
                 
                 $npcMaster = new Npcmaster();
-                $npcData   = $npcMaster->getByName($actionParts[0]);
+                $npcData   = chimResponseActionActorRow($npcMaster, $actionParts);
 
                 $skyrimCmd = new SkyrimCommandBuilder();
                 $json      = $skyrimCmd->Actor->PlayIdle("0x{$npcData["refid"]}", "0x000f11e3");// IdleRitualSkull3
@@ -3757,8 +3784,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     'actions_issued',
                     array(
                         'action' => "EndRitualCeremony",
-                        'fullcall' =>$actionParts[0]."|".$actionParts[1]."|".$actionParts[2],
+                        'fullcall' =>chimResponseActionFullcall($actionParts),
                         'actorname'=> $actionParts[0],
+                        'actor_key' => chimResponseActionActorKey($actionParts),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts'=>time(),
@@ -3766,7 +3794,9 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                     )
                 );
 
-                chimApplyNpcMetadataUpdatesByName($actionParts[0], [
+                // Exact acting row from the response envelope; null (typed/invalid/stale) writes nobody.
+                $ritualRow = chimResponseActionActorRow(new NpcMaster(), $actionParts);
+                if (is_array($ritualRow)) chimApplyNpcMetadataUpdatesByName($ritualRow, [
                     'ritual_state' => null,
                     'activity_status' => [
                         'current_action' => 'idle',
@@ -3784,7 +3814,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 
                  $npcMaster = new Npcmaster();
 
-                $npc = $npcMaster->getByName($actionParts[0]);
+                $npc = chimResponseActionActorRow($npcMaster, $actionParts);
                 $skyrimCmd = new SkyrimCommandBuilder();
                 if ($npc) {
                     $skyrimCmd = new SkyrimCommandBuilder();
@@ -3857,7 +3887,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 }
                 $npcMaster = new Npcmaster();
 
-                $npc = $npcMaster->getByName($actionParts[0]);
+                $npc = chimResponseActionActorRow($npcMaster, $actionParts);
                 $skyrimCmd = new SkyrimCommandBuilder();
 
                 $json = $skyrimCmd->Actor->EquipItem("0x{$npc["refid"]}", "{$itemRef}", true);
@@ -3871,7 +3901,7 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
                 
                 $npcMaster = new Npcmaster();
 
-                $npc = $npcMaster->getByName($actionParts[0]);
+                $npc = chimResponseActionActorRow($npcMaster, $actionParts);
                 $skyrimCmd = new SkyrimCommandBuilder();
                 if ($npc) {
                     $json = $skyrimCmd->Actor->StopCombat("0x{$npc["refid"]}");

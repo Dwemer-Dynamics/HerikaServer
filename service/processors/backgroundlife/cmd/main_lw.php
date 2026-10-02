@@ -80,7 +80,6 @@ try {
 
 
 require_once $enginePath . "lib" . DIRECTORY_SEPARATOR . "lazy_xml.php";
-require_once $enginePath . "debug" . DIRECTORY_SEPARATOR . "background_action_handler.php";
 
 /**
  * Load a background life style prompt from database
@@ -131,7 +130,12 @@ $npcMaster = new NpcMaster();
 
 $connector = new LLMConnector();
 $currentConnectorData = $connector->getById($GLOBALS["CORE_CONNECTOR_BGL"]);
-$currentNpcData = $npcMaster->getByName($argv[1]);
+$currentNpcData = $npcMaster->getByPromptIdentifier($argv[1]);
+if (!$currentNpcData) { return; }
+$workerNpcId = (int)$currentNpcData['id'];
+$workerProfileBinding = $currentNpcData['_profile_binding'];
+$GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] = $currentNpcData;
+$argv[1] = $currentNpcData['npc_name'];
 
 $profile = new CoreProfile();
 $currentProfileData = $profile->getById($currentNpcData["profile_id"]);
@@ -158,21 +162,27 @@ $request = $argv[1];
 
 $dynamicBiography = buildDynamicBiography($GLOBALS, true, true);
 $npcMaster = new NpcMaster();
-$currentNpcData = $npcMaster->getByName($argv[1]);
+$currentNpcData = $npcMaster->getById($workerNpcId);
 $dynamicBiography = $npcMaster->appendBackgroundLifeGoals($dynamicBiography, $currentNpcData);
 $extended_data = $npcMaster->getExtendedData($currentNpcData);
 $metadata = $npcMaster->getMetadata($currentNpcData);
 
-if (isset($extended_data["middle_term_memory"])) {
-    $middle_term_memory = end($extended_data["middle_term_memory"]);
+// Only a digest whose sources all belong to this actor's current profile group.
+if ($mtmDigest = chimMiddleTermLatestDigest($currentNpcData)) {
+    $middle_term_memory = $mtmDigest['text'];
     $dynamicBiography .= "\n\n<middle_term_memory>\nPast events\n{$middle_term_memory}\n</middle_term_memory>";
 
 }
 
 // Things that happened after last iteration
 $npcNameEsc = $db->escape($GLOBALS["HERIKA_NAME"]);
+// Speech the worker's selected physical row witnessed (captured speaker/audience keys); names never match.
+require_once $enginePath . 'lib/eventlog_helper.php';
+require_once $enginePath . 'lib/core/npc_reference.php';
+$bglSpeechSql = chimBuildSpeechContextWhereClause($db, $GLOBALS['HERIKA_NAME'], $currentNpcData);
+$bglMemorySql = dataGetMemoryCompanionConditionSql($GLOBALS['HERIKA_NAME'], 'companions', 'classifier', $currentNpcData);
 $query = "SELECT max(gamets) as  gamets from speech where
-    (speaker='$npcNameEsc' or listener='$npcNameEsc' or companions like '%|$npcNameEsc|%')
+    {$bglSpeechSql}
     ";
 
 error_log($query);
@@ -182,7 +192,7 @@ if (!$lastIt["gamets"]) {
 
     
     $extdata["background_life_last_updated"] = $last_gamets;
-    $npcMaster->updateExtendedKeysByName($GLOBALS["HERIKA_NAME"], $extdata);
+    $npcMaster->updateExtendedKeysById($workerNpcId, $extdata, [], $workerProfileBinding);
 
     error_log("[BGL RUN] NO LAST ITERATION, SKIPPING $argv[1] - {$GLOBALS["HERIKA_NAME"]} last_gamets: $last_gamets");
     return;
@@ -196,6 +206,7 @@ if (($last_gamets - $lastItNumber) < ($bglTriggerHours / GAMETS_TO_HOURS)) {
     $extdata = $npcMaster->getExtendedData($currentNpcData);
     $extdata["background_life_last_updated"] = $last_gamets;
     $currentNpcData = $npcMaster->setExtendedData($currentNpcData, $extdata);
+    $currentNpcData['_profile_binding'] = $workerProfileBinding;
     $npcMaster->updateByArray($currentNpcData);
     error_log("[BGL RUN] $npcNameEsc Last interaction less than {$bglTriggerHours} hours ago");
 
@@ -232,7 +243,7 @@ foreach ($contextDataHistoric as $element) {
 $history .= "\nNote: {$GLOBALS["PLAYER_NAME"]} leaves and is absent from this point on.\n</last_dialogue>\n";
 
 $query = "SELECT location,gamets from speech where
-    (speaker='$npcNameEsc' or listener='$npcNameEsc' or companions like '%|$npcNameEsc|%')
+    {$bglSpeechSql}
     order by gamets desc,ts desc
     ";
 
@@ -242,8 +253,13 @@ error_log($query);
 // Diary entries after last iteration
 
 $cn = $db->escape($GLOBALS["HERIKA_NAME"]);
+// This profile group's keyed authors; an unkeyed worker reads its unassigned rows only while its name is unshared.
+require_once $enginePath . 'lib/core/physical_npc_diaries.php';
+$bglDiaryOwnerSql = chimNpcRowActorKey($currentNpcData) !== null
+    ? chimDiaryAuthorKeysWhereClause(chimDiaryReadKeys($GLOBALS["HERIKA_NAME"], $currentNpcData))
+    : (chimNpcNameIsUnshared($db, $GLOBALS["HERIKA_NAME"]) ? "(author_key IS NULL AND people='$cn')" : 'FALSE');
 $query2 = "SELECT content,gamets,topic FROM diarylog
- where people='$cn' and gamets>{$lastIt["gamets"]} and (topic='Sent Letter' or topic='Journal Note')
+ where $bglDiaryOwnerSql and gamets>{$lastIt["gamets"]} and (topic='Sent Letter' or topic='Journal Note')
  order by gamets desc ,ts desc limit 16 offset 0";
 error_log($query2);
 $diaryEntry = [];
@@ -403,8 +419,8 @@ $extdata = $npcMaster->getExtendedData($currentNpcData);
 if (isset($extdata['bgl_inception']) && !empty($extdata['bgl_inception'])) {
     $lastMinuteNotes .= "\nImportant:A thought crosses {$GLOBALS['HERIKA_NAME']}'s mind: He/She should {$extdata['bgl_inception']}\n";
     $npcMaster = new NpcMaster();
-    $npcData = $npcMaster->getByName($GLOBALS['HERIKA_NAME']);
-    $npcMaster->updateExtendedKeysByName($GLOBALS['HERIKA_NAME'], ['bgl_inception' => ""]);
+    $npcData = $npcMaster->getById($workerNpcId);
+    $npcMaster->updateExtendedKeysById($workerNpcId, ['bgl_inception' => ""], [], $workerProfileBinding);
     error_log("[BGL RUN] HINT inception: {$extdata['bgl_inception']}");
 }
 
@@ -603,6 +619,7 @@ print_r($buffer2);
 $extdata = $npcMaster->getExtendedData($currentNpcData);
 $extdata["background_life_last_updated"] = $last_gamets;
 $currentNpcData = $npcMaster->setExtendedData($currentNpcData, $extdata);
+$currentNpcData['_profile_binding'] = $workerProfileBinding;
 $npcMaster->updateByArray($currentNpcData);
 
 $parsed = [];
@@ -686,6 +703,7 @@ if (is_array($parsed)) {
             'bgl_history',
             [
                 'npc' => $GLOBALS["HERIKA_NAME"],
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets+1,
                 'localts' => time(),
@@ -702,6 +720,7 @@ if (is_array($parsed)) {
                 'content' => $parsed["notification"],
                 'tags' => "backgroundlife",
                 'people' => $GLOBALS["HERIKA_NAME"],
+                'author_key' => chimNpcRowActorKey($currentNpcData),
                 'location' => $LAST_REPORTED_LOCATION ?? null,
                 'sess' => $momentum,
                 'localts' => time(),
@@ -731,6 +750,7 @@ if (is_array($parsed)) {
             // Store in npcMaster extended_data
             $extendedData['pending_delayed_event'] = $delayedEvent;
             $currentNpcData = $npcMaster->setExtendedData($currentNpcData, $extendedData);
+            $currentNpcData['_profile_binding'] = $workerProfileBinding;
             $npcMaster->updateByArray($currentNpcData);
 
             error_log("[DELAYED-EVENT] Letter announcement event queued for {$GLOBALS["HERIKA_NAME"]}, will post after speech idle for 15s");
@@ -800,10 +820,12 @@ $db->insert(
     ]
 );
 
-logMemory($GLOBALS["HERIKA_NAME"], $GLOBALS["HERIKA_NAME"], trim($buffer), $momentum, $last_gamets, 'backgroundlife_diary', $last_ts);
+logMemory($GLOBALS["HERIKA_NAME"], $GLOBALS["HERIKA_NAME"], trim($buffer), $momentum, $last_gamets, 'backgroundlife_diary', $last_ts,
+    chimNpcRowActorKey($currentNpcData)); // The worker's physical row, never the name.
 // Mark NPC as background_life_enabled
 $npcManager = new NpcMaster();
-$npcData = $npcManager->getByName($GLOBALS["HERIKA_NAME"]);
+$npcData = $npcManager->getById($workerNpcId);
+$npcData['_profile_binding'] = $workerProfileBinding;
 $extended = json_decode($npcData["extended_data"], true);
 $extended["background_life_enabled"] = true;
 $npcData["extended_data"] = json_encode($extended);

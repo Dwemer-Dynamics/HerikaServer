@@ -158,21 +158,117 @@ if (!function_exists('chimCommitmentPrepareCreatePayload')) {
     }
 }
 
+if (!function_exists('chimCommitmentOwner')) {
+    // Exact task owner: a core_npc_master row (id plus its own canonical key at call time). A bare name is
+    // legacy/admin only and addresses only legacy rows never bound to a row (npc_id IS NULL); it never
+    // adopts or reaches a row-bound task of a namesake.
+    function chimCommitmentOwner($actor): ?array
+    {
+        if (!is_array($actor) || (int)($actor['id'] ?? 0) <= 0) {
+            return null;
+        }
+        if (!function_exists('chimNpcRowActorKey')) {
+            require_once __DIR__ . '/npc_reference.php';
+        }
+        return [
+            'npc_id' => (int)$actor['id'],
+            'actor_key' => chimNpcRowActorKey($actor),
+            'name' => trim((string)($actor['npc_name'] ?? '')),
+        ];
+    }
+}
+
+if (!function_exists('chimCommitmentOwnerName')) {
+    function chimCommitmentOwnerName($actor): string
+    {
+        return is_array($actor) ? trim((string)($actor['npc_name'] ?? '')) : trim((string)$actor);
+    }
+}
+
+if (!function_exists('chimCommitmentOwnerSql')) {
+    // WHERE fragment applied before any ORDER/LIMIT. $includeLegacy lets the admin view of a row also list
+    // unbound legacy same-name tasks (visible, flagged, not adopted).
+    function chimCommitmentOwnerSql($actor, bool $includeLegacy = false): ?string
+    {
+        $db = $GLOBALS['db'];
+        $name = chimCommitmentOwnerName($actor);
+        $legacy = "(npc_id IS NULL AND lower(actor_name) = lower('" . $db->escape($name) . "'))";
+        if (!is_array($actor)) {
+            return $name === '' ? null : $legacy;
+        }
+        $owner = chimCommitmentOwner($actor);
+        if ($owner === null) {
+            return null;
+        }
+        // An id-bound task written before actor_key existed (schedules) stays with that id; a recorded key must match.
+        $keySql = $owner['actor_key'] === null ? 'actor_key IS NULL'
+            : "(actor_key IS NULL OR actor_key = '" . $db->escape($owner['actor_key']) . "')";
+        $exact = "(npc_id = {$owner['npc_id']} AND {$keySql})";
+        return $includeLegacy && $name !== '' ? "({$exact} OR {$legacy})" : $exact;
+    }
+}
+
+if (!function_exists('chimCommitmentTimelineEpoch')) {
+    // Runtime generation (playthrough switch) plus the live clock load epoch, as _relTimelineEpoch().
+    function chimCommitmentTimelineEpoch(): string
+    {
+        $path = dirname(__DIR__, 2) . '/log/playthrough_runtime/generation';
+        clearstatcache(true, $path);
+        $generation = is_file($path) ? trim((string)@file_get_contents($path)) : '';
+        try {
+            $row = $GLOBALS['db']->fetchOne("SELECT value FROM conf_opts WHERE id = 'DYNAMIC_PROFILE_CLOCK'");
+            $clock = json_decode((string)($row['value'] ?? ''), true);
+            $epoch = is_array($clock) ? (string)($clock['epoch'] ?? '') : '';
+        } catch (Throwable $e) {
+            $epoch = '';
+        }
+        return $generation . '|' . $epoch;
+    }
+}
+
 if (!function_exists('chimCommitmentQueueCreate')) {
-    function chimCommitmentQueueCreate(string $actorName, array $payload, int $currentGamets, string $requestText = ''): array
+    // Counterparty key only from an explicit selection: a valid actor key the caller supplied, or a counterparty
+    // written as an exact identifier ("Name [RefID: X]" / ref:/dyn:). Bare or ambiguous names stay key-less.
+    function chimCommitmentExplicitCounterpartyKey(array $payload): ?string
+    {
+        if (!function_exists('chimIsActorKey') || !class_exists('NpcMaster')) { return null; }
+        $master = new NpcMaster();
+        $given = $payload['counterparty_key'] ?? null;
+        try {
+            if (is_string($given) && chimIsActorKey($given)) {
+                $row = $master->getByActorKey($given);
+                return $row ? chimNpcRowActorKey($row) : null;
+            }
+            $text = trim((string)($payload['counterparty'] ?? ''));
+            if ($text === '' || !preg_match('/(\[RefID:\s*(?:0x)?[0-9a-f]{1,8}\]\s*$)|^(ref|dyn):/i', $text)) { return null; }
+            $row = $master->getByPromptIdentifier($text);
+            return is_array($row) && !empty($row['id']) ? chimNpcRowActorKey($row) : null;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    function chimCommitmentQueueCreate($actor, array $payload, int $currentGamets, string $requestText = ''): array
     {
         if (!isset($GLOBALS['db']) || !is_object($GLOBALS['db'])) {
             return ['ok' => false, 'error' => 'database_unavailable'];
         }
 
-        $actorName = trim($actorName);
-        if ($actorName === '') {
+        $actorName = chimCommitmentOwnerName($actor);
+        $owner = chimCommitmentOwner($actor);
+        if ($actorName === '' || $owner === null) {
             return ['ok' => false, 'error' => 'actor_required'];
         }
 
         $queueId = 'npc_commitment_queue_' . time() . '_' . uniqid('', true);
         $queueData = [
             'actor_name' => $actorName,
+            // Exact owner, binding and timeline frozen at enqueue; the worker rechecks them after the LLM.
+            'npc_id' => $owner['npc_id'],
+            'actor_key' => $owner['actor_key'],
+            'binding' => function_exists('chimNpcProfileBinding') ? chimNpcProfileBinding($actor) : null,
+            'timeline' => chimCommitmentTimelineEpoch(),
+            'counterparty_key' => chimCommitmentExplicitCounterpartyKey($payload),
             'payload' => $payload,
             'request_text' => $requestText,
             'current_gamets' => max(0, $currentGamets),
@@ -220,13 +316,14 @@ if (!function_exists('chimCommitmentDbReady')) {
 }
 
 if (!function_exists('chimCommitmentCreate')) {
-    function chimCommitmentCreate(string $actorName, array $payload, int $currentGamets): array
+    function chimCommitmentCreate($actor, array $payload, int $currentGamets): array
     {
         if (!chimCommitmentDbReady()) {
             return ['ok' => false, 'error' => 'commitment_storage_unavailable'];
         }
 
-        $actorName = trim($actorName);
+        $actorName = chimCommitmentOwnerName($actor);
+        $owner = chimCommitmentOwner($actor);
         $subject = trim((string)($payload['subject'] ?? ''));
         if ($actorName === '' || $subject === '') {
             return ['ok' => false, 'error' => 'actor_and_subject_required'];
@@ -249,13 +346,20 @@ if (!function_exists('chimCommitmentCreate')) {
         $counterpartySql = $db->escape($counterparty);
         $locationSql = $db->escape($location);
         $payloadSql = $db->escape(json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        // Row-bound owner; a counterparty key only when the caller resolved it explicitly. Legacy name-only
+        // creation stays unbound (NULLs), never guessed.
+        $npcIdSql = $owner === null ? 'NULL' : (string)$owner['npc_id'];
+        $actorKeySql = $owner === null || $owner['actor_key'] === null ? 'NULL' : "'" . $db->escape($owner['actor_key']) . "'";
+        $counterpartyKey = $payload['counterparty_key'] ?? null;
+        $counterpartyKeySql = is_string($counterpartyKey) && function_exists('chimIsActorKey') && chimIsActorKey($counterpartyKey)
+            ? "'" . $db->escape($counterpartyKey) . "'" : 'NULL';
 
         $row = $db->fetchOne("
             INSERT INTO public.npc_commitments
-                (actor_name, commitment_type, subject, counterparty, location_name, status,
+                (actor_name, npc_id, actor_key, commitment_type, subject, counterparty, counterparty_key, location_name, status,
                  created_gamets, due_gamets, repeat_interval_gamets, payload_json, updated_at)
             VALUES
-                ('{$actorSql}', '{$typeSql}', '{$subjectSql}', '{$counterpartySql}', '{$locationSql}',
+                ('{$actorSql}', {$npcIdSql}, {$actorKeySql}, '{$typeSql}', '{$subjectSql}', '{$counterpartySql}', {$counterpartyKeySql}, '{$locationSql}',
                  'scheduled', {$currentGamets}, {$dueGamets}, {$repeatIntervalGamets}, '{$payloadSql}'::jsonb, NOW())
             RETURNING id, due_gamets, repeat_interval_gamets
         ");
@@ -271,7 +375,7 @@ if (!function_exists('chimCommitmentCreate')) {
 }
 
 if (!function_exists('chimCommitmentSetStatus')) {
-    function chimCommitmentSetStatus(string $actorName, int $commitmentId, string $status, string $outcome, int $currentGamets): array
+    function chimCommitmentSetStatus($actor, int $commitmentId, string $status, string $outcome, int $currentGamets): array
     {
         if (!chimCommitmentDbReady()) {
             return ['ok' => false, 'error' => 'commitment_storage_unavailable'];
@@ -284,13 +388,16 @@ if (!function_exists('chimCommitmentSetStatus')) {
         }
 
         $db = $GLOBALS['db'];
-        $actorSql = $db->escape(trim($actorName));
+        $ownerSql = chimCommitmentOwnerSql($actor);
+        if ($ownerSql === null) {
+            return ['ok' => false, 'error' => 'task_not_found_or_not_owned'];
+        }
         $outcomeSql = $db->escape(trim($outcome));
         $active = $db->fetchOne("
             SELECT id, due_gamets, repeat_interval_gamets, occurrence_count
               FROM public.npc_commitments
              WHERE id = {$commitmentId}
-               AND lower(actor_name) = lower('{$actorSql}')
+               AND {$ownerSql}
                AND status IN ('scheduled', 'due')
              LIMIT 1
         ");
@@ -318,7 +425,7 @@ if (!function_exists('chimCommitmentSetStatus')) {
                        due_gamets = {$nextDueGamets},
                        updated_at = NOW()
                  WHERE id = {$commitmentId}
-                   AND lower(actor_name) = lower('{$actorSql}')
+                   AND {$ownerSql}
                    AND status IN ('scheduled', 'due')
                    AND due_gamets = {$expectedDue} AND occurrence_count = {$expectedCount}
                 RETURNING id, due_gamets, occurrence_count
@@ -346,7 +453,7 @@ if (!function_exists('chimCommitmentSetStatus')) {
                    occurrence_count = occurrence_count + {$occurrenceIncrement},
                    updated_at = NOW()
              WHERE id = {$commitmentId}
-               AND lower(actor_name) = lower('{$actorSql}')
+               AND {$ownerSql}
                AND status IN ('scheduled', 'due')
                AND due_gamets = {$expectedDue} AND occurrence_count = {$expectedCount}
             RETURNING id
@@ -361,21 +468,24 @@ if (!function_exists('chimCommitmentSetStatus')) {
 }
 
 if (!function_exists('chimCommitmentGetActive')) {
-    function chimCommitmentGetActive(string $actorName, int $currentGamets, int $limit = 8): array
+    function chimCommitmentGetActive($actor, int $currentGamets, int $limit = 8, bool $includeLegacy = false): array
     {
-        if (!chimCommitmentDbReady() || trim($actorName) === '') {
+        if (!chimCommitmentDbReady() || chimCommitmentOwnerName($actor) === '') {
             return [];
         }
 
         $db = $GLOBALS['db'];
-        $actorSql = $db->escape(trim($actorName));
+        $ownerSql = chimCommitmentOwnerSql($actor, $includeLegacy);
+        if ($ownerSql === null) {
+            return [];
+        }
         $limit = max(1, min(20, $limit));
         $currentGamets = max(0, $currentGamets);
 
         $db->execQuery("
             UPDATE public.npc_commitments
                SET status = 'due', updated_at = NOW()
-             WHERE lower(actor_name) = lower('{$actorSql}')
+             WHERE {$ownerSql}
                AND status = 'scheduled'
                AND due_gamets <= {$currentGamets}
         ");
@@ -385,7 +495,7 @@ if (!function_exists('chimCommitmentGetActive')) {
                    created_gamets, due_gamets, repeat_interval_gamets, occurrence_count,
                    last_resolved_gamets, payload_json
               FROM public.npc_commitments
-             WHERE lower(actor_name) = lower('{$actorSql}')
+             WHERE {$ownerSql}
                AND status IN ('scheduled', 'due')
              ORDER BY CASE WHEN status = 'due' THEN 0 ELSE 1 END, due_gamets ASC, id ASC
              LIMIT {$limit}
@@ -394,21 +504,25 @@ if (!function_exists('chimCommitmentGetActive')) {
 }
 
 if (!function_exists('chimCommitmentGetAll')) {
-    function chimCommitmentGetAll(string $actorName, int $limit = 100): array
+    function chimCommitmentGetAll($actor, int $limit = 100, bool $includeLegacy = false): array
     {
-        if (!chimCommitmentDbReady() || trim($actorName) === '') {
+        if (!chimCommitmentDbReady() || chimCommitmentOwnerName($actor) === '') {
             return [];
         }
 
         $db = $GLOBALS['db'];
-        $actorSql = $db->escape(trim($actorName));
+        $ownerSql = chimCommitmentOwnerSql($actor, $includeLegacy);
+        if ($ownerSql === null) {
+            return [];
+        }
         $limit = max(1, min(250, $limit));
         return $db->fetchAll("
             SELECT id, commitment_type, subject, counterparty, location_name, status,
                    created_gamets, due_gamets, repeat_interval_gamets, occurrence_count,
-                   last_resolved_gamets, resolved_gamets, outcome, created_at, updated_at
+                   last_resolved_gamets, resolved_gamets, outcome, created_at, updated_at,
+                   npc_id, actor_key, counterparty_key, (npc_id IS NULL) AS legacy_unassigned
               FROM public.npc_commitments
-             WHERE lower(actor_name) = lower('{$actorSql}')
+             WHERE {$ownerSql}
              ORDER BY CASE WHEN status = 'due' THEN 0
                            WHEN status = 'scheduled' THEN 1
                            ELSE 2 END,
@@ -419,9 +533,10 @@ if (!function_exists('chimCommitmentGetAll')) {
 }
 
 if (!function_exists('chimCommitmentFormatContext')) {
-    function chimCommitmentFormatContext(string $actorName, int $currentGamets): string
+    function chimCommitmentFormatContext($actor, int $currentGamets): string
     {
-        $rows = chimCommitmentGetActive($actorName, $currentGamets);
+        $actorName = chimCommitmentOwnerName($actor);
+        $rows = chimCommitmentGetActive($actor, $currentGamets);
         if (empty($rows)) {
             return '';
         }

@@ -107,7 +107,7 @@ foreach ($jsonbRelationships as $target => $data) {
 $typeIcons = array_merge($defaultTypes, $customTypes);
 ?>
 
-<div class="form-item span-2" id="relationship-editor-section">
+<div class="form-item span-2" id="relationship-editor-section" style="min-width:0;">
     <details class="metadata-skills-view" style="border:1px solid #4a4a4a; border-radius:8px; padding:8px; background:#262626; margin-top:16px;" open>
         <summary style="cursor:pointer; font-weight:700; color:rgb(242, 124, 17);">
             Relationship Affinities
@@ -129,7 +129,7 @@ $typeIcons = array_merge($defaultTypes, $customTypes);
         </label>
         <input type="hidden" name="relationships_locked" id="relationships_locked_hidden" value="<?= !empty($extendedData['relationships_locked']) ? '1' : '0' ?>">
 
-        <div id="rel-editor-container" style="margin-top:12px;">
+        <div id="rel-editor-container" style="margin-top:12px; max-width:100%; overflow-x:auto;">
             <?php if (empty($jsonbRelationships)): ?>
                 <p id="rel-empty-msg" style="color:#666; font-style:italic;">No relationships tracked yet. Use "Build with AI" or add manually below.</p>
             <?php else: ?>
@@ -159,8 +159,13 @@ $typeIcons = array_merge($defaultTypes, $customTypes);
                             $tierColor = $tierColors[$tier] ?? '#e5e7eb';
                             $typeIcon = $typeIcons[$type] ?? '➖';
                             $hasExtended = !empty($relation) || !empty($note) || !empty($best) || !empty($worst) || !empty($customInfo);
+                            // Typed targets keep their stored identity; the key stays hidden and the label is read-only.
+                            $typedTarget = RelationshipManager::isActorEdgeKey((string)$target) || is_array($data['target'] ?? null);
+                            $targetLabel = (string)($data['target']['label'] ?? $target);
+                            $targetKind = (string)($data['target']['kind'] ?? 'actor');
                         ?>
                         <tr class="rel-row" data-target="<?= htmlspecialchars($target) ?>"
+                            <?php if (is_array($data['target'] ?? null)): ?>data-target-json="<?= htmlspecialchars(json_encode($data['target'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)) ?>"<?php endif; ?>
                             data-relation="<?= htmlspecialchars($relation) ?>"
                             data-note="<?= htmlspecialchars($note) ?>"
                             data-best="<?= htmlspecialchars($best) ?>"
@@ -169,8 +174,15 @@ $typeIcons = array_merge($defaultTypes, $customTypes);
                             data-worst-delta="<?= $worstDelta ?>"
                             style="border-bottom:1px solid #333;">
                             <td style="padding:8px;">
+                                <?php if ($typedTarget): ?>
+                                <input type="hidden" class="rel-target" value="<?= htmlspecialchars($target) ?>">
+                                <span class="rel-target-label" title="<?= $targetKind === 'concept' ? 'Concept' : 'Linked actor' ?> target; choose a different target in the NPC manager"
+                                      style="display:inline-block; max-width:160px; overflow-wrap:anywhere; color:#e9efff;"><?= htmlspecialchars($targetLabel) ?></span>
+                                <span style="display:block; color:#888; font-size:0.75em;"><?= $targetKind === 'concept' ? 'Concept' : 'Actor' ?></span>
+                                <?php else: ?>
                                 <input type="text" class="rel-target" value="<?= htmlspecialchars($target) ?>"
                                        style="background:#1a1a1a; border:1px solid #4a4a4a; border-radius:4px; color:#e9efff; padding:4px 8px; width:120px;">
+                                <?php endif; ?>
                             </td>
                             <td style="padding:8px; text-align:center;">
                                 <input type="number" class="rel-aff" value="<?= $aff ?>" min="-100" max="100"
@@ -227,6 +239,22 @@ $typeIcons = array_merge($defaultTypes, $customTypes);
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                     <input type="text" id="new-rel-target" placeholder="Target name (e.g., Player, Lydia)"
                            style="background:#1a1a1a; border:1px solid #4a4a4a; border-radius:4px; color:#e9efff; padding:6px 10px; flex:1; min-width:150px;">
+                    <?php if (!empty($editItem['id'])): ?>
+                    <input type="text" id="new-rel-actor" list="rel-actor-options" aria-label="Or choose an NPC actor"
+                           placeholder="...or choose an NPC actor"
+                           style="background:#1a1a1a; border:1px solid #4a4a4a; border-radius:4px; color:#e9efff; padding:6px 10px; flex:1; min-width:150px;">
+                    <datalist id="rel-actor-options">
+                        <?php
+                        // Exact physical rows; each option carries its key so namesakes stay distinct.
+                        $relActorRows = (array)$GLOBALS['db']->fetchAll("SELECT id, npc_name, refid, metadata, profile_owner_npc_id FROM core_npc_master WHERE id <> " . (int)$editItem['id'] . " ORDER BY lower(npc_name), id");
+                        foreach ($relActorRows as $relActorRow):
+                            $relActorKey = chimNpcRowActorKey($relActorRow);
+                            if ($relActorKey === null || !RelationshipManager::isActorEdgeKey($relActorKey)) { continue; }
+                        ?>
+                        <option value="<?= htmlspecialchars($relActorRow['npc_name'] . ' [' . $relActorKey . ']') ?>" data-id="<?= (int)$relActorRow['id'] ?>" data-key="<?= htmlspecialchars($relActorKey) ?>" data-label="<?= htmlspecialchars($relActorRow['npc_name']) ?>"></option>
+                        <?php endforeach; ?>
+                    </datalist>
+                    <?php endif; ?>
                     <input type="number" id="new-rel-aff" value="0" min="-100" max="100" placeholder="Affinity"
                            style="background:#1a1a1a; border:1px solid #4a4a4a; border-radius:4px; color:#e9efff; padding:6px; width:70px; text-align:center;">
                     <select id="new-rel-type" style="background:#1a1a1a; border:1px solid #4a4a4a; border-radius:4px; color:#e9efff; padding:6px;">
@@ -397,6 +425,7 @@ $typeIcons = array_merge($defaultTypes, $customTypes);
         </div>
 
         <!-- Hidden fields -->
+        <input type="hidden" name="_extended_data_digest" value="<?= htmlspecialchars(md5((string)($editItem['extended_data'] ?? ''))) ?>">
         <input type="hidden" name="relationships_jsonb" id="relationships_jsonb" value="<?= htmlspecialchars(json_encode($jsonbRelationships)) ?>">
         <input type="hidden" id="rel-npc-name" value="<?= htmlspecialchars($npcName) ?>">
         <input type="hidden" id="rel-npc-id" value="<?= htmlspecialchars($editItem['id'] ?? '') ?>">
@@ -498,8 +527,22 @@ function removeRelRow(btn) {
     syncRelationshipsToHidden();
 }
 
+function selectedRelActor() {
+    const input = document.getElementById('new-rel-actor');
+    const value = input ? input.value.trim() : '';
+    if (!value) return null;
+    const option = Array.from(document.querySelectorAll('#rel-actor-options option')).find(o => o.value === value);
+    if (!option) return false;
+    return { id: option.dataset.id, target: { kind: 'actor', key: option.dataset.key, label: option.dataset.label } };
+}
+
 function addRelRow() {
-    const target = document.getElementById('new-rel-target').value.trim();
+    const actor = selectedRelActor();
+    if (actor === false) {
+        alert('Choose an NPC from the list.');
+        return;
+    }
+    const target = actor ? actor.target.key : document.getElementById('new-rel-target').value.trim();
     const aff = parseInt(document.getElementById('new-rel-aff').value) || 0;
     const type = document.getElementById('new-rel-type').value;
 
@@ -509,9 +552,9 @@ function addRelRow() {
     }
 
     // Check if target already exists
-    const existing = document.querySelector(`.rel-row[data-target="${target}"]`);
+    const existing = Array.from(document.querySelectorAll('.rel-row')).find(r => r.dataset.target === target);
     if (existing) {
-        alert(`Relationship with ${target} already exists. Edit it in the table above.`);
+        alert(`Relationship with ${actor ? actor.target.label : target} already exists. Edit it in the table above.`);
         return;
     }
 
@@ -546,6 +589,10 @@ function addRelRow() {
     const row = document.createElement('tr');
     row.className = 'rel-row';
     row.dataset.target = target;
+    if (actor) {
+        row.dataset.targetJson = JSON.stringify(actor.target);
+        row.dataset.targetNpcId = actor.id;
+    }
     row.dataset.relation = '';
     row.dataset.note = '';
     row.dataset.best = '';
@@ -554,10 +601,7 @@ function addRelRow() {
     row.dataset.worstDelta = '0';
     row.style.borderBottom = '1px solid #333';
     row.innerHTML = `
-        <td style="padding:8px;">
-            <input type="text" class="rel-target" value="${escapeHtml(target)}"
-                   style="background:#1a1a1a; border:1px solid #4a4a4a; border-radius:4px; color:#e9efff; padding:4px 8px; width:120px;">
-        </td>
+        <td style="padding:8px;">${relTargetCellHtml(target, actor ? actor.target : null)}</td>
         <td style="padding:8px; text-align:center;">
             <input type="number" class="rel-aff" value="${aff}" min="-100" max="100"
                    style="background:#1a1a1a; border:1px solid #4a4a4a; border-radius:4px; color:#e9efff; padding:4px; width:60px; text-align:center;"
@@ -587,6 +631,7 @@ function addRelRow() {
 
     // Clear inputs
     document.getElementById('new-rel-target').value = '';
+    if (document.getElementById('new-rel-actor')) document.getElementById('new-rel-actor').value = '';
     document.getElementById('new-rel-aff').value = '0';
     document.getElementById('new-rel-type').value = 'neutral';
 
@@ -625,6 +670,11 @@ function syncRelationshipsToHidden() {
                 if (worstDelta) rel.worst_delta = worstDelta;
             }
             if (customInfo) rel.custom_info = customInfo;
+            // Typed targets round-trip so the server keeps them and can refuse a stale form.
+            if (row.dataset.targetJson) {
+                try { rel.target = JSON.parse(row.dataset.targetJson); } catch (e) {}
+                if (row.dataset.targetNpcId) rel.target_npc_id = parseInt(row.dataset.targetNpcId) || 0;
+            }
 
             relationships[target] = rel;
         }
@@ -861,8 +911,13 @@ async function buildWithAI() {
                 const customInfo = currentRelationships[target]?.custom_info || '';
                 const aiRelationship = { ...relationship };
                 delete aiRelationship.custom_info;
+                delete aiRelationship.target;
+                delete aiRelationship.target_npc_id;
                 mergedRelationships[target] = aiRelationship;
                 if (customInfo) mergedRelationships[target].custom_info = customInfo;
+                // An AI score for an existing typed edge keeps that edge's target identity.
+                if (currentRelationships[target]?.target) mergedRelationships[target].target = currentRelationships[target].target;
+                if (currentRelationships[target]?.target_npc_id) mergedRelationships[target].target_npc_id = currentRelationships[target].target_npc_id;
             }
 
             // Update the hidden field
@@ -944,6 +999,8 @@ function rebuildRelTable(relationships) {
 
         html += `
             <tr class="rel-row" data-target="${escapeHtml(target)}"
+                ${data.target && typeof data.target === 'object' ? `data-target-json="${escapeHtml(JSON.stringify(data.target))}"` : ''}
+                ${data.target_npc_id ? `data-target-npc-id="${parseInt(data.target_npc_id) || 0}"` : ''}
                 data-relation="${escapeHtml(relation)}"
                 data-note="${escapeHtml(note)}"
                 data-best="${escapeHtml(best)}"
@@ -951,10 +1008,7 @@ function rebuildRelTable(relationships) {
                 data-best-delta="${bestDelta}"
                 data-worst-delta="${worstDelta}"
                 style="border-bottom:1px solid #333;">
-                <td style="padding:8px;">
-                    <input type="text" class="rel-target" value="${escapeHtml(target)}"
-                           style="background:#1a1a1a; border:1px solid #4a4a4a; border-radius:4px; color:#e9efff; padding:4px 8px; width:120px;">
-                </td>
+                <td style="padding:8px;">${relTargetCellHtml(target, data.target && typeof data.target === 'object' ? data.target : null)}</td>
                 <td style="padding:8px; text-align:center;">
                     <input type="number" class="rel-aff" value="${aff}" min="-100" max="100"
                            style="background:#1a1a1a; border:1px solid #4a4a4a; border-radius:4px; color:#e9efff; padding:4px; width:60px; text-align:center;"
@@ -1000,10 +1054,23 @@ function clearAllRelationships() {
     hideStatus();
 }
 
+function relTargetCellHtml(target, typed) {
+    if (!typed) {
+        return `<input type="text" class="rel-target" value="${escapeHtml(target)}"
+                   style="background:#1a1a1a; border:1px solid #4a4a4a; border-radius:4px; color:#e9efff; padding:4px 8px; width:120px;">`;
+    }
+    const concept = typed.kind === 'concept';
+    return `<input type="hidden" class="rel-target" value="${escapeHtml(target)}">
+        <span class="rel-target-label" title="${concept ? 'Concept' : 'Actor'} target"
+              style="display:inline-block; max-width:160px; overflow-wrap:anywhere; color:#e9efff;">${escapeHtml(typed.label || target)}</span>
+        <span style="display:block; color:#888; font-size:0.75em;">${concept ? 'Concept' : 'Actor'}</span>`;
+}
+
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
-    return div.innerHTML;
+    // Also escape quotes: the result is used inside attribute values (target keys, typed target JSON).
+    return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function truncateSignal(text, maxLen) {

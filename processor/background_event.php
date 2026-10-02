@@ -131,7 +131,9 @@ if (is_array($bgevent)) {
             $extended = json_decode($npcData["extended_data"], true);
             $bgevent["server_processed"] = false;
             if (isset($extended["background_life_enabled"]) && $extended["background_life_enabled"] == true) {
-                $lastAction = $GLOBALS["db"]->fetchOne("select * from actions_issued where actorname='$cn' order by gamets desc,ts desc,localts desc limit 1 offset 0");
+                // Keyed rows read their own issued actions only; NULL legacy rows are not adopted.
+                $lastActionOwner = chimIssuedOwnerClause($GLOBALS["db"], chimNpcRowActorKey($npcData), (string)$npcData["npc_name"]);
+                $lastAction = $GLOBALS["db"]->fetchOne("select * from actions_issued where $lastActionOwner order by gamets desc,ts desc,localts desc limit 1 offset 0");
                 if (isset($lastAction) && isset($lastAction["action"]) && ( 
                     ($lastAction["action"] == $bgevent["name"])
                     ||
@@ -154,6 +156,8 @@ if (is_array($bgevent)) {
                             $category="other";
                         }
 
+                        // The event names its actor only, so the row stays unkeyed (actor_key NULL): it is read back
+                        // only while that name is unshared, never attributed to one of several namesakes.
                         $GLOBALS["db"]->insert(
                             'bgl_history',
                             [

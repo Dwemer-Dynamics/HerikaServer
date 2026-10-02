@@ -67,7 +67,11 @@ if ($cmds[0] == "TrackAll") {
 
     $connector = new LLMConnector();
     $currentConnectorData = $connector->getById($GLOBALS["CORE_CONNECTOR_BGL"]);
-    $currentNpcData = $npcMaster->getByName($argv[1]);// Lookup NPC data by name passed as first argument
+    $currentNpcData = $npcMaster->getByPromptIdentifier($argv[1]);
+    if (!$currentNpcData) { return; }
+    $workerNpcId = (int)$currentNpcData['id'];
+    $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] = $currentNpcData;
+    $argv[1] = $currentNpcData['npc_name'];
 
     $profile = new CoreProfile();
     $currentProfileData = $profile->getById($currentNpcData["profile_id"]);
@@ -100,13 +104,18 @@ if ($cmds[0] == "TrackAll") {
     
     //$dynamicBiography = buildDynamicBiography($GLOBALS, true, true);
     $npcMaster = new NpcMaster();
-    $currentNpcData = $npcMaster->getByName($argv[1]);
+    $currentNpcData = $npcMaster->getById($workerNpcId);
     $extended_data = $npcMaster->getExtendedData($currentNpcData);
 
     // Things that happened after last iteration
     $npcNameEsc = $db->escape($GLOBALS["HERIKA_NAME"]);
+    // Speech the worker's selected physical row witnessed (captured speaker/audience keys); names never match.
+    require_once $enginePath . 'lib/eventlog_helper.php';
+    require_once $enginePath . 'lib/core/npc_reference.php';
+    $bglSpeechSql = chimBuildSpeechContextWhereClause($db, $GLOBALS['HERIKA_NAME'], $currentNpcData);
+    $bglMemorySql = dataGetMemoryCompanionConditionSql($GLOBALS['HERIKA_NAME'], 'companions', 'classifier', $currentNpcData);
     $query = "SELECT max(gamets) as  gamets from speech where
-    (speaker='$npcNameEsc' or listener='$npcNameEsc' or companions like '%|$npcNameEsc|%')
+    {$bglSpeechSql}
     ";
 
     // error_log($query);

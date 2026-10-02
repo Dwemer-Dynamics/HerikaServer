@@ -114,6 +114,18 @@ function chimLetterTableReady(): bool
     return $ready;
 }
 
+// bgl_letters.courier_refid (patch 20260930001). Until the update runs the courier is tracked by name only.
+function chimLetterCourierRefidReady(): bool
+{
+    static $ready = null;
+    if ($ready === null) {
+        $row = $GLOBALS['db']->fetchOne("SELECT 1 AS x FROM information_schema.columns WHERE table_schema = 'public'
+            AND table_name = 'bgl_letters' AND column_name = 'courier_refid'");
+        $ready = !empty($row);
+    }
+    return $ready;
+}
+
 function chimLetterQueueCommand(string $action): void
 {
     $GLOBALS['db']->insert('responselog', [
@@ -178,10 +190,12 @@ function chimLetterUniqueTitle(string $base): string
     return $base . ' ' . substr(md5((string)microtime(true)), 0, 6);
 }
 
-function chimLetterHistory(string $npcName, string $category, string $data): void
+// $actorKey is the recipient's physical key, passed only when its row was selected by an exact RefID binding.
+function chimLetterHistory(string $npcName, string $category, string $data, ?string $actorKey = null): void
 {
     $GLOBALS['db']->insert('bgl_history', [
         'npc' => $npcName,
+        'actor_key' => $actorKey,
         'ts' => chimLetterNowTs(),
         'gamets' => chimLetterNowGamets(),
         'localts' => time(),
@@ -261,7 +275,11 @@ function chimLetterSendFromPlayer(NpcMaster $npcMaster, string $refid, string $n
         throw new RuntimeException('Could not save the letter.');
     }
 
-    chimLetterHistory($npcName, 'letter_out', "{$player} writes a letter to {$npcName}");
+    // Keyed only when the RefID selected this row; a name-resolved recipient stays unkeyed.
+    $boundByRefid = chimBglNormalizeRefId($refid) !== ''
+        && chimBglNormalizeRefId((string)($npc['refid'] ?? '')) === chimBglNormalizeRefId($refid);
+    chimLetterHistory($npcName, 'letter_out', "{$player} writes a letter to {$npcName}",
+        $boundByRefid ? chimNpcRowActorKey($npc) : null);
     chimLetterNotify("Your letter to {$npcName} is sealed. A courier is on the way.");
 
     return chimLetterGetById((int)$id);
@@ -339,8 +357,17 @@ function chimLetterDeliver(NpcMaster $npcMaster, array $letter, bool $placeNote 
     $gamets = chimLetterNowGamets();
     $ts = chimLetterNowTs();
 
-    $npc = $npcMaster->getByName($npcName);
-    $refid = trim((string)($npc['refid'] ?? $letter['npc_refid'] ?? ''));
+    // The stored RefID addresses the recipient while that slot still holds a same-name actor; otherwise the
+    // unique name. A stored RefID now held by another actor is never used, so a recycled slot gets no note.
+    $storedRefid = trim((string)($letter['npc_refid'] ?? ''));
+    try {
+        $slotHolder = $npcMaster->getByRefId($storedRefid);
+    } catch (RuntimeException $e) {
+        $slotHolder = false;
+    }
+    $npc = $slotHolder && strcasecmp(trim((string)$slotHolder['npc_name']), trim((string)$npcName)) === 0
+        ? $slotHolder : $npcMaster->getByName($npcName);
+    $refid = trim((string)($npc['refid'] ?? ($slotHolder === null ? $storedRefid : '')));
     // Fail-safe: after repeated delivery errors the note is skipped, but the NPC still learns
     // the contents below, which is what matters for conversation.
     if ($refid !== '' && $placeNote) {
@@ -365,7 +392,9 @@ function chimLetterDeliver(NpcMaster $npcMaster, array $letter, bool $placeNote 
         logMemory($player, $npcName, "{$player} sent {$npcName} a letter by courier: {$body}", time(), $gamets, 'letter_received', $ts);
     }
 
-    chimLetterHistory($npcName, 'letter_in', "{$npcName} receives a letter from {$player}");
+    // Keyed only for the same-name holder of the stored RefID; the unique-name fallback stays unkeyed.
+    chimLetterHistory($npcName, 'letter_in', "{$npcName} receives a letter from {$player}",
+        $slotHolder && $npc === $slotHolder ? chimNpcRowActorKey($npc) : null);
 
     chimLetterUpdate((int)$letter['id'], ['status' => 'delivered', 'deliver_gamets' => $gamets]);
 
@@ -596,11 +625,53 @@ function chimLetterEventSeen(string $type, string $needle, int $sinceRowId): boo
 }
 
 // The courier is still in the world: it spawned (possibly late) or an actor scan saw it nearby.
-function chimLetterCourierSighted(string $name, int $sinceRowId): bool
+// A courier with a known physical key is sighted only through that key in a scan's participants.
+function chimLetterCourierSighted(string $name, int $sinceRowId, ?string $key = null): bool
 {
+    if ($key !== null) {
+        return chimLetterParticipantSeen('infonpc_close', $key, $sinceRowId) || chimLetterParticipantSeen('infonpc', $key, $sinceRowId);
+    }
     return chimLetterEventSeen('status_msg', "spawned@{$name}@", $sinceRowId)
         || chimLetterEventSeen('infonpc_close', $name, $sinceRowId)
         || chimLetterEventSeen('infonpc', $name, $sinceRowId);
+}
+
+// True when an actor scan after $sinceRowId listed the participant with this physical key (eventlog.people).
+function chimLetterParticipantSeen(string $type, string $key, int $sinceRowId): bool
+{
+    $needle = substr(json_encode(['id' => $key], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 1, -1);
+    $row = $GLOBALS['db']->fetchOne(
+        'SELECT 1 AS x FROM eventlog WHERE rowid > $1 AND type = $2 AND position($3 in people) > 0 LIMIT 1',
+        [$sinceRowId, $type, $needle]
+    );
+    return !empty($row);
+}
+
+// The exact courier this lead letter spawned: "Name [RefID: XXXXXXXX]" binds only that physical actor in the
+// client (CaptureRoleCommandTargets, no name fallback). A stored RefID no longer registered under the courier
+// name is stale and has no target. Without a stored RefID only a unique name is exact.
+function chimLetterCourierTarget(array $lead): ?string
+{
+    $name = trim((string)($lead['courier_name'] ?? ''));
+    $refid = NpcMaster::normalizeRefId($lead['courier_refid'] ?? '');
+    if ($name === '' || $refid === '00000000') {
+        return null;
+    }
+    if ($refid !== '') {
+        return chimSpawnedActorRow(new NpcMaster(), $refid, $name)['state'] === 'bound' ? "{$name} [RefID: {$refid}]" : null;
+    }
+    return chimLetterCourierNameIsExact($name) ? $name : null;
+}
+
+// Physical key of the stored courier RefID, while that RefID is still registered under the courier name.
+function chimLetterCourierKey(NpcMaster $npcMaster, array $lead): ?string
+{
+    $refid = NpcMaster::normalizeRefId($lead['courier_refid'] ?? '');
+    if ($refid === '' || $refid === '00000000') {
+        return null;
+    }
+    $row = chimSpawnedActorRow($npcMaster, $refid, (string)($lead['courier_name'] ?? ''))['row'];
+    return $row ? chimNpcRowActorKey($row) : null;
 }
 
 function chimLetterSetCourierState(array $letter, string $state, array $extra = []): void
@@ -647,13 +718,13 @@ function chimLetterSpawnCourier(array $lead): void
 }
 
 // Give the spawned courier a small profile and make sure it is friendly, then walk to the player.
-function chimLetterSendCourierToPlayer(NpcMaster $npcMaster, array $lead): bool
+// $courier is the row bound to this courier's own spawn RefID (chimSpawnedActorRow); couriers share a name.
+function chimLetterSendCourierToPlayer(NpcMaster $npcMaster, array $lead, array $courier): bool
 {
     $name = $lead['courier_name'];
-    $courier = $npcMaster->getByName($name);
-    $refid = trim((string)($courier['refid'] ?? ''));
-    if (!$courier || $refid === '') {
-        return false; // Registered on a later tick.
+    $refid = NpcMaster::normalizeRefId($courier['refid'] ?? '');
+    if ($refid === '') {
+        return false;
     }
 
     $player = chimLetterPlayerName();
@@ -668,10 +739,28 @@ function chimLetterSendCourierToPlayer(NpcMaster $npcMaster, array $lead): bool
     $builder->send($builder->Actor->AddToFaction("0x{$refid}", '0x0001dd09')); // WEPlayerFriend
     $builder->send($builder->Actor->SetFactionRank("0x{$refid}", '0x0001dd09', 1));
 
+    // Couriers share a name, so later commands address this one by its exact RefID (chimLetterCourierTarget).
     $marker = chimLetterMaxEventRowId();
-    chimLetterQueueCommand("rolecommand|moveToPlayer@{$name}@letter{$lead['id']}@7");
-    chimLetterSetCourierState($lead, 'approaching', ['courier_event_rowid' => $marker]);
+    $extra = ['courier_event_rowid' => $marker];
+    if (chimLetterCourierRefidReady()) {
+        $extra['courier_refid'] = $refid;
+    }
+    $target = chimLetterCourierTarget(array_merge($lead, $extra));
+    if ($target === null) {
+        return false;
+    }
+    chimLetterQueueCommand("rolecommand|moveToPlayer@{$target}@letter{$lead['id']}@7");
+    chimLetterSetCourierState($lead, 'approaching', $extra);
     return true;
+}
+
+// reached_destination_player@ and name-based scans carry only the display name: exact only while a single profile
+// holds that name. A courier without a stored RefID is likewise addressed by name only while it is unique.
+function chimLetterCourierNameIsExact(string $name): bool
+{
+    $sameName = $GLOBALS['db']->fetchOne("SELECT count(*) AS n FROM core_npc_master WHERE lower(btrim(npc_name)) = lower('"
+        . $GLOBALS['db']->escape($name) . "')");
+    return (int)($sameName['n'] ?? 0) === 1;
 }
 
 // Send Despawn and keep watching; chimLetterCourierTick re-sends it while the courier is still seen.
@@ -682,8 +771,15 @@ function chimLetterDismissCourier(array $lead): void
         chimLetterSetCourierState($lead, 'done');
         return;
     }
+    $target = chimLetterCourierTarget($lead);
+    if ($target === null) {
+        // No exact target: never remove a namesake courier in its place.
+        Logger::warn("[BGL_LETTERS] Despawn refused for {$name}: no stored RefID and the name is shared");
+        chimLetterSetCourierState($lead, 'done');
+        return;
+    }
     $marker = chimLetterMaxEventRowId();
-    chimLetterQueueCommand("rolecommand|Despawn@{$name}@0");
+    chimLetterQueueCommand("rolecommand|Despawn@{$target}@0");
     chimLetterSetCourierState($lead, 'dismissing', [
         'courier_event_rowid' => $marker,
         'courier_attempts' => (int)($lead['courier_attempts'] ?? 0) + 1,
@@ -745,8 +841,14 @@ function chimLetterCourierTick(NpcMaster $npcMaster): void
         $marker = (int)($active['courier_event_rowid'] ?? 0);
 
         if ($state === 'spawn_requested') {
-            if (chimLetterEventSeen('status_msg', "spawned@{$name}@", $marker)) {
-                if (!chimLetterSendCourierToPlayer($npcMaster, $active) && $age > $timeout) {
+            // Bind by the RefID this spawn reported; a namesake courier row is never adopted.
+            $spawnRefids = chimSpawnStatusRefids($GLOBALS['db'], $name, $marker);
+            if ($spawnRefids) {
+                $binding = count($spawnRefids) === 1
+                    ? chimSpawnedActorRow($npcMaster, $spawnRefids[0], $name) : ['state' => 'ambiguous', 'row' => null];
+                if ($binding['state'] === 'ambiguous' || $binding['state'] === 'stale') {
+                    chimLetterTeleportAndDismiss($active, "Courier spawn could not be bound ({$binding['state']})");
+                } elseif (!($binding['row'] && chimLetterSendCourierToPlayer($npcMaster, $active, $binding['row'])) && $age > $timeout) {
                     chimLetterTeleportAndDismiss($active, 'Courier spawned but never registered');
                 }
             } elseif ($age > $timeout) {
@@ -754,8 +856,13 @@ function chimLetterCourierTick(NpcMaster $npcMaster): void
                 chimLetterTeleportAndDismiss($active, 'Courier did not spawn in time');
             }
         } elseif ($state === 'approaching') {
-            $arrived = chimLetterEventSeen('status_msg', "reached_destination_player@{$name}", $marker)
-                || chimLetterEventSeen('infonpc_close', $name, $marker);
+            // A namesake's arrival is never taken for this courier's: its own key nearby, or a unique name.
+            $key = chimLetterCourierKey($npcMaster, $active);
+            $target = chimLetterCourierTarget($active);
+            $arrived = $target !== null && (($key !== null && chimLetterParticipantSeen('infonpc_close', $key, $marker))
+                || (chimLetterCourierNameIsExact($name)
+                    && (chimLetterEventSeen('status_msg', "reached_destination_player@{$name}", $marker)
+                        || chimLetterEventSeen('infonpc_close', $name, $marker))));
             if ($arrived) {
                 $waiting = $GLOBALS['db']->fetchAll(
                     "SELECT npc_name, fee FROM bgl_letters WHERE direction = 'to_npc' AND status = 'awaiting_courier'"
@@ -767,7 +874,7 @@ function chimLetterCourierTick(NpcMaster $npcMaster): void
                 $feeText = $fee > 0 ? " and the {$fee} gold fee" : '';
                 $recipients = chimLetterJoinNames(array_values(array_unique(array_column($waiting, 'npc_name'))));
                 chimLetterQueueCommand(
-                    "rolecommand|Instruction@{$name}@Greet {$player} briefly, take {$what} for {$recipients}{$feeText}, promise delivery, then say farewell.@0"
+                    "rolecommand|Instruction@{$target}@Greet {$player} briefly, take {$what} for {$recipients}{$feeText}, promise delivery, then say farewell.@0"
                 );
                 chimLetterCollectAll(true);
                 chimLetterSetCourierState($active, 'departing');
@@ -781,7 +888,7 @@ function chimLetterCourierTick(NpcMaster $npcMaster): void
             }
         } elseif ($state === 'dismissing') {
             $attempts = (int)($active['courier_attempts'] ?? 1);
-            if (chimLetterCourierSighted($name, $marker)) {
+            if (chimLetterCourierSighted($name, $marker, chimLetterCourierKey($npcMaster, $active))) {
                 if ($age >= 20) {
                     if ($attempts < 3) {
                         chimLetterDismissCourier($active);

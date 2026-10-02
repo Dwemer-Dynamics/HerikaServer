@@ -138,6 +138,10 @@ class sql
         if ($table === 'responselog' && chimInteractionIsGameOutput((string)($data['action'] ?? ''))
             && !chimInteractionAllowed()) return false;
         if ($table === 'responselog') $data['interaction_generation'] = $GLOBALS['chim_interaction_generation'];
+        if ($table === 'responselog' && array_key_exists('_chim_actor_key', $data)
+            && !function_exists('chimResponseQueueAttachIdentity')) require_once __DIR__ . '/core/response_identity.php';
+        if ($table === 'responselog' && function_exists('chimResponseQueueAttachIdentity')
+            && ($data = chimResponseQueueAttachIdentity($data)) === null) return false;
         if ($table === 'eventlog' && !empty($GLOBALS['chim_interaction_generated'])
             && !chimInteractionAllowed()) return false;
         $startTime = microtime(true);
@@ -175,6 +179,10 @@ class sql
         if ($table === 'responselog' && chimInteractionIsGameOutput((string)($data['action'] ?? ''))
             && !chimInteractionAllowed()) return false;
         if ($table === 'responselog') $data['interaction_generation'] = $GLOBALS['chim_interaction_generation'];
+        if ($table === 'responselog' && array_key_exists('_chim_actor_key', $data)
+            && !function_exists('chimResponseQueueAttachIdentity')) require_once __DIR__ . '/core/response_identity.php';
+        if ($table === 'responselog' && function_exists('chimResponseQueueAttachIdentity')
+            && ($data = chimResponseQueueAttachIdentity($data)) === null) return false;
         if ($table === 'eventlog' && !empty($GLOBALS['chim_interaction_generated'])
             && !chimInteractionAllowed()) return false;
         $startTime = microtime(true);
@@ -320,6 +328,13 @@ class sql
         if (!$result) {
             Logger::error("SQL: update query failed {$query} " . $this->GetLastError() . $this->extract_caller() );
         }
+    }
+
+    // True while this connection is inside an explicit transaction block (including a failed one).
+    public function inTransaction()
+    {
+        return self::$link && function_exists('pg_transaction_status')
+            && pg_transaction_status(self::$link) !== PGSQL_TRANSACTION_IDLE;
     }
 
     public function execQuery($sqlquery)
@@ -474,7 +489,7 @@ class sql
             return "";
     }
 
-    public function updateRow($table, $data, $where)
+    public function updateRow($table, $data, $where, $requireAffectedRow = false)
     {
         $startTime = microtime(true);
         $setClauses = [];
@@ -508,7 +523,8 @@ class sql
             Logger::error("SQL: updateRow failed {$query} " .$this->GetLastError() . $this->extract_caller() );
             return false;
         }
-        return true;
+        // Optimistic identity/profile guards must not report success when a concurrent write won.
+        return !$requireAffectedRow || pg_affected_rows($result) > 0;
     }
 
     public function upsertRow($table, $data, $where) {

@@ -2,6 +2,7 @@
 require_once __DIR__ . '/chim_interaction.php';
 
 require_once(__DIR__ . DIRECTORY_SEPARATOR . "settings.php");
+require_once(__DIR__ . DIRECTORY_SEPARATOR . "identity_schema_readiness.php");
 
 if (!function_exists('chimRuntimeNeedsDbUpdates')) {
     function chimRuntimeNeedsDbUpdates(): bool
@@ -24,14 +25,17 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             'core_itt_connector',
             'core_tts_connector',
             'core_tts_pronunciation',
+            'npc_profile_reference_groups',
+            'npc_profile_reference_groups_custom',
+            'eventlog',
         ];
 
         try {
             $tableRows = $db->fetchAll(
-                "SELECT table_name
+                "SELECT table_name::text AS table_name
                  FROM information_schema.tables
                  WHERE table_schema='public'
-                   AND table_name IN ('database_versioning','general_settings','core_stt_connector','core_itt_connector','core_tts_connector','core_tts_pronunciation')"
+                   AND table_name IN ('database_versioning','general_settings','core_stt_connector','core_itt_connector','core_tts_connector','core_tts_pronunciation','npc_profile_reference_groups','npc_profile_reference_groups_custom','eventlog')"
             );
         } catch (\Throwable $e) {
             $decision = false;
@@ -53,9 +57,24 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             }
         }
 
+        // Identity objects without a version row of their own: a missing one reruns its idempotent
+        // migration. Incompatible column types are reported by db_updates.php instead of retried here.
+        $identityGaps = chimIdentitySchemaGaps($db);
+        if ($identityGaps === null) {
+            $decision = false;
+            return $decision;
+        }
+        foreach ($identityGaps as $gap) {
+            if (!empty($gap['missing'])) {
+                $decision = true;
+                return $decision;
+            }
+        }
+
         $requiredVersions = [
             'responselog_interaction' => 20260912001,
             'npc_schedules' => 20260927001,
+            'npc_commitments' => 20260930101,
             'general_settings' => 20260919001,
             'core_stt_connector' => 20260502002,
             'core_itt_connector' => 20260502002,
@@ -63,16 +82,25 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             'prompts' => 20260615001,
             'skyrim_quest_definitions' => 20260628003,
             'core_tts_connector_omnivoice' => 20260708001,
+            'npc_actor_identity' => 20260824003,
+            'npc_stable_identity' => 20260927001,
+            'npc_profile_sharing' => 20261002001,
             'oghma_catalog' => 20260827001,
             'core_tts_pronunciation' => 20260829003,
+            'eventlog_actor_identity' => 20260930002,
+            'memory_actor_identity' => 20260930001,
+            'action_mood_actor_identity' => 20260930001,
             'skyrim_start_date' => 20260930001,
+            'diary_actor_identity' => 20260930001,
+            'bgl_history' => 20260930001,
+            'bgl_letters' => 20260930001,
         ];
 
         try {
             $versionRows = $db->fetchAll(
                 "SELECT tablename, version
                  FROM public.database_versioning
-                 WHERE tablename IN ('npc_schedules','responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog','skyrim_start_date')"
+                 WHERE tablename IN ('npc_schedules','npc_commitments','responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog','skyrim_start_date','npc_actor_identity','npc_profile_sharing','npc_stable_identity','eventlog_actor_identity','memory_actor_identity','action_mood_actor_identity','diary_actor_identity','bgl_history','bgl_letters')"
             );
         } catch (\Throwable $e) {
             $decision = true;

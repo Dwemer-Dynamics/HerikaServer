@@ -15,6 +15,7 @@ require_once(__DIR__."/emote_moods.php");
 require_once(__DIR__."/core/event_type.php");
 require_once(__DIR__."/tts_pronunciation.php");
 require_once(__DIR__."/core/tts_filter_presets.php");
+require_once(__DIR__."/core/response_identity.php");
 
 // Narrator-specific override for the latest diary entry toggle. It lives in
 // core_narrator so the assigned Core Profile, which NPCs can share, is never changed.
@@ -73,11 +74,12 @@ function chimBuildLatestDiaryContextBlock(string $npcName, array $profileData): 
     }
 
     try {
-        $escapedName = $db->escape($safeNpcName);
+        require_once __DIR__ . '/core/physical_npc_diaries.php';
+        $authorScope = chimDiaryAuthorKeysWhereClause(chimDiaryReadKeys($safeNpcName));
         $entry = $db->fetchOne(
             "SELECT topic, content
              FROM diarylog
-             WHERE lower(trim(people)) = lower('{$escapedName}')
+             WHERE {$authorScope}
              ORDER BY gamets DESC, localts DESC, rowid DESC
              LIMIT 1"
         );
@@ -899,6 +901,8 @@ function stripOutputSpeakerPrefix($text, $speakerName = null) {
         return (string)$text;
     }
 
+    $promptName = function_exists('chimGetPromptCharacterName') ? chimGetPromptCharacterName() : $speakerName;
+    $text = preg_replace('/^' . preg_quote((string)$promptName, '/') . '\s*:\s*/i', '', (string)$text);
     return preg_replace('/^' . preg_quote((string)$speakerName, '/') . '\s*:\s*/i', '', (string)$text);
 }
 
@@ -908,10 +912,16 @@ function stripOutputSpeakerPrefixAfterInlineNarration($text, $speakerName = null
         return (string)$text;
     }
 
+    $promptName = function_exists('chimGetPromptCharacterName') ? chimGetPromptCharacterName() : $speakerName;
+    $text = preg_replace(
+        '/^(\s*(?:\*[^*]+\*\s*)+)' . preg_quote((string)$promptName, '/') . '\s*:\s*/i',
+        '$1',
+        (string)$text
+    );
     return preg_replace(
         '/^(\s*(?:\*[^*]+\*\s*)+)' . preg_quote((string)$speakerName, '/') . '\s*:\s*/i',
         '$1',
-        (string)$text
+        $text
     );
 }
 
@@ -1593,7 +1603,14 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                             $narratorExpression = ""; // No expression for narrator
                             $narratorAnimation = ""; // No animation for narrator
 
-                            echo "The Narrator|ScriptQueue|{$narrationForSubtitles}/{$narratorExpression}/{$narratorListener}/{$narratorAnimation}/{$narrationForSpeech}/1//{$narratorUtteranceId}\r\n";
+                            // Typed narrator over the NPC's row: never identified through that row or the player RefID.
+                            $narratorLine = chimBuildCurrentResponseLine("The Narrator", "ScriptQueue",
+                                "{$narrationForSubtitles}/{$narratorExpression}/{$narratorListener}/{$narratorAnimation}/{$narrationForSpeech}/1//{$narratorUtteranceId}",
+                                CHIM_ACTOR_KEY_NARRATOR,
+                                chimResponseSafeListenerEndpoint($narratorListener));
+                            if ($narratorLine !== null) {
+                                echo $narratorLine;
+                            }
                             chimSpeechTrace('emitted');
                             if (ob_get_level()) @ob_flush();
                             @flush();
@@ -1708,7 +1725,9 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
             'localts' => time(),
             'sent' => 1,
             'text' => trim(preg_replace('/\s\s+/', ' ', $responseText)),
-            'actor' => $GLOBALS["HERIKA_NAME"],
+            'actor' => function_exists('chimGetResponseActorIdentifier')
+                ? chimGetResponseActorIdentifier()
+                : $GLOBALS["HERIKA_NAME"],
             'action' => "AASPGQuestDialogue2Topic1B1Topic",
             'tag' => (isset($tag) ? $tag : "")
         );
@@ -1850,6 +1869,11 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                         $listenerFix2 = [];
                     }
                     $listenerFix2 = array_values(array_unique(array_filter(array_map('normalizeDialogueListenerName', $listenerFix2))));
+                    // Captured physical listeners rotate as exact identifiers; namesakes each keep a turn.
+                    $listenerFix2 = chimResponseExpandListenerIdentifiers($listenerFix2);
+                    if (count($listenerFix2) === 1) {
+                        $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] = $listenerFix2[0];
+                    }
 
                     // 3. Handle multiple listeners
                     if (is_array($listenerFix2) && count($listenerFix2) > 1) {
@@ -1902,7 +1926,8 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
 
                         // 3b. Search for actual listener names in the subtitle sentence (Rule 3)
                         foreach ($listenerFix2 as $index => $name) {
-                            $pos = stripos($responseForSubtitles, trim($name)); // Case-insensitive search
+                            $mentionName = trim((string)preg_replace('/\s*\[RefID:[^\]]*\]\s*$/i', '', $name));
+                            $pos = $mentionName === '' ? false : stripos($responseForSubtitles, $mentionName); // Case-insensitive search
                             if ($pos !== false) {
                                 if (!isset($positions[$name]) || $pos < $positions[$name]) {
                                     $positions[$name] = $pos;
@@ -1973,7 +1998,7 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                     if (strcasecmp($candidateName, "The Narrator") === 0) {
                         continue;
                     }
-                    if (in_array($candidateName, $normalizedNearby, true)) {
+                    if (in_array(trim((string)preg_replace('/\s*\[RefID:[^\]]*\]\s*$/i', '', $candidateName)), $normalizedNearby, true)) {
                         $rechatTarget = $candidateName;
                         break;
                     }
@@ -2024,7 +2049,16 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                 chimInteractionRequire();
                 chimSpeechTrace('emitted');
                 // Output here with volumeBoost appended
-                echo "{$outBuffer["actor"]}|ScriptQueue|$responseForSubtitles/{$GLOBALS["SCRIPTLINE_EXPRESSION"]}/{$GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]}/{$GLOBALS["SCRIPTLINE_ANIMATION"]}/$responseTextPhonetic/$volumeBoost/{$GLOBALS["SCRIPTLINE_RECHAT_TARGET"]}/{$currentUtteranceId}\r\n";
+                // The envelope names the selected row and only an exactly resolved listener (null otherwise);
+                // an exactly resolved rechat target is sent decorated rather than as a bare name.
+                $responseListenerEndpoint = chimResponseLineListenerEndpoint($GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]);
+                $GLOBALS["SCRIPTLINE_RECHAT_TARGET"] = chimResponseDecorateExactTarget($GLOBALS["SCRIPTLINE_RECHAT_TARGET"]);
+                $scriptQueueLine = chimBuildCurrentResponseLine($outBuffer["actor"], "ScriptQueue",
+                    "$responseForSubtitles/{$GLOBALS["SCRIPTLINE_EXPRESSION"]}/{$GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]}/{$GLOBALS["SCRIPTLINE_ANIMATION"]}/$responseTextPhonetic/$volumeBoost/{$GLOBALS["SCRIPTLINE_RECHAT_TARGET"]}/{$currentUtteranceId}",
+                    null, $responseListenerEndpoint);
+                if ($scriptQueueLine !== null) {
+                    echo $scriptQueueLine;
+                }
 
                 
                 $GLOBALS["DEBUG_DATA"]["OUTPUT_LOG"]="{$outBuffer["actor"]}|ScriptQueue|$responseForSubtitles/{$GLOBALS["SCRIPTLINE_EXPRESSION"]}/{$GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"]}/{$GLOBALS["SCRIPTLINE_ANIMATION"]}/$responseTextPhonetic/$volumeBoost/{$GLOBALS["SCRIPTLINE_RECHAT_TARGET"]}/{$currentUtteranceId}\r\n";
@@ -2036,6 +2070,8 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                             'ts' => $GLOBALS["gameRequest"][1],
                             'gamets' => $GLOBALS["gameRequest"][2],
                             'speaker' => $outBuffer["actor"],
+                            // Owner key only when this line is the selected physical speaker; narrator/legacy stay NULL.
+                            'actor_key' => (function_exists('chimResponseCurrentActorKey') && strcasecmp(trim((string)$outBuffer["actor"]), trim((string)($GLOBALS["HERIKA_NAME"] ?? ''))) === 0) ? chimResponseCurrentActorKey() : null,
                             'listener' =>$GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"],
                             'sess' => 'pending',
                             'mood' => $GLOBALS["PATCH_ORIGINAL_MOOD_ISSUED"]
@@ -2051,7 +2087,7 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                 //    include('/var/www/html/HerikaServer/lib/chat_helper_functions_custom_debug.php');                // debug 
             }
             else
-                echo "{$outBuffer["actor"]}|{$outBuffer["action"]}|$responseForSubtitles\r\n";
+                echo (string)chimBuildCurrentResponseLine($outBuffer["actor"], $outBuffer["action"], $responseForSubtitles);
             
             if (ob_get_level()) @ob_flush();
             @flush();
@@ -2098,7 +2134,10 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                 $outBuffer["actor"] ?? "",
                 $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] ?? ""
             );
-            logEvent($originalRequest, $dialogueEventPeople);
+            // Opted-in requests record this reply with the captured audience and the replying row as
+            // speaker; it never inherits the player's roles. Legacy requests keep the name snapshot.
+            $replyIdentity = chimCurrentActorUtteranceIdentity($GLOBALS["HERIKA_NAME"] ?? "", $dialogueEventPeople);
+            logEvent($originalRequest, $dialogueEventPeople, $replyIdentity);
             
             // Log chat here, because  function return comes back out of sync.
             $originalRequest[0]="chat";
@@ -2123,7 +2162,7 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                 'utterance_id' => $GLOBALS["SCRIPTLINE_UTTERANCE_ID"] ?? chimGenerateUtteranceId(),
                 'delivery_state' => 'emitted'
             ];
-            logEvent($originalRequest, $dialogueEventPeople);
+            logEvent($originalRequest, $dialogueEventPeople, $replyIdentity);
         }
         
     }
@@ -2139,9 +2178,18 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
 
 }
 
-function logMemory($speaker, $listener, $message, $momentum, $gamets,$event,$ts)
+// $ownerKey: exact physical key of the actor this memory belongs to (a typed principal or the selected
+// row's key), never derived from $speaker. $audience: a format-2 participant list when known. Both stay
+// NULL for legacy callers, whose rows remain unresolved.
+function logMemory($speaker, $listener, $message, $momentum, $gamets,$event,$ts, $ownerKey = null, $audience = null)
 {
     global $db;
+    require_once __DIR__ . '/core/npc_reference.php';
+    $identityColumns = [];
+    if ($ownerKey !== null && chimIsActorKey($ownerKey)) { $identityColumns['owner_key'] = $ownerKey; }
+    if (is_string($audience) && chimParseEventParticipants($audience)['version'] === CHIM_ACTOR_IDENTITY_VERSION) {
+        $identityColumns['audience'] = $audience;
+    }
 
     $db->insert(
         'memory',
@@ -2155,7 +2203,7 @@ function logMemory($speaker, $listener, $message, $momentum, $gamets,$event,$ts)
                 'momentum'=>$momentum,
                 'event'=>$event,
                 'ts'=>$ts
-        )
+        ) + $identityColumns
     );
     /*
     if (isset($GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["ENABLED"]) && $GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["ENABLED"]) {
@@ -2229,14 +2277,20 @@ function lastSpeech($npcname)
 
 }
 
-function lastKeyWordsContext($n, $npcname='')
+// Keywords from recent speech the typed actor scope witnessed (the Narrator reads the player's own lines);
+// FALSE without a typed scope. Speaker names never select rows.
+function lastKeyWordsContext($n, $npcname='', $actorScope=null)
 {
 
     global $db,$gameRequest;
     
     $m=$n+1;
-    $speaker=$db->escape($npcname);
-    $pj=$db->escape($GLOBALS["PLAYER_NAME"]);
+    require_once __DIR__ . '/eventlog_helper.php';
+    require_once __DIR__ . '/core/npc_reference.php';
+    $scope = function_exists('chimMemoryActorScope') ? chimMemoryActorScope($npcname, $actorScope) : null;
+    $speechSql = $scope === CHIM_ACTOR_KEY_NARRATOR
+        ? chimBuildSpeechActorKeysWhereClause($db, [CHIM_ACTOR_KEY_PLAYER])
+        : ($scope === null ? 'FALSE' : chimBuildSpeechContextWhereClause($db, $npcname, $scope));
 
     if (isset($gameRequest[2]))
         $whileago=round($gameRequest[2] - (2/ 0.0000024));
@@ -2245,7 +2299,7 @@ function lastKeyWordsContext($n, $npcname='')
     
     $lastRecords = $db->fetchAll("SELECT speaker, location, companions, speech, gamets 
      from (select * from speech where  gamets>{$whileago}) AS sp 
-     where ((speaker ilike '{$speaker}') or (speaker ilike '%{$pj}%' )) 
+     where {$speechSql}
         order by gamets desc limit {$m} offset 0"); 
     
     $words=[];
@@ -2744,7 +2798,9 @@ function getGametsLimitFor($actor) {
     }
     global $db;
 
-    $actorEscaped = $db->escape($actor);
+    require_once __DIR__ . '/eventlog_helper.php';
+    // The actor's exact audience (its key in captured people), never a substring of another name.
+    $actorPeopleSql = chimBuildNpcContextPeopleWhereClause($db, $actor, 'people');
     $limit = (int) $GLOBALS["CONTEXT_HISTORY"];
 
     $visibleChatStateSql = chimBuildChatDeliveryStateSql('delivery_state');
@@ -2756,7 +2812,7 @@ function getGametsLimitFor($actor) {
             FROM eventlog 
             WHERE type='chat'
             AND {$visibleChatStateSql}
-            and people LIKE '%$actorEscaped%'
+            and {$actorPeopleSql}
             ORDER BY gamets DESC
             LIMIT $limit
         ) AS recent_events
@@ -2803,8 +2859,11 @@ function offerMemory($gameRequest, $useLocationContext = false)
    
   
     
+    // Typed principal, resolved before any name handling: the selected physical row (even one named
+    // "The Narrator"), else the Narrator only for a typed narrator request. Null reads nothing.
     $npc=$GLOBALS["HERIKA_NAME"];
-    if ($npc=="The Narrator") { // Narrator knows all
+    $actorScope = chimMemoryActorScope($npc);
+    if ($actorScope === CHIM_ACTOR_KEY_NARRATOR) {
        $npc=""; 
     }
 
@@ -2812,18 +2871,18 @@ function offerMemory($gameRequest, $useLocationContext = false)
     $memorySearchInput = chimMemorySearchInputFromRequest($gameRequest);
 
     error_log("[DataSearchMemoryByVector] Using timeThreshold $timeThreshold");
-    $contextKeywords  = implode(" ", lastKeyWordsContext(5,$npc));
+    $contextKeywords  = implode(" ", lastKeyWordsContext(5,$npc,$actorScope));
 
     if ($GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["USE_TEXT2VEC"]) {
         $localStartTime = microtime(true);
         error_log("[DataSearchMemoryByVector calling]  : " . (microtime(true) - $localStartTime) . " seconds");
-        $res = DataSearchMemoryByVector($memorySearchInput, $npc, true,$timeThreshold);
+        $res = DataSearchMemoryByVector($memorySearchInput, $npc, true,$timeThreshold,$actorScope);
         error_log("[DataSearchMemoryByVector called 1]  : " . (microtime(true) - $localStartTime) . " seconds");
-        $res2 = DataSearchMemoryByVector($memorySearchInput, $npc,false,$timeThreshold);
+        $res2 = DataSearchMemoryByVector($memorySearchInput, $npc,false,$timeThreshold,$actorScope);
         error_log("[DataSearchMemoryByVector called 2]  : " . (microtime(true) - $localStartTime) . " seconds");
         if ($useLocationContext) {
             $location=DataLastKnownLocationHuman();
-            $res2 = DataSearchMemoryByVector("$memorySearchInput $location", $npc,false,$timeThreshold);
+            $res2 = DataSearchMemoryByVector("$memorySearchInput $location", $npc,false,$timeThreshold,$actorScope);
             error_log("[DataSearchMemoryByVector called 2]  : " . (microtime(true) - $localStartTime) . " seconds");
         }
 
@@ -2835,7 +2894,7 @@ function offerMemory($gameRequest, $useLocationContext = false)
         $memories = $resFinal;
         
     } else {
-        $memories=DataSearchMemory($memorySearchInput,$npc);
+        $memories=DataSearchMemory($memorySearchInput,$npc,$actorScope);
     }
    
     
@@ -3045,6 +3104,14 @@ function parsePeoplePipeList($peoplePipe)
     $peoplePipe = trim((string)$peoplePipe);
     if ($peoplePipe === "") {
         return [];
+    }
+    // Format-2 rows expose display names only to legacy pipe consumers; keys never become names.
+    if ($peoplePipe[0] === "[") {
+        require_once __DIR__ . '/core/npc_reference.php';
+        $parsed = chimParseEventParticipants($peoplePipe);
+        if ($parsed['version'] === CHIM_ACTOR_IDENTITY_VERSION) {
+            return array_values(array_unique(array_column($parsed['participants'], 'name')));
+        }
     }
 
     $tokens = explode("|", $peoplePipe);
@@ -3873,6 +3940,17 @@ function chimParseServerSideRechatPayload($rawData)
         "rechat_depth" => 0,
         "chain_id" => "",
         "active_agents" => null,
+        // Canonical identity (docs/actor-identity.md, paired rechat contract): present only when the client
+        // sent the field. A present but non-string value stays invalid instead of becoming a name.
+        "speaker_key" => null,
+        "listener_key" => null,
+        "speaker_key_present" => false,
+        "listener_key_present" => false,
+        "rechat_identity_version" => null,
+        "rechat_identity_version_present" => false,
+        // C16: canonical physical keys of the active agents; active_agents stays the human label list.
+        "active_agent_keys" => null,
+        "active_agent_keys_present" => false,
     ];
 
     $rawData = trim((string)$rawData);
@@ -3905,6 +3983,21 @@ function chimParseServerSideRechatPayload($rawData)
     }
     if (array_key_exists("active_agents", $decoded) && is_array($decoded["active_agents"])) {
         $payload["active_agents"] = chimNormalizeRechatActorList($decoded["active_agents"]);
+    }
+    if (array_key_exists("rechat_identity_version", $decoded)) {
+        $payload["rechat_identity_version_present"] = true;
+        $payload["rechat_identity_version"] = $decoded["rechat_identity_version"];
+    }
+    if (array_key_exists("active_agent_keys", $decoded)) {
+        $payload["active_agent_keys_present"] = true;
+        $payload["active_agent_keys"] = is_array($decoded["active_agent_keys"]) && array_is_list($decoded["active_agent_keys"])
+            ? $decoded["active_agent_keys"] : false;
+    }
+    foreach (["speaker_key", "listener_key"] as $keyField) {
+        if (array_key_exists($keyField, $decoded)) {
+            $payload[$keyField . "_present"] = true;
+            $payload[$keyField] = is_string($decoded[$keyField]) ? trim($decoded[$keyField]) : ($decoded[$keyField] === null ? null : false);
+        }
     }
 
     return $payload;
@@ -3980,11 +4073,418 @@ function chimRechatActorStateBlockReason($actorName, array $stateMap, $directlyA
     return "";
 }
 
+// Identity rechat (paired client contract C13): a payload carrying rechat_identity_version or a speaker_key
+// member (any value) is resolved by canonical keys only. Only payloads with neither keep the name path below.
+function chimRechatIdentityRequested(array $payload): bool
+{
+    return !empty($payload["rechat_identity_version_present"]) || !empty($payload["speaker_key_present"])
+        || !empty($payload["listener_key_present"]) || !empty($payload["active_agent_keys_present"]);
+}
+
+// Presentation label of a keyed row: namesakes stay distinguishable as "Name [RefID: XXXXXXXX]".
+function chimRechatIdentityLabel(?array $row, ?string $key): string
+{
+    if ($key === CHIM_ACTOR_KEY_NARRATOR) { return "The Narrator"; }
+    if ($key === CHIM_ACTOR_KEY_PLAYER) { return trim((string)($GLOBALS["PLAYER_NAME"] ?? "")); }
+    if (!$row) { return ""; }
+    $name = trim((string)($row["npc_name"] ?? ""));
+    $refid = NpcMaster::normalizeRefId($row["refid"] ?? "");
+    return $refid !== "" ? $name . " [RefID: " . str_pad(strtoupper($refid), 8, "0", STR_PAD_LEFT) . "]" : $name;
+}
+
+// Exact registered row for a physical key; null when unknown, false when the key is ambiguous.
+function chimRechatIdentityRow($npcMaster, ?string $key)
+{
+    if (!is_string($key) || !preg_match('/^(ref|dyn):/', $key)) { return null; }
+    try {
+        $row = $npcMaster->getByActorKey($key);
+    } catch (RuntimeException $e) {
+        return false;
+    }
+    return is_array($row) && chimNpcRowActorKey($row) === $key ? $row : null;
+}
+
+// Per-key actor state from captured format-2 participants (their own state suffix): the request capture and
+// the latest close-range scan. A sleeping, dead or busy namesake never masks another key.
+function chimRechatKeyedStateMap($maxAgeSeconds = 45): array
+{
+    $sources = [];
+    $identity = $GLOBALS["CHIM_EVENT_IDENTITY"] ?? null;
+    if (is_array($identity["participants"] ?? null)) { $sources[] = $identity["participants"]; }
+    $db = $GLOBALS["db"] ?? null;
+    if ($db && method_exists($db, "fetchOne")) {
+        $cutoff = time() - max(1, intval($maxAgeSeconds));
+        $row = $db->fetchOne("SELECT people FROM eventlog WHERE type IN ('infonpc','infonpc_close') AND localts > {$cutoff}
+            AND left(COALESCE(people, ''), 1) = '[' ORDER BY rowid DESC LIMIT 1");
+        if (is_array($row)) {
+            $parsed = chimParseEventParticipants($row["people"] ?? "");
+            if ($parsed["version"] === CHIM_ACTOR_IDENTITY_VERSION) { $sources[] = $parsed["participants"]; }
+        }
+    }
+    $states = [];
+    foreach ($sources as $participants) {
+        foreach ($participants as $participant) {
+            $key = $participant["id"] ?? null;
+            if (!is_string($key) || isset($states[$key])) { continue; }
+            if (preg_match('/\((busy|sleeping|unconscious|dead|disabled)\)\s*$/iu', (string)($participant["name"] ?? ""), $m)) {
+                $states[$key] = strtolower($m[1]);
+            }
+        }
+    }
+    return $states;
+}
+
+// The latest recent conversation row between two exact principals. Key filters run in SQL before the row
+// limit; the row's own format-2 audience must contain both physical keys. Returns its participants or null.
+function chimRechatKeyedConversationParticipants(string $speakerKey, ?array $speakerRow, string $otherKey, ?array $otherRow,
+    $maxAgeSeconds = 300): ?array
+{
+    $db = $GLOBALS["db"] ?? null;
+    if (!$db) { return null; }
+    $cutoff = time() - max(30, intval($maxAgeSeconds));
+    $s = $db->escape($speakerKey);
+    $o = $db->escape($otherKey);
+    $rows = $db->fetchAll("SELECT rowid, type, data, people, speaker_key, listener_keys, target_key FROM eventlog
+        WHERE localts > {$cutoff}
+          AND type IN ('chat','prechat','inputtext','inputtext_s','ginputtext','ginputtext_s','narrator_inputtext')
+          AND speaker_key IN ('{$s}', '{$o}') AND left(COALESCE(people, ''), 1) = '['
+        ORDER BY rowid DESC LIMIT 120");
+    $physical = static fn($key) => preg_match('/^(ref|dyn):/', (string)$key) === 1;
+    foreach ((array)$rows as $row) {
+        $parsed = chimParseEventParticipants($row["people"] ?? "");
+        if ($parsed["version"] !== CHIM_ACTOR_IDENTITY_VERSION) { continue; }
+        $keys = array_values(array_filter(array_column($parsed["participants"], "id")));
+        $rowSpeaker = (string)($row["speaker_key"] ?? "");
+        foreach ([$speakerKey, $otherKey] as $member) {
+            if ($physical($member) && $member !== $rowSpeaker && !in_array($member, $keys, true)) { continue 2; }
+        }
+        $peer = $rowSpeaker === $speakerKey ? $otherKey : $speakerKey;
+        $peerRow = $peer === $otherKey ? $otherRow : $speakerRow;
+        $listenerKeys = json_decode((string)($row["listener_keys"] ?? ""), true);
+        $addressed = (is_array($listenerKeys) && in_array($peer, $listenerKeys, true)) || ($row["target_key"] ?? null) === $peer;
+        $hasRoles = (is_array($listenerKeys) && $listenerKeys) || !empty($row["target_key"]);
+        if (!$addressed && !$hasRoles) {
+            // A line without captured listener roles: its talk target is presentation and only confirms a peer
+            // already in the keyed audience whose name no other participant shares.
+            $peerName = $peer === CHIM_ACTOR_KEY_PLAYER ? trim((string)($GLOBALS["PLAYER_NAME"] ?? ""))
+                : ($peer === CHIM_ACTOR_KEY_NARRATOR ? "The Narrator" : trim((string)($peerRow["npc_name"] ?? "")));
+            $targets = extractTalkTargetMetadata((string)($row["data"] ?? ""))["targets"] ?? [];
+            $sameName = array_filter($parsed["participants"], static fn($p) => strcasecmp(stripActorStateSuffix((string)$p["name"]), $peerName) === 0);
+            $addressed = $peerName !== "" && !empty($targets) && talkTargetsIncludeName($targets, $peerName)
+                && ($peer === CHIM_ACTOR_KEY_PLAYER || $peer === CHIM_ACTOR_KEY_NARRATOR || count($sameName) <= 1);
+        }
+        if ($addressed) { return $parsed["participants"]; }
+    }
+    return null;
+}
+
+function chimResolveIdentityRechatTarget(array $payload): array
+{
+    require_once __DIR__ . "/core/npc_reference.php";
+    require_once __DIR__ . "/core/response_identity.php";
+    $configuredRechatMode = chimGetRechatMode();
+    $result = [
+        "identity" => true,
+        "speaker" => "",
+        "speaker_key" => null,
+        "listener_key" => null,
+        "listener_hint" => "",
+        "rechat_target_hint" => "",
+        "audience" => [],
+        "audience_keys" => [],
+        "people_pipe" => "",
+        "candidates" => [],
+        "candidate_keys" => [],
+        "selected" => "",
+        "selected_key" => null,
+        "selected_label" => "",
+        "selected_row_id" => 0,
+        "mode" => $configuredRechatMode,
+        "configured_mode" => $configuredRechatMode,
+        "origin_line" => trim((string)($payload["origin_line"] ?? "")),
+        "chain_id" => trim((string)($payload["chain_id"] ?? "")),
+        "active_agents" => is_array($payload["active_agents"] ?? null) ? chimNormalizeRechatActorList($payload["active_agents"]) : null,
+        "active_agent_keys" => null,
+        "refused" => "",
+        "speaker_block" => "",
+    ];
+    $refuse = static function ($reason) use (&$result) {
+        Logger::info("[RECHAT_SELECT] Refusing identity rechat: {$reason}");
+        $result["refused"] = $reason;
+        $result["selected"] = "";
+        return $result;
+    };
+
+    if (!empty($payload["rechat_identity_version_present"]) && $payload["rechat_identity_version"] !== 1) {
+        return $refuse("rechat_identity_version_unsupported");
+    }
+    // 1. Speaker: payload speaker_key only. The decorated speaker label never selects a row.
+    $speakerKey = $payload["speaker_key"] ?? null;
+    if (empty($payload["speaker_key_present"]) || !is_string($speakerKey) || $speakerKey === "") {
+        return $refuse("speaker_key_missing");
+    }
+    if (!chimIsActorKey($speakerKey) || $speakerKey === CHIM_ACTOR_KEY_PLAYER) {
+        return $refuse("speaker_key_invalid");
+    }
+    $identity = is_array($GLOBALS["CHIM_EVENT_IDENTITY"] ?? null) ? $GLOBALS["CHIM_EVENT_IDENTITY"] : null;
+    $capturedSpeaker = $identity["speaker_key"] ?? null;
+    // Player engine-object data on a narrator rechat never turns the typed narrator into the player.
+    if (is_string($capturedSpeaker) && $capturedSpeaker !== $speakerKey
+        && !($speakerKey === CHIM_ACTOR_KEY_NARRATOR && $capturedSpeaker === CHIM_ACTOR_KEY_PLAYER)) {
+        return $refuse("speaker_key_capture_mismatch");
+    }
+    $npcMaster = new NpcMaster();
+    $speakerRow = null;
+    if ($speakerKey !== CHIM_ACTOR_KEY_NARRATOR) {
+        $speakerRow = chimRechatIdentityRow($npcMaster, $speakerKey);
+        if ($speakerRow === false) { return $refuse("speaker_key_ambiguous"); }
+        if ($speakerRow === null) { return $refuse("speaker_key_unknown"); }
+    }
+    $result["speaker_key"] = $speakerKey;
+    $result["speaker"] = chimRechatIdentityLabel($speakerRow, $speakerKey);
+
+    $capturedKeys = [];
+    foreach ((array)($identity["participants"] ?? []) as $participant) {
+        if (is_string($participant["id"] ?? null)) { $capturedKeys[$participant["id"]] = true; }
+    }
+    // Without listener_key, a decorated hint is exact only when its static runtime reference resolves to a key
+    // captured on this request. FF references recycle, so a keyless dynamic hint and a bare hint stay unresolved.
+    $resolveHint = static function ($hint) use ($npcMaster, $capturedKeys) {
+        $hint = trim((string)$hint);
+        if ($hint === "") { return null; }
+        if (chimIsActorKey($hint)) { return null; }   // keys never travel in label fields
+        if (!preg_match('/\[RefID:\s*(?:0x)?([0-9a-f]{1,8})\]\s*$/i', $hint, $m)) {
+            return function_exists('isPlayerDialogueListenerName') && isPlayerDialogueListenerName($hint) ? CHIM_ACTOR_KEY_PLAYER : null;
+        }
+        try { $row = $npcMaster->getByRefId($m[1]); } catch (RuntimeException $e) { return null; }
+        $key = $row ? chimNpcRowActorKey($row) : null;
+        return $key !== null && str_starts_with($key, "ref:") && isset($capturedKeys[$key]) ? $key : null;
+    };
+
+    // 2. Listener: a present listener_key is exact (invalid or unknown refuses); target hints never select an
+    // actor it does not name. Without it, only a decorated listener_hint owned by a captured key is used.
+    $listenerHintText = trim((string)($payload["listener_hint"] ?? ""));
+    $targetHintText = trim((string)($payload["rechat_target_hint"] ?? ""));
+    $listenerKey = null;
+    $targetKey = null;
+    if (!empty($payload["listener_key_present"])) {
+        $rawListener = $payload["listener_key"];
+        if (!is_string($rawListener) || $rawListener === "" || !chimIsActorKey($rawListener)) {
+            return $refuse("listener_key_invalid");
+        }
+        $listenerKey = $rawListener;
+        $knownListener = chimRechatIdentityRow($npcMaster, $listenerKey);
+        if (preg_match('/^(ref|dyn):/', $listenerKey) && !is_array($knownListener)) {
+            return $refuse($knownListener === false ? "listener_key_ambiguous" : "listener_key_unknown");
+        }
+        // The target hint is that same listener only when it carries the same label.
+        if ($targetHintText !== "" && strcasecmp($targetHintText, $listenerHintText) === 0) {
+            $targetKey = $listenerKey;
+        }
+    } else {
+        $listenerKey = $resolveHint($listenerHintText);
+    }
+    if ($listenerKey === $speakerKey) { $listenerKey = null; }
+    if ($targetKey === $speakerKey) { $targetKey = null; }
+    $listenerRow = $listenerKey !== null ? chimRechatIdentityRow($npcMaster, $listenerKey) : null;
+    $targetRow = $targetKey !== null ? chimRechatIdentityRow($npcMaster, $targetKey) : null;
+    $physical = static fn($key) => is_string($key) && preg_match('/^(ref|dyn):/', $key) === 1;
+    if ($physical($listenerKey) && !is_array($listenerRow)) {
+        $listenerKey = null;
+        $listenerRow = null;
+    }
+    if ($physical($targetKey) && !is_array($targetRow)) {
+        $targetKey = null;
+        $targetRow = null;
+    }
+    $result["listener_key"] = $listenerKey;
+    $result["listener_hint"] = $listenerKey !== null ? chimRechatIdentityLabel($listenerRow, $listenerKey) : "";
+    $result["rechat_target_hint"] = $targetKey !== null ? chimRechatIdentityLabel($targetRow, $targetKey) : "";
+
+    // 3. Audience: the latest keyed conversation row between the speaker and an exact hint.
+    $participants = null;
+    foreach ([[$targetKey, $targetRow], [$listenerKey, $listenerRow]] as [$scopeKey, $scopeRow]) {
+        if ($scopeKey === null) { continue; }
+        $participants = chimRechatKeyedConversationParticipants($speakerKey, $speakerRow, $scopeKey, $scopeRow);
+        if ($participants !== null) { break; }
+    }
+    $members = [];
+    $displayNames = [];
+    $addMember = static function ($key, $row) use (&$members) {
+        if (is_string($key) && !isset($members[$key])) {
+            $members[$key] = ["key" => $key, "row" => is_array($row) ? $row : null,
+                "label" => chimRechatIdentityLabel(is_array($row) ? $row : null, $key)];
+        }
+    };
+    if ($participants !== null) {
+        foreach ([[$speakerKey, $speakerRow], [$targetKey, $targetRow], [$listenerKey, $listenerRow]] as [$key, $row]) {
+            if ($key !== null && $key !== CHIM_ACTOR_KEY_NARRATOR) { $addMember($key, $row); }
+        }
+        foreach ($participants as $participant) {
+            $key = $participant["id"] ?? null;
+            if ($physical($key)) {
+                $row = chimRechatIdentityRow($npcMaster, $key);
+                if (is_array($row)) { $addMember($key, $row); }
+            } elseif ($key === CHIM_ACTOR_KEY_PLAYER) {
+                $addMember($key, null);
+            } elseif ($key === null) {
+                $displayNames[] = stripActorStateSuffix((string)$participant["name"]);   // display only, never a candidate
+            }
+        }
+    }
+    // Namesakes in one audience stay decorated; a unique name is shown bare as before.
+    $nameCounts = [];
+    foreach ($members as $member) {
+        if ($member["row"]) {
+            $lower = mb_strtolower(trim((string)$member["row"]["npc_name"]), "UTF-8");
+            $nameCounts[$lower] = ($nameCounts[$lower] ?? 0) + 1;
+        }
+    }
+    foreach ($members as $key => $member) {
+        $name = $member["row"] ? trim((string)$member["row"]["npc_name"]) : $member["label"];
+        $members[$key]["display"] = $member["row"] && ($nameCounts[mb_strtolower($name, "UTF-8")] ?? 0) > 1 ? $member["label"] : $name;
+    }
+    $result["audience_keys"] = array_keys($members);
+    $result["audience"] = array_values(array_column($members, "display"));
+    $peopleNames = chimNormalizeRechatActorList(array_merge($result["audience"], $displayNames));
+    $result["people_pipe"] = $peopleNames ? "|" . implode("|", $peopleNames) . "|" : "";
+
+    $rechatMode = chimResolveEffectiveRechatMode($configuredRechatMode, array_merge(
+        [$result["speaker"], $result["listener_hint"], $result["rechat_target_hint"]], $result["audience"]));
+    $result["mode"] = $rechatMode;
+
+    // 4. Candidates in the existing per-mode order, by key.
+    $order = [];
+    $add = static function ($key) use (&$order, $members) {
+        if (is_string($key) && isset($members[$key]) && !in_array($key, $order, true)) { $order[] = $key; }
+    };
+    if ($rechatMode === "tight") {
+        $add($listenerKey);
+    } elseif ($rechatMode === "conversational") {
+        $add($targetKey);
+        $add($listenerKey);
+        foreach (array_keys($members) as $key) { $add($key); }
+    } else {
+        foreach (array_keys($members) as $key) {
+            if ($key !== $targetKey && $key !== $listenerKey) { $add($key); }
+        }
+        $add($targetKey);
+        $add($listenerKey);
+    }
+    $result["candidate_keys"] = $order;
+    $result["candidates"] = array_map(static fn($key) => $members[$key]["label"], $order);
+
+    // 5. Activity: a present active_agent_keys list is exact; every entry must name a known current physical row
+    // (invalid or unknown refuses, never a downgrade to the active_agents labels). Without it, active_agents
+    // labels map to keys exactly (decorated RefID, or a bare name naming exactly one keyed member). A namesake's
+    // activity never covers another key.
+    $activeKeys = null;
+    $known = $members + ($speakerRow ? [$speakerKey => ["row" => $speakerRow]] : []);
+    if (!empty($payload["active_agent_keys_present"])) {
+        if (!is_array($payload["active_agent_keys"] ?? null)) {
+            return $refuse("active_agent_keys_invalid");
+        }
+        $activeKeys = [];
+        foreach ($payload["active_agent_keys"] as $activeKey) {
+            if (!is_string($activeKey) || !$physical($activeKey) || !chimIsActorKey($activeKey)) {
+                return $refuse("active_agent_keys_invalid");
+            }
+            $activeRow = chimRechatIdentityRow($npcMaster, $activeKey);
+            if (!is_array($activeRow)) {
+                return $refuse($activeRow === false ? "active_agent_keys_ambiguous" : "active_agent_keys_unknown");
+            }
+            try {
+                // Current physical row: its key still owns a valid runtime endpoint.
+                if (chimResponseEndpointForNpcRow($activeRow) === null) { return $refuse("active_agent_keys_stale"); }
+            } catch (InvalidArgumentException | RuntimeException $e) {
+                return $refuse("active_agent_keys_stale");
+            }
+            $activeKeys[$activeKey] = true;
+        }
+        $result["active_agent_keys"] = array_keys($activeKeys);
+    } elseif (is_array($payload["active_agents"] ?? null)) {
+        $activeKeys = [];
+        foreach ($payload["active_agents"] as $agent) {
+            $agent = trim((string)$agent);
+            if ($agent === "") { continue; }
+            $matched = [];
+            $decorated = preg_match('/\[RefID:\s*(?:0x)?([0-9a-f]{1,8})\]\s*$/i', $agent, $m) === 1;
+            foreach ($known as $key => $member) {
+                if (!$member["row"]) { continue; }
+                if ($decorated ? hexdec($m[1]) === hexdec((string)($member["row"]["refid"] ?? "0"))
+                    : strcasecmp(trim((string)$member["row"]["npc_name"]), stripActorStateSuffix($agent)) === 0) {
+                    $matched[$key] = true;
+                }
+            }
+            if (count($matched) === 1) { $activeKeys[array_key_first($matched)] = true; }
+        }
+    }
+
+    $states = chimRechatKeyedStateMap();
+    $blockReason = static function ($key, $directlyAddressed) use ($states) {
+        $state = $states[$key] ?? "";
+        if (in_array($state, ["busy", "unconscious", "dead", "disabled"], true)) { return $state; }
+        return $state === "sleeping" && !$directlyAddressed ? $state : "";
+    };
+    $speakerBlock = $speakerKey === CHIM_ACTOR_KEY_NARRATOR ? "" : $blockReason($speakerKey, false);
+    if ($speakerBlock === "" && $activeKeys !== null && $speakerKey !== CHIM_ACTOR_KEY_NARRATOR && !isset($activeKeys[$speakerKey])) {
+        $speakerBlock = "inactive";
+    }
+    if ($speakerBlock !== "") {
+        Logger::info("[RECHAT_SELECT] Terminating rechat for {$result["speaker"]}: {$speakerBlock}");
+        $result["speaker_block"] = $speakerBlock;
+        return $result;
+    }
+
+    foreach ($order as $key) {
+        // Only other physical rows respond; the typed narrator and the player are never selected here.
+        if ($key === $speakerKey || !$physical($key) || !$members[$key]["row"]) { continue; }
+        if ($activeKeys !== null && !isset($activeKeys[$key])) {
+            Logger::info("[RECHAT_SELECT] Skipping {$members[$key]["label"]}: inactive");
+            continue;
+        }
+        $reason = $blockReason($key, $key === $targetKey || $key === $listenerKey);
+        if ($reason !== "") {
+            Logger::info("[RECHAT_SELECT] Skipping {$members[$key]["label"]}: {$reason}");
+            continue;
+        }
+        try {
+            // The row must still own a valid endpoint (key consistent with its runtime RefID).
+            if (chimResponseEndpointForNpcRow($members[$key]["row"]) === null) { continue; }
+        } catch (InvalidArgumentException | RuntimeException $e) {
+            continue;
+        }
+        $result["selected"] = $key;
+        $result["selected_key"] = $key;
+        $result["selected_label"] = $members[$key]["label"];
+        $result["selected_row_id"] = (int)$members[$key]["row"]["id"];
+        break;
+    }
+    return $result;
+}
+
 function chimResolveServerSideRechatTarget(array $payload)
 {
+    if (chimRechatIdentityRequested($payload)) {
+        return chimResolveIdentityRechatTarget($payload);
+    }
     $speakerName = normalizeDialogueListenerName($payload["speaker"] ?? ($GLOBALS["HERIKA_NAME"] ?? ""));
     $listenerHint = normalizeDialogueListenerName($payload["listener_hint"] ?? "");
     $rechatTargetHint = normalizeDialogueListenerName($payload["rechat_target_hint"] ?? "");
+    // Clients send "Name [RefID: XXXXXXXX]": name-based audience/state logic uses the base name, while the
+    // decorated identifier stays the exact authority for self-exclusion, row existence and the selection.
+    $baseOf = static fn($name) => trim((string)preg_replace('/\s*\[RefID:[^\]]*\]\s*$/i', '', (string)$name));
+    $refOf = static fn($name) => preg_match('/\[RefID:\s*(?:0x)?([0-9a-f]{1,8})\]\s*$/i', (string)$name, $m) ? hexdec($m[1]) : null;
+    $speakerIdentifier = $speakerName;
+    $speakerName = $baseOf($speakerName);
+    $exactHints = [];
+    foreach ([$rechatTargetHint, $listenerHint] as $hint) {
+        if ($refOf($hint) !== null && $refOf($hint) !== $refOf($speakerIdentifier)) {
+            $exactHints[mb_strtolower($baseOf($hint), "UTF-8")][] = $hint;
+        }
+    }
+    $listenerHint = $baseOf($listenerHint);
+    $rechatTargetHint = $baseOf($rechatTargetHint);
     $configuredRechatMode = chimGetRechatMode();
     $activeAgents = is_array($payload["active_agents"] ?? null)
         ? chimNormalizeRechatActorList($payload["active_agents"])
@@ -3994,6 +4494,7 @@ function chimResolveServerSideRechatTarget(array $payload)
         $activeAgentKeys = [];
         foreach ($activeAgents as $activeAgent) {
             $activeAgentKeys[mb_strtolower($activeAgent, "UTF-8")] = true;
+            $activeAgentKeys[mb_strtolower(trim((string)preg_replace('/\s*\[RefID:[^\]]*\]\s*$/i', '', $activeAgent)), "UTF-8")] = true;
         }
     }
 
@@ -4075,7 +4576,10 @@ function chimResolveServerSideRechatTarget(array $payload)
         if ($candidate === "") {
             continue;
         }
-        if ($speakerName !== "" && strcasecmp($candidate, $speakerName) === 0) {
+        // A decorated hint naming a different reference than the speaker is that exact namesake, not self.
+        $exactCandidates = array_values(array_unique($exactHints[mb_strtolower($candidate, "UTF-8")] ?? []));
+        $exactCandidate = count($exactCandidates) === 1 ? $exactCandidates[0] : "";
+        if ($exactCandidate === "" && $speakerName !== "" && strcasecmp($candidate, $speakerName) === 0) {
             continue;
         }
         if (strcasecmp($candidate, "The Narrator") === 0) {
@@ -4091,7 +4595,7 @@ function chimResolveServerSideRechatTarget(array $payload)
             Logger::info("[RECHAT_SELECT] Skipping {$candidate}: inactive");
             continue;
         }
-        if (!$npcMaster->getByName($candidate)) {
+        if ($exactCandidate !== "" ? chimResponseResolveActorEndpoint($exactCandidate) === null : !$npcMaster->getByName($candidate)) {
             continue;
         }
 
@@ -4109,12 +4613,12 @@ function chimResolveServerSideRechatTarget(array $payload)
             continue;
         }
 
-        $selected = $candidate;
+        $selected = $exactCandidate !== "" ? $exactCandidate : chimResponseDecorateExactTarget($candidate);
         break;
     }
 
     return [
-        "speaker" => $speakerName,
+        "speaker" => $speakerIdentifier,
         "listener_hint" => $listenerHint,
         "rechat_target_hint" => $rechatTargetHint,
         "audience" => $audience,
@@ -4129,8 +4633,44 @@ function chimResolveServerSideRechatTarget(array $payload)
     ];
 }
 
+// Playthrough timeline of this request: the runtime generation acquired at bootstrap (rotated by a playthrough
+// switch) plus the live clock's load epoch (rotated by every game load). Same pair as _relTimelineEpoch().
+function chimRechatTimelineEpoch(): string
+{
+    $generation = $GLOBALS["ptr_runtime_generation"] ?? null;
+    if (!is_string($generation)) {
+        $path = dirname(__DIR__) . "/log/playthrough_runtime/generation";
+        clearstatcache(true, $path);
+        $generation = is_file($path) ? trim((string)@file_get_contents($path)) : "";
+    }
+    $epoch = "";
+    $db = $GLOBALS["db"] ?? null;
+    if ($db && method_exists($db, "fetchOne")) {
+        try {
+            $row = $db->fetchOne("SELECT value FROM conf_opts WHERE id = 'DYNAMIC_PROFILE_CLOCK'");
+            $clock = json_decode((string)($row["value"] ?? ""), true);
+            $epoch = is_array($clock) ? (string)($clock["epoch"] ?? "") : "";
+        } catch (Throwable $e) {
+            $epoch = "";
+        }
+    }
+    return $generation . "|" . $epoch;
+}
+
 function chimBuildServerSideRechatSessionKey(array $resolvedTarget)
 {
+    if (!empty($resolvedTarget["identity"])) {
+        // Canonical members plus the interaction generation and playthrough timeline: neither a reused chain id
+        // from an old timeline/load/save nor a recycled same-name label can continue another session's budget.
+        $members = array_values(array_unique(array_filter(array_merge(
+            [$resolvedTarget["speaker_key"] ?? null, $resolvedTarget["listener_key"] ?? null],
+            (array)($resolvedTarget["audience_keys"] ?? [])
+        ), "is_string")));
+        sort($members, SORT_STRING);
+        return md5("identity_" . trim((string)($resolvedTarget["chain_id"] ?? "")) . "|" . implode("|", $members)
+            . "|" . (string)($GLOBALS["chim_interaction_generation"] ?? "") . "|" . chimRechatTimelineEpoch());
+    }
+
     $chainId = trim((string)($resolvedTarget["chain_id"] ?? ""));
     if ($chainId !== "") {
         return md5("chain_" . $chainId);
@@ -4151,17 +4691,37 @@ function chimBuildServerSideRechatSessionKey(array $resolvedTarget)
     return md5("members_" . implode("|", $members));
 }
 
-function chimSwitchActiveNpcProfile($npcName)
+function chimSwitchActiveNpcProfile($npcName, int $expectedRowId = 0)
 {
-    $npcName = normalizeDialogueListenerName($npcName);
-    if ($npcName === "" || strcasecmp($npcName, "The Narrator") === 0) {
-        return false;
+    require_once __DIR__ . "/core/npc_reference.php";
+    $npcName = trim((string)$npcName);
+    // A canonical key selects its own row, including a physical actor named "The Narrator"; the typed
+    // narrator and player are never NPC profile rows. Only a bare "The Narrator" label stays reserved.
+    if (chimIsActorKey($npcName)) {
+        if (!preg_match('/^(ref|dyn):/', $npcName)) {
+            return false;
+        }
+    } else {
+        $npcName = normalizeDialogueListenerName($npcName);
+        if ($npcName === "" || strcasecmp($npcName, "The Narrator") === 0) {
+            return false;
+        }
     }
 
+    // Exact actor keys and decorated identifiers select their own row; a bare name only when unique.
     $npcMaster = new NpcMaster();
-    $currentNpcData = $npcMaster->getByName($npcName);
+    try {
+        $currentNpcData = $npcMaster->getByPromptIdentifier($npcName);
+    } catch (RuntimeException $e) {
+        $currentNpcData = null;
+    }
     if (!$currentNpcData) {
         Logger::warn("[RECHAT_SELECT] Could not load NPC profile for {$npcName}");
+        return false;
+    }
+    // The resolved selection is immutable: a key re-bound to another row since resolution is refused.
+    if ($expectedRowId > 0 && intval($currentNpcData["id"] ?? 0) !== $expectedRowId) {
+        Logger::warn("[RECHAT_SELECT] Selected actor {$npcName} no longer resolves to the resolved row");
         return false;
     }
 
@@ -4215,8 +4775,11 @@ function chimSwitchActiveNpcProfile($npcName)
     $GLOBALS["STOBE_CORE_CURRENT_NPC_DATA"] = $currentNpcData;
     $GLOBALS["CHIM_CORE_CURRENT_PROFILE_DATA"] = $currentProfileData;
     $GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"] = $currentConnectorData;
-    $GLOBALS["active_profile"] = md5($npcName);
-    $_GET["profile"] = md5($npcName);
+    // The selected row's own profile selector, never a hash of the (possibly shared) display name.
+    $selectedProfileHash = trim((string)($currentNpcData["md5"] ?? "")) !== "" ? (string)$currentNpcData["md5"] : md5($npcName);
+    $GLOBALS["active_profile"] = $selectedProfileHash;
+    $_GET["profile"] = $selectedProfileHash;
+    $npcName = trim((string)($currentNpcData["npc_name"] ?? $npcName));
 
     $partyConf = isset($GLOBALS["CACHE_PARTY"]) ? $GLOBALS["CACHE_PARTY"] : DataGetCurrentPartyConf();
     $GLOBALS["CACHE_PARTY"] = $partyConf;
@@ -5545,7 +6108,68 @@ function chimGenerateUtteranceId()
     }
 }
 
-function logEvent($dataArray,$forcePeople='')
+// Captured identity of an opted-in request (docs/actor-identity.md) applied to one event, or null for
+// legacy. Only an event with the request's own timestamp derives from the captured observation; the
+// client's roles attach only when its type also matches. A forced format-2 list carries exact keys from
+// its caller; a forced legacy list stays name-only: no name, including the player's or "The Narrator",
+// becomes a key. $explicitRoles (speaker_key, listener_keys, target_key) replaces the client roles for a
+// server-derived line, e.g. the current actor's own reply, so it never inherits the player's roles.
+function chimCapturedEventIdentity($forcePeople = '', $eventType = null, $eventTs = null, ?array $explicitRoles = null)
+{
+    $identity = $GLOBALS['CHIM_EVENT_IDENTITY'] ?? null;
+    if (!is_array($identity) || !isset($identity['participants'])) {
+        return null;
+    }
+    require_once __DIR__ . '/core/npc_reference.php';
+    $sameObservation = $eventTs === null || (string)$eventTs === (string)($identity['ts'] ?? '');
+    $roles = ['speaker_key' => null, 'listener_keys' => [], 'target_key' => null];
+    if ($explicitRoles !== null) {
+        $roles = array_intersect_key($explicitRoles + $roles, $roles);
+    } elseif ($sameObservation && ($eventType === null || strtolower((string)$eventType) === ($identity['type'] ?? ''))) {
+        $roles = ['speaker_key' => $identity['speaker_key'] ?? null, 'listener_keys' => $identity['listener_keys'] ?? [], 'target_key' => $identity['target_key'] ?? null];
+    }
+    $forcePeople = trim((string)$forcePeople);
+    if ($forcePeople === '') {
+        return $sameObservation || $explicitRoles !== null ? ['people' => chimSerializeEventParticipants($identity['participants'])] + $roles : null;
+    }
+    $forced = chimParseEventParticipants($forcePeople);
+    $participants = $forced['participants'];
+    if ($forced['version'] !== CHIM_ACTOR_IDENTITY_VERSION) {
+        foreach ($participants as &$person) { $person['id'] = null; }
+        unset($person);
+    }
+    return ['people' => chimSerializeEventParticipants($participants)] + $roles;
+}
+
+// The current actor's own server-generated line in an opted-in request: the captured audience plus the
+// selected physical row as speaker. Without a keyed selected row the line keeps the forced name list with
+// no roles. Null for legacy requests, which keep their name snapshot.
+function chimCurrentActorUtteranceIdentity($actorName, $fallbackPeople = '')
+{
+    if (!is_array($GLOBALS['CHIM_EVENT_IDENTITY'] ?? null)) { return null; }
+    require_once __DIR__ . '/eventlog_helper.php';
+    $row = chimCurrentContextActorRow($actorName);
+    $speakerKey = $row ? chimNpcRowActorKey($row) : null;
+    if ($speakerKey === null) { return chimCapturedEventIdentity($fallbackPeople, null, null, []); }
+    $participants = $GLOBALS['CHIM_EVENT_IDENTITY']['participants'];
+    if (!in_array($speakerKey, array_column($participants, 'id'), true)) {
+        array_unshift($participants, chimEventParticipant((string)$row['npc_name'], $speakerKey));
+    }
+    return ['people' => chimSerializeEventParticipants($participants), 'speaker_key' => $speakerKey, 'listener_keys' => [], 'target_key' => null];
+}
+
+// Role columns for an eventlog/speech insert; empty for legacy rows so NULL stays "not captured".
+function chimEventRoleColumns(?array $captured, bool $withTarget = true)
+{
+    if ($captured === null) { return []; }
+    $columns = [
+        'speaker_key' => $captured['speaker_key'],
+        'listener_keys' => $captured['listener_keys'] ? json_encode(array_values($captured['listener_keys']), JSON_UNESCAPED_SLASHES) : null,
+    ];
+    if ($withTarget) { $columns['target_key'] = $captured['target_key']; }
+    return array_filter($columns, static fn($v) => $v !== null);
+}
+function logEvent($dataArray,$forcePeople='',?array $identityOverride=null)
 {
     if (!empty($GLOBALS['chim_interaction_generated']) && !chimInteractionAllowed()) return;
     $GLOBALS['chim_interaction_observed'] = true;
@@ -5637,6 +6261,13 @@ function logEvent($dataArray,$forcePeople='')
         }
 
         
+        // Opted-in requests keep the audience captured on the game thread; nearby snapshots never replace it.
+        // A caller-built identity (chimCurrentActorUtteranceIdentity) replaces the client capture for its line.
+        $capturedIdentity = $identityOverride ?? chimCapturedEventIdentity($forcePeople, $dataArray[0] ?? '', $dataArray[1] ?? '');
+        if ($capturedIdentity !== null) {
+            $eventPeople = $capturedIdentity['people'];
+        }
+
         $insertData = array(
             'ts' => $dataArray[1],
             'gamets' => $dataArray[2],
@@ -5649,6 +6280,7 @@ function logEvent($dataArray,$forcePeople='')
             'party'=>$GLOBALS["CACHE_PARTY"]
         );
 
+        $insertData = array_merge($insertData, chimEventRoleColumns($capturedIdentity));
         if (!empty($extraColumns)) {
             $insertData = array_merge($insertData, $extraColumns);
         }

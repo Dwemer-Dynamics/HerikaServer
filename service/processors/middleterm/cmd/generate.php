@@ -16,28 +16,42 @@ $selectedNpc=$GLOBALS["SELECTED_NPC"];
 $npcMaster = new NpcMaster();
 $connector = new LLMConnector();
 $currentConnectorData = $connector->getById($GLOBALS["CORE_CONNECTOR_MEDIUMTERM"]);
-$currentNpcData = $npcMaster->getByName($selectedNpc);
+$currentNpcData = !empty($GLOBALS['SELECTED_NPC_ID'])
+    ? $npcMaster->getById((int)$GLOBALS['SELECTED_NPC_ID'])
+    : $npcMaster->getByPromptIdentifier($selectedNpc);
+if (!$currentNpcData) { return; }
+$selectedNpc = $currentNpcData['npc_name'];
 
 $connector->setOldGlobals($currentConnectorData);
 $npcMaster->setOldGlobalsFromCurrentNpcData($currentNpcData);
 
 $COMMAND_PROMPT = '';
 
+require_once __DIR__ . '/../../../../lib/core/npc_reference.php';
+require_once __DIR__ . '/../../../../lib/core/npc_profile_sharing.php';
 $extended_data=$npcMaster->getExtendedData($currentNpcData);
 
-if (isset($extended_data["middle_term_memory"])&&sizeof($extended_data["middle_term_memory"])>0) {
-    $gametsfrom = array_key_last($extended_data["middle_term_memory"]);
-    $previous = end($extended_data["middle_term_memory"]);
-} else {
-    $gametsfrom=0;
-    $previous="";
+// middle_term_memory is a shared profile field: while references are linked it is built from the
+// summaries any member's physical key witnessed, and every entry records those source keys. Readers and
+// this generator only continue from digests whose sources all belong to the current group, so after an
+// unlink a group digest holding the other reference's events is ignored (kept stored) and rebuilt from
+// the summaries this group may still read. Unkeyed rows and the reserved Narrator profile generate none.
+$mtmBinding = chimNpcProfileBinding($currentNpcData);
+$mtmGroupKeys = chimNpcRowActorKey($currentNpcData) !== null || !empty($currentNpcData['profile_owner_npc_id'])
+    ? chimNpcProfileActorKeys($currentNpcData) : [];
+sort($mtmGroupKeys);
+if ((int)$currentNpcData['id'] <= 1 || !$mtmGroupKeys) { return; }
+$mtmPrevious = chimMiddleTermLatestDigest($currentNpcData);
+$gametsfrom = $mtmPrevious ? $mtmPrevious['gamets'] : 0;
+$previous = $mtmPrevious ? $mtmPrevious['text'] : "";
+
+$companionConditionSql = chimMemoryAudienceKeysWhereClause($mtmGroupKeys);
+$scopeConditionSql = "(scope IS NULL OR scope='global')";
+if (!empty($extended_data['individual_memory_enabled'])) {
+    $scopeConditionSql = 'scope IN (' . implode(',', array_map(static fn($key) => "'" . $GLOBALS['db']->escape($key) . "'", $mtmGroupKeys)) . ')';
 }
 
-
-$dbNpcName=$GLOBALS["db"]->escape($selectedNpc);
-$scopeConditionSql = dataGetMemoryScopeConditionSql($selectedNpc);
-
-$query="SELECT summary as content,gamets_truncated FROM memory_summary where summary is not null and $scopeConditionSql and (companions like '%|$dbNpcName|%' or companions='$dbNpcName') and gamets_truncated>$gametsfrom order by gamets_truncated desc LIMIT 100";
+$query="SELECT rowid, summary as content,gamets_truncated, scope, array_to_json(audience_keys)::text AS audience_keys_json FROM memory_summary where summary is not null and $scopeConditionSql and $companionConditionSql and gamets_truncated>" . (int)$gametsfrom . " order by gamets_truncated desc LIMIT 100";
 
 $contextDataFull=$GLOBALS["db"]->fetchAll($query);
 
@@ -55,11 +69,20 @@ if (sizeof($contextDataFull)==0 ||sizeof($contextDataFull)<$limit ) {
 
 $task    = "";
 $history = "";
+$mtmSummaryRowids = [];
+// The predecessor digest is folded into the new one, so its sources carry forward.
+$mtmSourceKeys = $mtmPrevious ? array_combine($mtmPrevious['provenance']['source_keys'], $mtmPrevious['provenance']['source_keys']) : [];
 foreach (array_reverse($contextDataFull) as $entry) {
     if ($entry["content"]) {
         $history .= "===\nMemory entry, date " . convert_gamets2skyrim_date($entry["gamets_truncated"]).PHP_EOL;
         $history .= trim($entry["content"]) . PHP_EOL.PHP_EOL;
         $lastgamets=$entry["gamets_truncated"];
+        $mtmSummaryRowids[] = (int)$entry['rowid'];
+        // Only the group keys that actually witnessed (or own the individual scope of) a used summary.
+        $witnesses = json_decode((string)($entry['audience_keys_json'] ?? ''), true);
+        foreach (array_merge(is_array($witnesses) ? $witnesses : [], [(string)($entry['scope'] ?? '')]) as $key) {
+            if (in_array($key, $mtmGroupKeys, true)) { $mtmSourceKeys[$key] = $key; }
+        }
     }
 }
 
@@ -175,11 +198,53 @@ Logger::debug(__LINE__ . " " . (microtime(true) - $startTime));
 print_r($buffer).PHP_EOL;
 
 if ($buffer) {
-    $extended_data=$npcMaster->getExtendedData($currentNpcData);
-    $extended_data["middle_term_memory"][$lastgamets]=$buffer;
-    $currentNpcData=$npcMaster->setExtendedData($currentNpcData,$extended_data);
-    $npcMaster->updateByArray($currentNpcData);
-    $GLOBALS["ONCE_PER_RUN"]=true;
+    // Commit only under the ownership and physical keyset this job read; stale work is discarded.
+    $mtmFresh = $npcMaster->getById((int)$currentNpcData['id']);
+    $mtmFreshKeys = $mtmFresh ? chimNpcProfileActorKeys($mtmFresh) : [];
+    sort($mtmFreshKeys);
+    if (!$mtmFresh || chimNpcProfileBinding($mtmFresh) !== $mtmBinding || $mtmFreshKeys !== $mtmGroupKeys) {
+        Logger::warn("[MIDDLETERM] Profile sharing or keys changed during generation; digest discarded");
+        return;
+    }
+    // CAS on the digest this job continued from: a manual edit (or another run) during the model call wins,
+    // and the next run continues from it instead of superseding it with a digest built from older text.
+    $mtmFreshLatest = chimMiddleTermLatestDigest($mtmFresh);
+    if (($mtmFreshLatest['gamets'] ?? null) !== ($mtmPrevious['gamets'] ?? null)
+        || ($mtmFreshLatest['text'] ?? null) !== ($mtmPrevious['text'] ?? null)) {
+        Logger::warn("[MIDDLETERM] Latest digest changed during generation; digest discarded");
+        return;
+    }
+    $extended_data=$npcMaster->getExtendedData($mtmFresh);
+    $digests = is_array($extended_data['middle_term_memory'] ?? null) ? $extended_data['middle_term_memory'] : [];
+    $provenance = is_array($extended_data['middle_term_memory_provenance'] ?? null) ? $extended_data['middle_term_memory_provenance'] : [];
+    $dormant = is_array($extended_data['middle_term_memory_dormant'] ?? null) ? $extended_data['middle_term_memory_dormant'] : [];
+    // A rebuild may land on the key of an entry this group can no longer use; keep that entry, not overwrite it.
+    if (array_key_exists($lastgamets, $digests) && !chimMiddleTermDigestValid($digests[$lastgamets], $provenance[$lastgamets] ?? null, $mtmGroupKeys)) {
+        $dormant[] = ['gamets' => (int)$lastgamets, 'text' => $digests[$lastgamets], 'provenance' => $provenance[$lastgamets] ?? null];
+    }
+    $digests[$lastgamets] = $buffer;
+    $provenance[$lastgamets] = chimMiddleTermDigestProvenance(array_values($mtmSourceKeys), $mtmGroupKeys, $mtmBinding,
+        (int)($mtmFresh['profile_owner_npc_id'] ?? $mtmFresh['id']), $mtmSummaryRowids, $buffer);
+    ksort($digests, SORT_NUMERIC);
+    ksort($provenance, SORT_NUMERIC);
+    $extended_data['middle_term_memory'] = $digests;
+    $extended_data['middle_term_memory_provenance'] = $provenance;
+    if ($dormant) { $extended_data['middle_term_memory_dormant'] = $dormant; }
+    $mtmReadExtended = (string)($mtmFresh['extended_data'] ?? '');
+    // Written under the row locks only if extended_data is still exactly what this commit was computed from
+    // (same pattern as RelationshipManager), so a concurrent manual save is never overwritten.
+    if ($npcMaster->update((int)$mtmFresh['id'], [
+        'extended_data' => json_encode($extended_data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        '_profile_binding' => $mtmBinding,
+        '_commit_guard' => static function () use ($npcMaster, $mtmFresh, $mtmReadExtended) {
+            $current = $npcMaster->getById((int)$mtmFresh['id']);
+            return is_array($current) && (string)($current['extended_data'] ?? '') === $mtmReadExtended;
+        },
+    ])) {
+        $GLOBALS["ONCE_PER_RUN"]=true;
+    } else {
+        Logger::warn("[MIDDLETERM] Profile changed before the digest was saved; digest discarded");
+    }
 } else 
     Logger::error(__LINE__ . " Buffer was empty. not writing middleterm " . (microtime(true) - $startTime));
 

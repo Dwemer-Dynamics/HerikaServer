@@ -335,7 +335,14 @@ function maybeQueueNpcVoiceRefresh($currentNpcData, $npcMaster)
         $refId = "0x{$refId}";
     }
 
-    echo "{$npcName}|rolecommand|RefreshNPCVoice@{$refId}@{$npcName}\r\n";
+    // The refreshed row's own physical identity (legacy unkeyed rows keep three fields; invalid metadata drops).
+    require_once __DIR__ . '/../lib/core/response_identity.php';
+    try {
+        echo chimBuildResponseLine($npcName, 'rolecommand', "RefreshNPCVoice@{$refId}@{$npcName}", chimResponseEndpointForNpcRow($currentNpcData));
+    } catch (InvalidArgumentException $e) {
+        error_log("[NPCVOICE_REFRESH] Dropping refresh for {$npcName}: " . $e->getMessage());
+        return $currentNpcData;
+    }
     error_log("[NPCVOICE_REFRESH] Requested refresh for {$npcName} ({$refId})");
 
     return $currentNpcData;

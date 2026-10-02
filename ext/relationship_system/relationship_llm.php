@@ -26,6 +26,7 @@ class RelationshipLLM {
     private $driver;
     private $modelName;
     private $promptCache = [];
+    private $commitGuard = null;
 
     public function __construct() {
         $this->db = $GLOBALS['db'];
@@ -291,7 +292,7 @@ class RelationshipLLM {
      * Keep legacy initialization callers harmless without sending the retired
      * text relationship field to an LLM. New relationship state is JSON-only.
      */
-    public function analyzeNpc($npcId, $forceReanalyze = false) {
+    public function analyzeNpc($npcId, $forceReanalyze = false, $binding = null) {
         require_once $GLOBALS['ENGINE_PATH'] . "lib/core/npc_master.class.php";
 
         $npcMaster = new NpcMaster();
@@ -299,6 +300,10 @@ class RelationshipLLM {
 
         if (!$npc) {
             return ['ok' => false, 'error' => 'NPC not found'];
+        }
+        // Queued work analyzes under the binding captured at enqueue; a later link/unlink is stale work.
+        if ($binding !== null && chimNpcProfileBinding($npc) !== (string)$binding) {
+            return ['ok' => false, 'error' => 'Profile sharing changed since the job was queued'];
         }
 
         $extended = $this->safeJsonDecode($npc['extended_data'] ?? null, "analyzeNpc:{$npc['npc_name']}");
@@ -385,7 +390,8 @@ class RelationshipLLM {
         }
 
         // Save to NPC
-        $this->saveRelationships($npc['id'], $relationships, $replaceExisting);
+        // Bound to the profile sharing read before the model call; link/unlink since then discards it.
+        $this->saveRelationships($npc['id'], $relationships, $replaceExisting, $npc['_profile_binding'] ?? null);
 
         Logger::info("[REL-LLM] Saved " . count($relationships) . " relationships for {$npcName}");
 
@@ -611,7 +617,7 @@ PROMPT;
     /**
      * Save relationships to NPC's extended_data
      */
-    private function saveRelationships($npcId, $relationships, $replaceExisting = false) {
+    private function saveRelationships($npcId, $relationships, $replaceExisting = false, $binding = null) {
         require_once $GLOBALS['ENGINE_PATH'] . "lib/core/npc_master.class.php";
 
         // Advisory lock to prevent race conditions
@@ -649,14 +655,18 @@ PROMPT;
             $extended['relationships_analyzed'] = date('Y-m-d H:i:s');
             $extended['relationships_model'] = $this->modelName;
 
-            $result = chimRunWithRelationshipExtendedDataWrite(function () use ($npcMaster, $npcId, $extended) {
-                return $npcMaster->updateByArray([
-                    'id' => $npcId,
-                    'extended_data' => json_encode($extended, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-                ]);
+            $write = [
+                'id' => $npcId,
+                'extended_data' => json_encode($extended, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                '_profile_binding' => $binding ?? ($npc['_profile_binding'] ?? ':'),
+                '_expected_keys' => RelationshipManager::expectedKeysFor([$npc]),
+            ];
+            if ($this->commitGuard) { $write['_commit_guard'] = $this->commitGuard; }
+            $result = chimRunWithRelationshipExtendedDataWrite(function () use ($npcMaster, $write) {
+                return $npcMaster->updateByArray($write);
             });
             if ($result !== false && function_exists('chimRelationshipTimelineStamp')) {
-                chimRelationshipTimelineStamp($npcId);
+                chimRelationshipTimelineStamp($npc['profile_owner_npc_id'] ?? $npcId);
             }
 
             $this->releaseNpcLock($npcId);
@@ -752,49 +762,45 @@ PROMPT;
 
         $inferred = [];
 
-        // For each of my relationships
-        foreach ($myRels as $targetName => $targetData) {
-            $myAffinity = $targetData['aff'];
+        // Typed edges only: the hop target is the exact keyed actor, and inferred third parties keep their
+        // typed key/label. Unattributed legacy name entries are neither followed nor produced.
+        $selfIdentity = RelationshipManager::targetIdentityForActor($npc);
+        $keyRows = [$npc];
+        foreach ($myRels as $targetKey => $targetData) {
+            if (!is_array($targetData) || ($targetData['target']['kind'] ?? '') !== 'actor') continue;
+            $myAffinity = (int)($targetData['aff'] ?? 0);
 
             // Skip weak relationships
             if (abs($myAffinity) < 30) continue;
 
-            // Find the target NPC
-            $escapedTarget = $this->db->escape($targetName);
-            $targetNpc = $this->db->fetchOne(
-                "SELECT id, extended_data FROM core_npc_master WHERE npc_name = '" . $escapedTarget . "' LIMIT 1"
-            );
-
+            $targetNpc = $npcMaster->getByActorKey((string)$targetKey);
             if (!$targetNpc) continue;
+            $keyRows[] = $targetNpc;
+            $targetName = (string)($targetData['target']['label'] ?? $targetNpc['npc_name']);
 
             $targetExtended = $this->safeJsonDecode($targetNpc['extended_data'] ?? null, "inferTransitive:target:{$targetName}");
             if ($targetExtended === null) continue; // Skip corrupted target, don't abort
-            $targetRels = $targetExtended['relationships'] ?? [];
+            $targetRels = RelationshipManager::normalizeRelationshipMap($targetExtended['relationships'] ?? []);
 
-            // Check target's relationships
-            foreach ($targetRels as $thirdParty => $thirdData) {
-                // Skip if I already have a relationship with this entity
-                if (isset($myRels[$thirdParty])) continue;
+            foreach ($targetRels as $thirdKey => $thirdData) {
+                $thirdKind = $thirdData['target']['kind'] ?? ($thirdKey === 'Player' ? 'player' : '');
+                if ($thirdKind !== 'actor' && $thirdKind !== 'player') continue;
+                // Skip if I already have a relationship with this entity, or it is me
+                if (isset($myRels[$thirdKey]) || ($selfIdentity && $thirdKey === $selfIdentity['key'])) continue;
 
-                // Skip self-reference
-                if ($thirdParty === $npc['npc_name']) continue;
-
-                $theirAffinity = $thirdData['aff'];
-
-                // Calculate transitive affinity
-                // If I love someone (+80) who hates someone else (-70), I become wary (-30ish)
-                // If I love someone (+80) who loves someone (+80), I become warm (+30ish)
+                $theirAffinity = (int)($thirdData['aff'] ?? 0);
                 $transitiveAff = intval(($myAffinity * $theirAffinity) / 200);
 
                 // Only infer if significant
                 if (abs($transitiveAff) >= 15) {
                     $transitiveAff = max(-50, min(50, $transitiveAff)); // Cap at moderate levels
-
-                    $inferred[$thirdParty] = [
+                    $edge = [
                         'aff' => $transitiveAff,
                         'type' => $transitiveAff > 0 ? 'neutral' : 'rival',
-                        'inferred_from' => $targetName
+                        'inferred_from' => $targetName,
                     ];
+                    if ($thirdKind === 'actor') { $edge['target'] = $thirdData['target']; }
+                    $inferred[$thirdKey] = $edge;
                 }
             }
         }
@@ -813,6 +819,10 @@ PROMPT;
                     $this->releaseNpcLock($npcId);
                     return ['ok' => false, 'error' => 'Corrupted extended_data during save'];
                 }
+                if (!empty($extended['relationships_locked'])) {
+                    $this->releaseNpcLock($npcId);
+                    return ['ok' => true, 'inferred' => 0, 'skipped' => 'relationships_locked'];
+                }
                 $myRels = $extended['relationships'] ?? [];
 
                 // Merge with existing (don't overwrite explicit relationships)
@@ -825,9 +835,13 @@ PROMPT;
                 $extended['relationships'] = $myRels;
                 $extended['relationships_inferred'] = date('Y-m-d H:i:s');
 
-                $result = chimRunWithRelationshipExtendedDataWrite(function () use ($npcMaster, $npcId, $extended) {
+                $expectedKeys = RelationshipManager::expectedKeysFor($keyRows);
+                $binding = chimNpcProfileBinding($npc);
+                $result = chimRunWithRelationshipExtendedDataWrite(function () use ($npcMaster, $npcId, $extended, $expectedKeys, $binding) {
                     return $npcMaster->updateByArray([
                         'id' => $npcId,
+                        '_profile_binding' => $binding,
+                        '_expected_keys' => $expectedKeys,
                         'extended_data' => json_encode($extended, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
                     ]);
                 });
@@ -879,6 +893,10 @@ PROMPT;
         }
 
         $npcName = $npc['npc_name'];
+        $endpointGuard = $this->captureEndpoints($npc, ['player'], $context);
+        if (!empty($endpointGuard['stale'])) {
+            return ['ok' => true, 'changes' => [], 'skipped' => 'stale_binding'];
+        }
 
         // Get current relationships
         $extended = $this->safeJsonDecode($npc['extended_data'] ?? null, "evaluateContext:{$npcName}");
@@ -1062,7 +1080,7 @@ PROMPT;
         }
 
         // Apply the changes
-        $applied = $this->applyChanges($npcId, $changes, $currentRels);
+        $applied = $this->applyChanges($npcId, $changes, $currentRels, $endpointGuard);
 
         Logger::info("[REL-LLM] Applied " . count($applied) . " changes for {$npcName}");
 
@@ -1103,6 +1121,11 @@ PROMPT;
 
         $speakerName = $speaker['npc_name'];
         $listenerName = $listener['npc_name'];
+        $speakerGuard = $this->captureEndpoints($speaker, [$listener], $context);
+        $listenerGuard = $this->captureEndpoints($listener, [$speaker], $context);
+        if (!empty($speakerGuard['stale']) || !empty($listenerGuard['stale'])) {
+            return ['ok' => true, 'speaker' => ['changes' => []], 'listener' => ['changes' => []], 'skipped' => 'stale_binding'];
+        }
 
         // Get current relationships for both NPCs
         $speakerExtended = $this->safeJsonDecode($speaker['extended_data'] ?? null, "npc2npc:speaker:{$speakerName}");
@@ -1198,13 +1221,13 @@ PROMPT;
         // Apply speaker's changes (their feelings toward listener)
         if (!empty($parsed['speaker'])) {
             $speakerChanges = [$listenerName => $parsed['speaker']];
-            $results['speaker']['changes'] = $this->applyChanges($speakerNpcId, $speakerChanges, $speakerRels);
+            $results['speaker']['changes'] = $this->applyChanges($speakerNpcId, $speakerChanges, $speakerRels, $speakerGuard);
         }
 
         // Apply listener's changes (their feelings toward speaker)
         if (!empty($parsed['listener'])) {
             $listenerChanges = [$speakerName => $parsed['listener']];
-            $results['listener']['changes'] = $this->applyChanges($listenerNpcId, $listenerChanges, $listenerRels);
+            $results['listener']['changes'] = $this->applyChanges($listenerNpcId, $listenerChanges, $listenerRels, $listenerGuard);
         }
 
         $totalChanges = count($results['speaker']['changes']) + count($results['listener']['changes']);
@@ -1400,7 +1423,45 @@ PROMPT;
     /**
      * Apply relationship changes
      */
-    private function applyChanges($npcId, $changes, $currentRels) {
+    /** Queue processors set a claim/timeline check evaluated inside the guarded commit. */
+    public function setCommitGuard($guard) {
+        $this->commitGuard = is_callable($guard) ? $guard : null;
+    }
+
+    /**
+     * Capture the source and target bindings before any model call. A queued job carries the bindings
+     * it was queued under in $context['_rel_capture']; a mismatch means link/unlink happened since.
+     */
+    private function captureEndpoints(array $source, array $targets, $context) {
+        $guard = ['binding' => $source['_profile_binding'] ?? chimNpcProfileBinding($source), 'targets' => [], 'expected' => []];
+        foreach ($targets as $target) {
+            if ($target === 'player') { $guard['targets'][] = RelationshipManager::playerTargetIdentity(); continue; }
+            $identity = RelationshipManager::targetIdentityForActor($target);
+            if (!$identity) { continue; }
+            $guard['targets'][] = $identity;
+            $guard['expected'][(int)$target['id']] = $identity['binding'];
+            if (!empty($target['profile_owner_npc_id'])) {
+                // The keeper's binding also changes on merge/unlink; lock and verify it as well.
+                $owner = $GLOBALS['db']->fetchOne('SELECT * FROM core_npc_master WHERE id = ' . (int)$target['profile_owner_npc_id']);
+                if ($owner) { $guard['expected'][(int)$owner['id']] = chimNpcProfileBinding($owner); }
+            }
+        }
+        // Physical keys of the source, targets and their keepers are rechecked under the write's row locks.
+        $keyRows = [$source];
+        foreach ($targets as $target) { if (is_array($target)) { $keyRows[] = $target; } }
+        $guard['keys'] = RelationshipManager::expectedKeysFor($keyRows);
+        $captured = is_array($context['_rel_capture'] ?? null) ? $context['_rel_capture'] : [];
+        foreach ((array)($captured['keys'] ?? []) as $id => $key) {
+            if (isset($guard['keys'][(int)$id]) && $guard['keys'][(int)$id] !== $key) { $guard['stale'] = true; }
+        }
+        foreach ((array)($captured['bindings'] ?? []) as $id => $binding) {
+            $row = $GLOBALS['db']->fetchOne('SELECT * FROM core_npc_master WHERE id = ' . (int)$id);
+            if (!$row || chimNpcProfileBinding($row) !== (string)$binding) { $guard['stale'] = true; }
+        }
+        return $guard;
+    }
+
+    private function applyChanges($npcId, $changes, $currentRels, $guard = null) {
         require_once $GLOBALS['ENGINE_PATH'] . "lib/core/npc_master.class.php";
 
         if (!is_array($changes)) {
@@ -1439,10 +1500,30 @@ PROMPT;
         // one in the relationship editor. The shared manager owns canonicalization.
         $allowedCustomTypes = RelationshipManager::getCustomRelationshipTypes($currentRels);
 
+        $identities = [];
         foreach ($changes as $target => $change) {
             if (!is_string($target) || trim($target) === '' || !is_array($change)) {
                 $this->logMalformedResponseField('apply relationship change', $change);
                 continue;
+            }
+            // Captured endpoints are typed principals: their label routes to their physical identity
+            // before any player-alias folding, so an NPC literally named after the player stays physical.
+            // A label shared by several captured actors is refused unless the model names the exact key.
+            $identity = null;
+            $labelMatches = [];
+            $keyRef = preg_match('/\[((?:ref|dyn):[^\]]+)\]\s*$/u', trim($target), $km) ? $km[1] : trim($target);
+            foreach ((array)($guard['targets'] ?? []) as $candidate) {
+                if ($candidate['kind'] !== 'actor') { continue; }
+                if ($keyRef === $candidate['key']) { $identity = $candidate; break; }
+                if (strcasecmp(trim($target), (string)$candidate['label']) === 0) { $labelMatches[$candidate['key']] = $candidate; }
+            }
+            if (!$identity && count($labelMatches) > 1) {
+                Logger::info("[REL-LLM] Refused ambiguous target label '{$target}' for {$npc['npc_name']}");
+                continue;
+            }
+            if (!$identity && $labelMatches) { $identity = reset($labelMatches); }
+            if (!$identity && RelationshipManager::normalizeTargetName($target) === 'Player') {
+                $identity = RelationshipManager::playerTargetIdentity();
             }
 
             $rawType = $change['type'] ?? null;
@@ -1462,13 +1543,26 @@ PROMPT;
             $relation = $relation === '' ? null : $relation;
 
             // Skip titles/roles (but allow factions/groups)
-            if (in_array(strtolower(trim($target)), $blockedTitles)) {
+            if (!$identity && in_array(strtolower(trim($target)), $blockedTitles)) {
                 Logger::debug("[REL-LLM] Skipping title/role as relationship target: {$target}");
                 continue;
             }
 
-            // Normalize player name references to canonical "Player"
-            $target = RelationshipManager::normalizeTargetName($target);
+            if ($identity) {
+                [$foundKey, $foundRel] = RelationshipManager::findTargetEdge($currentRels, $identity);
+                $target = $identity['kind'] === 'player' ? 'Player' : $identity['key'];
+                if ($foundRel !== null && !isset($currentRels[$target])) { $currentRels[$target] = $foundRel; }
+                $identities[$target] = $identity;
+            } else {
+                // A registered actor that is not a captured endpoint is never written by name; other names
+                // stay name-keyed (display-only until classified) and are not read back into prompts.
+                $resolved = RelationshipManager::resolveTargetIdentity($target);
+                if (in_array($resolved['kind'] ?? '', ['actor', 'ambiguous'], true)) {
+                    Logger::info("[REL-LLM] Refused uncaptured actor target '{$target}' for {$npc['npc_name']}");
+                    continue;
+                }
+                $target = RelationshipManager::normalizeTargetName($target);
+            }
 
             $targetExists = isset($currentRels[$target]);
             if ($targetExists && !is_array($currentRels[$target])) {
@@ -1613,6 +1707,12 @@ PROMPT;
             try {
                 // Re-fetch to get latest state after acquiring lock
                 $npc = $npcMaster->getById($npcId);
+                $binding = $guard['binding'] ?? ($npc['_profile_binding'] ?? ':');
+                if (!$npc || $npc['_profile_binding'] !== $binding) {
+                    Logger::info("[REL-LLM] DISCARD stale relationship changes for NPC {$npcId}: profile sharing changed");
+                    $this->releaseNpcLock($npcId);
+                    return [];
+                }
                 $extended = $this->safeJsonDecode($npc['extended_data'] ?? null, "applyChanges:{$npc['npc_name']}");
                 if ($extended === null) {
                     // CRITICAL: Corrupted data - abort to prevent data loss
@@ -1636,7 +1736,13 @@ PROMPT;
                 $existingRels = RelationshipManager::normalizeRelationshipMap($extended['relationships'] ?? []);
                 $freshCustomTypes = RelationshipManager::getCustomRelationshipTypes($existingRels);
                 foreach ($applied as $target => $change) {
-                    $freshRel = $existingRels[$target] ?? [];
+                    $foundKey = $target;
+                    if (isset($identities[$target])) {
+                        [$foundKey, $freshRel] = RelationshipManager::findTargetEdge($existingRels, $identities[$target]);
+                        $freshRel = $freshRel ?? [];
+                    } else {
+                        $freshRel = $existingRels[$target] ?? [];
+                    }
                     $rebasedRel = $this->rebaseRelationshipChange(
                         $freshRel,
                         $currentRels[$target] ?? [],
@@ -1648,7 +1754,11 @@ PROMPT;
                     if ($freshAff !== $staleAff) {
                         Logger::info("[REL-LLM] Rebased {$npc['npc_name']} -> {$target}: fresh {$freshAff} + delta {$change['delta']} => {$rebasedRel['aff']}");
                     }
-                    $existingRels[$target] = $rebasedRel;
+                    if (isset($identities[$target])) {
+                        RelationshipManager::storeTargetEdge($existingRels, $identities[$target], $foundKey, $rebasedRel);
+                    } else {
+                        $existingRels[$target] = $rebasedRel;
+                    }
                 }
 
                 $extended['relationships'] = $existingRels;
@@ -1656,15 +1766,18 @@ PROMPT;
 
                 $jsonData = json_encode($extended, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
-                $result = chimRunWithRelationshipExtendedDataWrite(function () use ($npcMaster, $npcId, $jsonData) {
-                    return $npcMaster->updateByArray([
-                        'id' => $npcId,
-                        'extended_data' => $jsonData
-                    ]);
+                // Source binding, target bindings and the queue claim are verified with the rows locked.
+                $write = ['id' => $npcId, 'extended_data' => $jsonData, '_profile_binding' => $binding];
+                if (!empty($guard['expected'])) { $write['_expected_bindings'] = $guard['expected']; }
+                if (!empty($guard['keys'])) { $write['_expected_keys'] = $guard['keys']; }
+                if ($this->commitGuard) { $write['_commit_guard'] = $this->commitGuard; }
+                $result = chimRunWithRelationshipExtendedDataWrite(function () use ($npcMaster, $write) {
+                    return $npcMaster->updateByArray($write);
                 });
                 if ($result !== false && function_exists('chimRelationshipTimelineStamp')) {
-                    chimRelationshipTimelineStamp($npcId);
+                    chimRelationshipTimelineStamp($npc['profile_owner_npc_id'] ?? $npcId);
                 }
+                if ($result === false) { $applied = []; }
 
                 $this->releaseNpcLock($npcId);
                 Logger::debug("[REL-LLM] Database update for NPC {$npcId}: " . ($result === false ? "FAILED" : "OK") . " - relationships: " . json_encode($existingRels));

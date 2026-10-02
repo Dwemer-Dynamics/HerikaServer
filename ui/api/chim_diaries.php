@@ -44,57 +44,98 @@ function diaryAudioEndpoint(int $entryId): string
     return $origin . rtrim($webRoot, '/') . '/ui/api/chim_diary_audio.php?entry=' . $entryId;
 }
 
+require_once(LIB_PATH . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "npc_reference.php");
+$authorKey = isset($_GET['author_key']) ? trim(strval($_GET['author_key'])) : (isset($_GET['author']) ? trim(strval($_GET['author'])) : null);
+$readGroup = !empty($_GET['group']);
+
 if ($mode === 'people') {
-    // Return list of all people with diary entry counts
-    $query = "
+    // Selectors: one per exact physical/typed author key, plus legacy unassigned names kept separate.
+    // Labels are display-only; selectors never resolve an author by name.
+    $keyed = $db->fetchAll("
+        SELECT author_key,
+               (array_agg(trim(people, '|') ORDER BY gamets DESC, rowid DESC))[1] AS name,
+               COUNT(*) AS count
+        FROM diarylog
+        WHERE author_key IS NOT NULL AND topic NOT IN ('Sent Letter', 'Journal Note')
+        GROUP BY author_key
+    ");
+    $legacy = $db->fetchAll("
         WITH split_people AS (
-            SELECT 
-                d.rowid,
-                trim(unnest(string_to_array(trim(d.people, '|'), '|'))) as person
+            SELECT d.rowid, trim(unnest(string_to_array(trim(d.people, '|'), '|'))) AS person
             FROM diarylog d
-            WHERE d.people IS NOT NULL AND d.people != ''
+            WHERE d.author_key IS NULL AND d.people IS NOT NULL AND d.people != ''
             AND d.topic NOT IN ('Sent Letter', 'Journal Note')
         )
-        SELECT 
-            person as name,
-            COUNT(DISTINCT rowid) as count
-        FROM split_people
-        WHERE person != ''
-        GROUP BY person
-        ORDER BY count DESC, person ASC
-    ";
-    
-    $result = $db->fetchAll($query);
-    
-    if ($result) {
-        echo json_encode([
-            'success' => true,
-            'people' => $result
-        ]);
-    } else {
-        echo json_encode([
-            'success' => false,
-            'error' => 'Failed to fetch people list'
-        ]);
+        SELECT person AS name, COUNT(DISTINCT rowid) AS count
+        FROM split_people WHERE person != '' GROUP BY person
+    ");
+    if ($keyed === false || $legacy === false) {
+        echo json_encode(['success' => false, 'error' => 'Failed to fetch people list']);
+        exit;
     }
-    
-} elseif ($person) {
-    // Return all diary entries for a specific person (newest first)
-    $personEsc = $db->escape($person);
-    
+    $labels = [];
+    foreach ((array)$keyed as $row) { $labels[strtolower((string)$row['name'])][] = $row['author_key']; }
+    $people = [];
+    foreach ((array)$keyed as $row) {
+        $people[] = [
+            'selector' => 'author:' . $row['author_key'],
+            'author_key' => $row['author_key'],
+            'name' => (string)$row['name'],
+            'label' => (string)$row['name'],
+            'count' => intval($row['count']),
+            'legacy' => false,
+            'label_shared' => count($labels[strtolower((string)$row['name'])]) > 1,
+        ];
+    }
+    foreach ((array)$legacy as $row) {
+        $people[] = [
+            'selector' => 'legacy:' . $row['name'],
+            'name' => (string)$row['name'],
+            'label' => (string)$row['name'],
+            'count' => intval($row['count']),
+            'legacy' => true,
+            'label_shared' => isset($labels[strtolower((string)$row['name'])]),
+        ];
+    }
+    usort($people, static fn($a, $b) => [$b['count'], $a['name'], $a['legacy']] <=> [$a['count'], $b['name'], $b['legacy']]);
+    echo json_encode(['success' => true, 'people' => $people]);
+
+} elseif ($authorKey !== null || $person) {
+    // Exact author (optionally its explicitly linked profile group) or one legacy unassigned name.
+    if ($authorKey !== null) {
+        if (!chimIsActorKey($authorKey)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid author key']);
+            exit;
+        }
+        $keys = [$authorKey];
+        if ($readGroup && str_contains($authorKey, ':')) {
+            require_once(LIB_PATH . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "npc_profile_sharing.php");
+            $rows = $db->fetchAll("SELECT * FROM core_npc_master ORDER BY id");
+            foreach ((array)$rows as $row) {
+                if (chimNpcRowActorKey($row) === $authorKey) { $keys = chimNpcProfileActorKeys($row) ?: $keys; break; }
+            }
+        }
+        $quoted = implode(',', array_map(static fn($key) => "'" . $db->escape($key) . "'", $keys));
+        $scope = "author_key IN ($quoted)";
+    } else {
+        $personEsc = $db->escape(trim(strval($person)));
+        $scope = "author_key IS NULL AND '$personEsc' = ANY (SELECT trim(x) FROM unnest(string_to_array(trim(people, '|'), '|')) x)";
+    }
     $query = "
         SELECT 
             rowid, 
             topic, 
             content, 
             people, 
+            author_key,
             location, 
             localts, 
             gamets
         FROM diarylog
-        WHERE people LIKE '%$personEsc%'
+        WHERE $scope
         AND topic NOT IN ('Sent Letter', 'Journal Note')
-        ORDER BY localts DESC
+        ORDER BY localts DESC, rowid DESC
     ";
     
     $results = $db->fetchAll($query);
@@ -126,6 +167,8 @@ if ($mode === 'people') {
                 'preview' => $preview,
                 'date' => $tamrielicDate,
                 'location' => $location,
+                'author_key' => $row['author_key'],
+                'author' => trim((string)$row['people'], '|'),
                 'localts' => intval($row['localts'])
             ];
         }
@@ -133,12 +176,16 @@ if ($mode === 'people') {
         echo json_encode([
             'success' => true,
             'person' => $person,
+            'author_key' => $authorKey,
+            'person_label' => $authorKey !== null ? ($entries[0]['author'] ?? '') : strval($person),
             'entries' => $entries
         ]);
     } else {
         echo json_encode([
             'success' => true,
             'person' => $person,
+            'author_key' => $authorKey,
+            'person_label' => $authorKey !== null ? '' : strval($person),
             'entries' => []
         ]);
     }
@@ -151,6 +198,7 @@ if ($mode === 'people') {
             topic, 
             content, 
             people, 
+            author_key,
             location, 
             localts, 
             gamets
@@ -189,6 +237,9 @@ if ($mode === 'people') {
                 'content' => $result['content'],
                 'date' => $tamrielicDate,
                 'author' => $author,
+                'author_key' => $result['author_key'],
+                'author_label' => $author,
+                'legacy' => $result['author_key'] === null,
                 'location' => $location,
                 'audio_endpoint' => diaryAudioEndpoint(intval($result['rowid']))
             ]
@@ -205,6 +256,6 @@ if ($mode === 'people') {
     http_response_code(400);
     echo json_encode([
         'success' => false,
-        'error' => 'Invalid request. Use ?list=people, ?person=Name, or ?entry=123'
+        'error' => 'Invalid request. Use ?list=people, ?author_key=key[&group=1], ?person=LegacyName, or ?entry=123'
     ]);
 }

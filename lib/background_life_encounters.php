@@ -79,6 +79,14 @@ function chimBglEncounterNearbyCandidates(array $currentNpcData, float $gameTs, 
         return [];
     }
 
+    $keySnapshots = is_array($metadata['low_process_actor_keys'] ?? null) ? $metadata['low_process_actor_keys'] : [];
+    $keyedSnapshot = [];
+    foreach ($keySnapshots as $candidateTs => $candidateKeys) {
+        if (is_numeric($candidateTs) && (float)$candidateTs === $snapshotTs && is_array($candidateKeys)) {
+            $keyedSnapshot = $candidateKeys;
+        }
+    }
+
     $currentId = (int)($currentNpcData['id'] ?? 0);
     $resolved = [];
     foreach ($actorList as $key => $actor) {
@@ -95,7 +103,20 @@ function chimBglEncounterNearbyCandidates(array $currentNpcData, float $gameTs, 
             continue;
         }
 
-        $npc = chimBglResolveNpc($npcMaster, $refid, $name);
+        // A keyed nearby entry (C18) resolves only its exact row while it holds that ref; no name fallback.
+        $keyedEntry = is_array($keyedSnapshot[$refid] ?? null) ? $keyedSnapshot[$refid] : null;
+        if ($keyedEntry !== null) {
+            try {
+                $npc = is_string($keyedEntry['actor_key'] ?? null) ? $npcMaster->getByActorKey($keyedEntry['actor_key']) : null;
+            } catch (RuntimeException $e) {
+                $npc = null;
+            }
+            if ($npc && NpcMaster::normalizeRefId($npc['refid'] ?? '') !== (string)($keyedEntry['actor_refid'] ?? '')) {
+                $npc = null;
+            }
+        } else {
+            $npc = chimBglResolveNpc($npcMaster, $refid, $name);
+        }
         if (!$npc || (int)($npc['id'] ?? 0) === $currentId || chimBglNormalizeRefId((string)($npc['refid'] ?? '')) === '') {
             continue;
         }
@@ -324,6 +345,10 @@ function chimBglHandleAttackNpcAction(string $actionArg, array $currentNpcData, 
 {
     [$targetName, $targetRef] = array_pad(explode(':', $actionArg, 2), 2, '');
     $target = chimBglResolveNpc($npcMaster, $targetRef, $targetName);
+    // A RefID now held by a differently named actor is not the requested target.
+    if ($target && trim($targetName) !== '' && strcasecmp(trim((string)$target['npc_name']), trim($targetName)) !== 0) {
+        $target = null;
+    }
     $initiatorSettings = chimBglEncounterNpcSettings($npcMaster, $currentNpcData);
     if (!$target || !$initiatorSettings['enabled'] || !$initiatorSettings['participation'] || !$initiatorSettings['initiate']) {
         return false;
@@ -439,6 +464,7 @@ function chimBglHandleAttackNpcAction(string $actionArg, array $currentNpcData, 
             'action' => 'AttackNPC',
             'fullcall' => "AttackNPC:{$target['npc_name']}:{$targetRef}",
             'actorname' => $currentNpcData['npc_name'],
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $eventTs,
             'gamets' => $gameTs,
             'localts' => time(),
@@ -451,6 +477,15 @@ function chimBglHandleAttackNpcAction(string $actionArg, array $currentNpcData, 
         error_log('[BGL COMBAT] Encounter creation failed: ' . $e->getMessage());
         return false;
     }
+}
+
+// Physical key of an encounter participant's own profile row, selected by npc_id and never by name; null for
+// legacy rows, whose history then stays unkeyed.
+function chimBglParticipantActorKey($db, array $participant): ?string
+{
+    $npcId = (int)($participant['npc_id'] ?? 0);
+    $row = $npcId > 0 ? $db->fetchOne("SELECT metadata FROM core_npc_master WHERE id = {$npcId}") : null;
+    return is_array($row) ? chimNpcRowActorKey($row) : null;
 }
 
 function chimBglEncounterPeople(array $participants): string
@@ -512,6 +547,7 @@ function chimBglFinalizeCombatEncounter($db, int $encounterId): void
     foreach ($participants as $participant) {
         $db->insert('bgl_history', [
             'npc' => $participant['npc_name'],
+            'actor_key' => chimBglParticipantActorKey($db, $participant),
             'ts' => (int)$encounter['ts'],
             'gamets' => (float)$encounter['gamets'],
             'localts' => time(),
@@ -717,6 +753,7 @@ function chimBglHandleLootEncounterAction(int $encounterId, array $currentNpcDat
             'action' => 'LootEncounter',
             'fullcall' => "LootEncounter:{$encounterId}",
             'actorname' => $currentNpcData['npc_name'],
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $eventTs,
             'gamets' => $gameTs,
             'localts' => time(),
@@ -770,6 +807,7 @@ function chimBglFinalizeLootEncounter($db, int $encounterId): void
         foreach ($participants as $participant) {
             $db->insert('bgl_history', [
                 'npc' => $participant['npc_name'],
+                'actor_key' => chimBglParticipantActorKey($db, $participant),
                 'ts' => (int)$encounter['ts'] + 1,
                 'gamets' => (float)$encounter['gamets'] + 1,
                 'localts' => time(),

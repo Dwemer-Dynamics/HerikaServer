@@ -32,7 +32,11 @@ function chimBglResolveNpc(NpcMaster $npcMaster, string $refid = '', string $npc
 {
     $normalizedRefId = chimBglNormalizeRefId($refid);
     if ($normalizedRefId !== '') {
-        $npc = $npcMaster->getByRefId($normalizedRefId);
+        try {
+            $npc = $npcMaster->getByRefId($normalizedRefId);
+        } catch (RuntimeException $e) {
+            return null; // Duplicate runtime reference: never pick one.
+        }
         if (is_array($npc)) {
             return $npc;
         }
@@ -41,7 +45,8 @@ function chimBglResolveNpc(NpcMaster $npcMaster, string $refid = '', string $npc
     $npcName = trim($npcName);
     if ($npcName !== '') {
         $npc = $npcMaster->getByName($npcName);
-        if (is_array($npc)) {
+        // With a RefID given, the name may only reach an unbound legacy row, never another actor's bound profile.
+        if (is_array($npc) && ($normalizedRefId === '' || !NpcMaster::isActorBound($npc))) {
             return $npc;
         }
     }

@@ -49,6 +49,7 @@ if ($selectedEventsProvided) {
 $result = aiProfileGenerate([
     'db' => $db,
     'name' => $jsonDataInput['name'] ?? '',
+    'npc_id' => $jsonDataInput['npc_id'] ?? 0,
     'connector_id' => $jsonDataInput['connector_id'] ?? '',
     'user_prompt' => $jsonDataInput['user_prompt'] ?? '',
     'event_limit' => $jsonDataInput['event_limit'] ?? 100,

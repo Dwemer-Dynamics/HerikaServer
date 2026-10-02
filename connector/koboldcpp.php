@@ -488,13 +488,13 @@ sentence ::= [a-zA-Z0-9.,?!\' ]*
                     else if ($intent=="OpenBackPack"||$intent=="OpenInventory"||$intent=="ExchangeItems") {
 
                         $this->_functionRawName="OpenInventory@";
-                        $alreadysent[md5("Herika|command|{$this->_functionRawName}\r\n")] = "Herika|command|{$this->_functionRawName}\r\n";
+                        chimRegisterLegacyConnectorCommand($alreadysent, $this->_functionRawName);
                         
                     } else if ($intent=="TakeASeat") {
                         // bypass reponse.
                         $this->_functionRawName="TakeASeat@";
                         
-                        $alreadysent[md5("Herika|command|{$this->_functionRawName}\r\n")] = "Herika|command|{$this->_functionRawName}\r\n";
+                        chimRegisterLegacyConnectorCommand($alreadysent, $this->_functionRawName);
                     } else if ($intent=="GatherInfo") {
                         // bypass reponse.
                         $this->_functionRawName="GatherInfo@{$jsonData["topic"]}";
@@ -540,12 +540,12 @@ sentence ::= [a-zA-Z0-9.,?!\' ]*
                     // bypass reponse.
                     $this->_functionRawName="OpenInventory@";
                     
-                    $alreadysent[md5("Herika|command|{$this->_functionRawName}\r\n")] = "Herika|command|{$this->_functionRawName}\r\n";
+                    chimRegisterLegacyConnectorCommand($alreadysent, $this->_functionRawName);
                 } else if ($kobParsed[0]=="TakeASeat") {
                     // bypass reponse.
                     $this->_functionRawName="TakeASeat@";
                     
-                    $alreadysent[md5("Herika|command|{$this->_functionRawName}\r\n")] = "Herika|command|{$this->_functionRawName}\r\n";
+                    chimRegisterLegacyConnectorCommand($alreadysent, $this->_functionRawName);
                 }   
                     
                 

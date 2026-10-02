@@ -59,6 +59,8 @@ try {
     $offset = ($page - 1) * $limit;
     $npc = trim((string)($_GET['npc'] ?? ''));
     $search = trim((string)($_GET['search'] ?? ''));
+    $actorKey = trim((string)($_GET['actor_key'] ?? ''));
+    $hasActorKey = chimBglHistoryHasActorKey($db);
 
     if (strlen($npc) > 160) {
         $npc = substr($npc, 0, 160);
@@ -74,11 +76,16 @@ try {
     if ($search !== '') {
         $where[] = 'data ILIKE ' . $db->escapeLiteral('%' . $search . '%');
     }
+    // One physical actor's rows by exact key; a name filter still lists every row recorded under that name.
+    if ($actorKey !== '') {
+        $where[] = $hasActorKey ? 'actor_key = ' . $db->escapeLiteral($actorKey) : 'FALSE';
+    }
     $whereSql = implode(' AND ', $where);
 
     $categorySelect = chimBglHistoryCategorySelect($db);
+    $actorKeySelect = $hasActorKey ? ', actor_key' : '';
     $rows = $db->fetchAll(
-        "SELECT rowid, npc, gamets, ts, localts, data{$categorySelect}
+        "SELECT rowid, npc, gamets, ts, localts, data{$categorySelect}{$actorKeySelect}
          FROM bgl_history
          WHERE {$whereSql}
          ORDER BY gamets DESC, ts DESC, rowid DESC
@@ -109,6 +116,7 @@ try {
         return [
             'rowid' => (int)($row['rowid'] ?? 0),
             'npc' => trim((string)($row['npc'] ?? 'Unknown NPC')),
+            'actor_key' => $row['actor_key'] ?? null,
             'activity' => $activity,
             'category' => trim((string)($row['category'] ?? '')) ?: chimBglHistoryCategory($activity),
             'tamrielic_time' => chimBglHistoryTamrielicDate($gamets),

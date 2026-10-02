@@ -404,6 +404,7 @@ function spawnBackgroundLifeNpc($npc_profile, $startingPoint, $inventoryItems)
         'action' => 'TravelTo',
         'fullcall' => 'TravelTo',
         'actorname' => $npc['npc_name'],
+        'actor_key' => chimNpcRowActorKey($npc),
         'ts' => $last_ts,
         'gamets' => $last_gamets,
         'localts' => time(),

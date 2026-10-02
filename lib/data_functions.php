@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/chim_interaction.php';
+require_once __DIR__ . '/core/response_identity.php';
 
 require_once(__DIR__."/utils.php");
 // used for openai_token_count table
@@ -915,17 +916,21 @@ function DataDequeue($timestamp = 0)
 
 }
 
-function DataLastDataFor($actor, $lastNelements = -10)
+// Events the typed actor scope witnessed (explicit row/principal, else the selected matching row) by exact
+// eventlog keys; FALSE without one. Text containing the actor's name never selects rows.
+function DataLastDataFor($actor, $lastNelements = -10, $actorScope = null)
 {
     global $db;
     $lastDialogFull = array();
+    require_once __DIR__ . '/eventlog_helper.php';
+    $actorPeopleSql = chimBuildNpcContextPeopleWhereClause($db, $actor, 'a.people', $actorScope);
     $results = $db->fetchAll("select  
     case 
       when type like 'info%' or type like 'death%' or type like 'funcret%' or type like 'location%' or type='chat_background' or data like '%background chat%' then 'The Narrator:'
       when type='book' then 'The Narrator: ({$GLOBALS["PLAYER_NAME"]} took the book ' 
       else '' 
     end||a.data  as data 
-    FROM  eventlog a WHERE data like '%$actor%' 
+    FROM  eventlog a WHERE $actorPeopleSql
     and type<>'combatend'  
     and type<>'bored' and type<>'init' and type<>'lockpicked' and type<>'infonpc' and type<>'infoloc' and type<>'infoitems' and type<>'info' and type<>'funcret'  and type<>'quest'
     and type<>'user_input'
@@ -1498,7 +1503,9 @@ function DataLastInfoFor($actorBeingCalled, $lastNelements = -2,$addNPCDescripti
 
     $taskActor = trim((string)($GLOBALS['HERIKA_NAME'] ?? ''));
     $taskGamets = (int)($GLOBALS['gameRequest'][2] ?? 0);
-    $taskContext = chimCommitmentFormatContext($taskActor, $taskGamets);
+    // Tasks of the exact selected physical row only; a narrator switch or unkeyed/legacy speaker shows none.
+    $taskOwnerRow = function_exists('chimResponseCurrentPhysicalRow') ? chimResponseCurrentPhysicalRow() : null;
+    $taskContext = $taskOwnerRow ? chimCommitmentFormatContext($taskOwnerRow, $taskGamets) : '';
     if ($taskContext !== '') {
         if (!isset($GLOBALS['PROMPT_NEARBY_SECTIONS'])) {
             $GLOBALS['PROMPT_NEARBY_SECTIONS'] = '';
@@ -2139,13 +2146,16 @@ function removeTalkingToOccurrences($input) {
 
 
 
-function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") {
+function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="", $actorRow = null) {
 
         global $db;
 
         $actorcn=$db->escape($actor);
+        require_once __DIR__ . '/eventlog_helper.php';
+        $actorPeopleSql = chimBuildNpcContextPeopleWhereClause($db, $actor, 'people', $actorRow);
+        $actorSpeechSql = chimBuildSpeechContextWhereClause($db, $actor, $actorRow);
         $results = $db->fetchAll("SELECT speaker,speech,listener,gamets,localts,'speech',gamets - LAG(gamets) OVER (ORDER BY gamets ASC) AS gamets_diff,location,ts
-        FROM speech where companions like '%$actorcn%' order by ts desc LIMIT 1000 OFFSET 0",true);    
+        FROM speech where $actorSpeechSql order by ts desc LIMIT 1000 OFFSET 0",true);
          $rawData=[];
         foreach ($results as $row) {
             $rawData[] = $row;
@@ -2207,14 +2217,14 @@ function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") 
         
 
         $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoaction','itemfound') 
-        and people like '%$actorcn%' and data not  like '%<memory>%' and data not like '%#MEMORY%' order by gamets desc LIMIT 10 OFFSET 0");    
+        and {$actorPeopleSql} and data not  like '%<memory>%' and data not like '%#MEMORY%' order by gamets desc LIMIT 10 OFFSET 0");
         $rawData=[];
         foreach ($results as $row) {
             $lastDialogFull[]= array('role' => 'user', 'content' => "The Narrator: {$row["data"]}",
             "_gs"=>$row["gamets"]);
         }
         
-        $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoloc') and people like '%$actorcn%' order by gamets desc LIMIT 10 OFFSET 0");    
+        $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoloc') and {$actorPeopleSql} order by gamets desc LIMIT 10 OFFSET 0");
         $rawData=[];
         foreach ($results as $row) {
             $lastDialogFull[]= array('role' => 'user', 'content' => "The Narrator: {$row["data"]}",
@@ -2224,7 +2234,7 @@ function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") 
         $results = $db->fetchAll("SELECT gamets,data,ts
             FROM eventlog
             WHERE type in ('inputtext','inputtext_s','ginputtext','ginputtext_s','narrator_inputtext')
-              AND people like '%$actorcn%'
+              AND {$actorPeopleSql}
             ORDER BY gamets desc, ts desc");
         
         $rawData=$results;
@@ -2592,7 +2602,7 @@ function herikaShouldExcludeEventFromPromptContext(array $row): bool
     return false;
 }
 
-function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
+function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="", $actorRow = null) {
 
     global $db;
 
@@ -2619,8 +2629,12 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
 
     $lastDialogFull = array();
     $b_actor = (strlen($actor) > 0);
-    if ($b_actor)
+    if ($b_actor) {
         $actorEscaped=$db->escape($actor);
+        // Exact physical keys of the selected row only; no name fallback (lib/eventlog_helper.php).
+        require_once __DIR__ . '/eventlog_helper.php';
+        $actorPeopleSql = chimBuildNpcContextPeopleWhereClause($db, $actor, 'people', $actorRow);
+    }
     else
         $actorEscaped='';
     //$playerEscaped=$db->escape($GLOBALS["PLAYER_NAME"]);
@@ -2668,14 +2682,8 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="") {
     {$removeBooks} {$sqlfilter} {$ext_sqlfilter1}
     ".(($b_actor) ? "
     AND (
-     people like '%|$actorEscaped|%'
-     or people like '$actorEscaped'
-     or people like '%|$actorEscaped (busy)|%'
-     or people like '%|$actorEscaped (hostile)|%'
-     or people like '%|$actorEscaped (in combat)|%'
-     or people like '%|$actorEscaped (restrained)|%'
+     {$actorPeopleSql}
      or type='info_timeforward'
-     
     )
     " : " ").
     //((false)?" and gamets>".($currentGameTs-(60*60*60*60)):"").
@@ -3329,12 +3337,13 @@ function replaceRoles($lastDialogFull,$actor,$lastNelements) {
 
 }
 
-function DataLastDataExpandedFor($actor, $lastNelements = -10,$sqlfilter="")
+// $actorRow: the selected physical row, or CHIM_ACTOR_KEY_PLAYER/NARRATOR, scoping actor-specific rows by key.
+function DataLastDataExpandedFor($actor, $lastNelements = -10,$sqlfilter="", $actorRow = null)
 {
 
     $localStartTime=microtime(true);
 
-    $ctx1=buildHistoricContext($actor, $lastNelements ,$sqlfilter);    
+    $ctx1=buildHistoricContext($actor, $lastNelements ,$sqlfilter, $actorRow);
     error_log("[buildHistoricContext] Elapsed time: " . (microtime(true) - $localStartTime) . " seconds");
 
 
@@ -3586,17 +3595,19 @@ function DataLastDataExpandedForBak($actor, $lastNelements = -10,$sqlfilter="")
 
 }
 
-function DataSpeechJournal($topic,$limit=50) 
+// $topic '' lists recent speech (display/translation context). An actor journal reads only speech its typed
+// scope (explicit row/principal, else the selected matching row) witnessed; names never select rows.
+function DataSpeechJournal($topic,$limit=50,$actorScope=null)
 {
 
     global $db;
 
     $lastDialogFull = [];
-    $tn=$db->escape($topic);
+    require_once __DIR__ . '/eventlog_helper.php';
+    $speechSql = trim((string)$topic) === '' && $actorScope === null
+        ? 'TRUE' : chimBuildSpeechContextWhereClause($db, $topic, $actorScope);
     $results = $db->fetchAll("SElECT  speaker,speech,location,listener,topic as quest, convert_gamets2skyrim_date(gamets) AS sk_date, gamets FROM speech
-     where (speaker like '%$tn%' or  listener like '%$tn%' or location like '%$tn%' or  
-      companions like '%|$tn|%' or  companions like '%$tn%' OR companions LIKE '%|$tn (busy)|%' 
-      OR companions LIKE '%|$tn (hostile)|%' OR companions LIKE '%|$tn (restrained)|%' ) 
+     where $speechSql
       and listener<>'unknown' 
       order by rowid desc");
     if (!$results) {
@@ -3819,29 +3830,49 @@ function DataLastRetFunc($actor, $lastNelements = -2)
 
 }
 
-function DataLastAction($actor)
+// With $actorKey only that exact owner's rows are read; NULL legacy rows are not adopted.
+function DataLastAction($actor, ?string $actorKey = null)
 {
     global $db;
     
     $lastDialogFull = array();
-    $cnActor = $db->escape($actor);
+    $owner = chimIssuedOwnerClause($db, $actorKey, (string)$actor);
     $results = $db->fetchOne("select  *  FROM public.actions_issued
-    WHERE actorname='$cnActor' order by gamets desc,ts desc LIMIT 1 OFFSET 0");
+    WHERE $owner order by gamets desc,ts desc LIMIT 1 OFFSET 0");
     
     return $results;
 
 }
 
-function DataActorHasDied($actor)
+// Captured deaths match the victim's exact target_key: an explicit $actorKey, a decorated/keyed $actor, or the
+// only keyed row of that name. Text matching is limited to legacy rows without a captured target, so a dead
+// namesake never marks a living actor.
+function DataActorHasDied($actor, $actorKey = null)
 {
     global $db;
-    
-    $lastDialogFull = array();
-    $cnActor = $db->escape($actor);
-    
+    require_once __DIR__ . '/core/npc_reference.php';
+    $actor = trim((string)$actor);
+    if (!is_string($actorKey) || !chimIsActorKey($actorKey)) {
+        $actorKey = null;
+        if (chimIsActorKey($actor)) {
+            $actorKey = $actor;
+        } else {
+            $endpoint = chimResponseResolveActorEndpoint($actor);
+            if ($endpoint === null && !preg_match('/\[RefID:/i', $actor)) {
+                $keys = [];
+                foreach ($db->fetchAll("SELECT * FROM core_npc_master WHERE lower(npc_name)=lower('" . $db->escape($actor) . "')") as $row) {
+                    if (($key = chimNpcRowActorKey($row)) !== null) { $keys[$key] = true; }
+                }
+                if (count($keys) === 1) { $actorKey = array_key_first($keys); }
+            }
+            $actorKey = $actorKey ?? ($endpoint['id'] ?? null);
+        }
+    }
+    // Ownership is the exact target_key only. Unkeyed legacy death rows stay stored for admin views but are never
+    // attributed by text to a same-name actor; an unresolved or ambiguous bare name has no death.
+    if ($actorKey === null) { return false; }
     $rows = $GLOBALS["db"]->fetchAll("select 1 as n,gamets from eventlog where type='death'
-        and (data like '%defeated $cnActor%' or data like '%killed $cnActor%')
-        order by gamets desc limit 1");
+        and target_key='" . $db->escape($actorKey) . "' order by gamets desc limit 1");
     if ($rows)
         return true;
     
@@ -4246,13 +4277,16 @@ function PackIntoSummary($onlyMissingDiary=false)
     global $db;
     
     if ($onlyMissingDiary) {
-        $results = $db->query("insert into memory_summary (gamets_truncated,n,packed_message,summary,classifier,uid,companions,scope)
+        $results = $db->query("insert into memory_summary (gamets_truncated,n,packed_message,summary,classifier,uid,companions,scope,audience_keys,partition_key,source_refs)
         select gamets,1,message,message,'diary',uid,
             case
                 when nullif(trim(speaker), '') is null then ''
                 else '|' || trim(both '|' from trim(speaker)) || '|'
             end,
-            'global'
+            'global',
+            case when owner_key is not null then array[owner_key] end,
+            case when owner_key is not null then 'v2:' || owner_key else 'legacy' end,
+            jsonb_build_array(jsonb_build_object('t', 'memory', 'id', rowid))
         from memory
         where event in ('diary','auto_diary','backgroundlife_diary')
         and uid not in (select uid from memory_summary where classifier in  ('diary','auto_diary','backgroundlife_diary'))");
@@ -4272,28 +4306,49 @@ function PackIntoSummary($onlyMissingDiary=false)
         if ($minEventsPerSummary < 1) {
             $minEventsPerSummary = 1;
         }
-        // Queue boundaries are hard-cut by location changes.
+        // Rows are partitioned by their exact sorted audience keys before anything is packed, so every
+        // summary's audience saw all of its source rows; legacy rows (NULL keys) form their own
+        // unresolved partition and are never attributed by name. Each partition resumes after its own
+        // newest packed row. Queue boundaries are hard-cut by location changes within a partition.
         // Unknown location entries are isolated into their own queue to avoid cross-location mixing.
-        $query="insert into memory_summary (gamets_truncated,n,packed_message,summary,classifier,uid,scope)
-                                with source_rows as (
+        $query="insert into memory_summary (gamets_truncated,n,packed_message,summary,classifier,uid,scope,audience_keys,partition_key,source_refs)
+                                with partitioned_rows as (
                                     select
-                                        uid,
-                                        gamets,
-                                        coalesce(ts, 0) as ts,
-                                        message,
-                                        round(gamets::numeric/$pfi, 0) as time_bucket,
+                                        mv.*,
+                                        case when mv.audience_keys is null then 'legacy'
+                                             else 'v2:' || array_to_string(mv.audience_keys, ',') end as partition_key
+                                    from memory_v mv
+                                    where mv.message not ilike 'Dear Diary%'
+                                ),
+                                partition_floors as (
+                                    select coalesce(partition_key, 'legacy') as partition_key, max(gamets_truncated) as floor_gamets
+                                    from memory_summary
+                                    where classifier='dialogue'
+                                    group by coalesce(partition_key, 'legacy')
+                                ),
+                                source_rows as (
+                                    select
+                                        p.uid,
+                                        p.source_table,
+                                        p.source_rowid,
+                                        p.audience_keys,
+                                        p.partition_key,
+                                        p.gamets,
+                                        coalesce(p.ts, 0) as ts,
+                                        p.message,
+                                        round(p.gamets::numeric/$pfi, 0) as time_bucket,
                                         trim(regexp_replace(coalesce(
-                                            substring(message from '(?i)\\(context\\s+(?:new\\s+)?location:\\s*([^,\\)]+)'),
-                                            substring(message from '(?i)\\(at\\s+([^\\)]+)\\)'),
+                                            substring(p.message from '(?i)\\(context\\s+(?:new\\s+)?location:\\s*([^,\\)]+)'),
+                                            substring(p.message from '(?i)\\(at\\s+([^\\)]+)\\)'),
                                             ''
                                         ), '\\s+', ' ', 'g')) as location_key
-                                    from memory_v
-                                    where message not ilike 'Dear Diary%'
-                                      and gamets>$maxRow
+                                    from partitioned_rows p
+                                    left join partition_floors f on f.partition_key = p.partition_key
+                                    where p.gamets > case when p.partition_key = 'legacy' then $maxRow else coalesce(f.floor_gamets, 0) end
                                 ),
                                 normalized_rows as (
                                     select
-                                        uid,
+                                        uid, source_table, source_rowid, audience_keys, partition_key,
                                         gamets,
                                         ts,
                                         message,
@@ -4306,24 +4361,18 @@ function PackIntoSummary($onlyMissingDiary=false)
                                 ),
                                 queue_boundaries as (
                                     select
-                                        uid,
-                                        gamets,
-                                        ts,
-                                        message,
-                                        time_bucket,
-                                        location_key,
-                                        lag(location_key) over (order by gamets asc, ts asc, uid asc) as prev_location_key,
-                                        lag(time_bucket) over (order by gamets asc, ts asc, uid asc) as prev_time_bucket
+                                        *,
+                                        lag(location_key) over w as prev_location_key,
+                                        lag(time_bucket) over w as prev_time_bucket,
+                                        row_number() over w as partition_position
                                     from normalized_rows
+                                    window w as (partition by partition_key order by gamets asc, ts asc, source_table asc, source_rowid asc)
                                 ),
                                 queued_rows as (
                                     select
-                                        uid,
-                                        gamets,
-                                        ts,
-                                        message,
+                                        *,
                                         case
-                                            when prev_time_bucket is null then 1
+                                            when partition_position = 1 then 1
                                             when location_key is null then 1
                                             when prev_location_key is null then 1
                                             when location_key<>prev_location_key then 1
@@ -4334,42 +4383,46 @@ function PackIntoSummary($onlyMissingDiary=false)
                                 ),
                                 grouped_rows as (
                                     select
-                                        uid,
-                                        gamets,
-                                        ts,
-                                        message,
+                                        *,
                                         sum(is_new_queue) over (
-                                            order by gamets asc, ts asc, uid asc
+                                            partition by partition_key
+                                            order by gamets asc, ts asc, source_table asc, source_rowid asc
                                             rows between unbounded preceding and current row
                                         ) as queue_id
                                     from queued_rows
                                 )
-                                select * from (
+                                select gamets_truncated,n,packed_message,summary,classifier,uid,scope,audience_keys,partition_key,source_refs from (
                                     select
                                         max(gamets) as gamets_truncated,
                                         count(*) as n,
-                                        STRING_AGG(message, chr(13) || chr(10) || chr(13) || chr(10) order by gamets asc, ts asc, uid asc) AS packed_message,
+                                        STRING_AGG(message, chr(13) || chr(10) || chr(13) || chr(10) order by gamets asc, ts asc, source_table asc, source_rowid asc) AS packed_message,
                                         NULL as summary,
                                         'dialogue' as classifier,
                                         max(uid) as uid,
-                                        'global' as scope
+                                        'global' as scope,
+                                        min(audience_keys) as audience_keys,
+                                        partition_key,
+                                        jsonb_agg(jsonb_build_object('t', source_table, 'id', source_rowid) order by gamets asc, ts asc, source_table asc, source_rowid asc) as source_refs
                                     from grouped_rows
-                                    group by queue_id
+                                    group by partition_key, queue_id
                                     having count(*)>=$minEventsPerSummary
                                     order by max(gamets) asc
                                 ) as T
-                                where gamets_truncated>$maxRow and gamets_truncated<$minRowTs";
+                                where gamets_truncated<$minRowTs";
         //error_log($query);
 
         $results = $db->query($query);
         
-        $results = $db->query("insert into memory_summary (gamets_truncated,n,packed_message,summary,classifier,uid,companions,scope)
+        $results = $db->query("insert into memory_summary (gamets_truncated,n,packed_message,summary,classifier,uid,companions,scope,audience_keys,partition_key,source_refs)
                                     select gamets,1,message,message,'diary',uid,
                                         case
                                             when nullif(trim(speaker), '') is null then ''
                                             else '|' || trim(both '|' from trim(speaker)) || '|'
                                         end,
-                                        'global'
+                                        'global',
+                                        case when owner_key is not null then array[owner_key] end,
+                                        case when owner_key is not null then 'v2:' || owner_key else 'legacy' end,
+                                        jsonb_build_array(jsonb_build_object('t', 'memory', 'id', rowid))
                                     from memory
                                     where event='diary'
                                     and gamets>$maxRow
@@ -4745,14 +4798,15 @@ function chimDataActorStatusBlocksCloseRange($token, $includeBusy = false)
     return preg_match('/^(?:busy|hostile|in combat|far away|too far away|restrained|dead|disabled|unavailable|checking|can[\'"]?t hear you|no target|no crosshair target)/i', $status) === 1;
 }
 
-function DataBeingsInCloseRange($excludeFarAway=false, $includeBusy=false)
+function DataBeingsInCloseRange($excludeFarAway=false, $includeBusy=false, ?array $closeRangeEvent=null)
 {
 
     global $db;
 
     $s_res = "";
     
-    $lastLoc=$db->fetchAll("SELECT a.data as data FROM eventlog a WHERE type in ('infonpc_close') order by gamets desc,ts desc LIMIT 1 OFFSET 0");
+    $lastLoc=$closeRangeEvent !== null ? [$closeRangeEvent]
+        : $db->fetchAll("SELECT a.data as data FROM eventlog a WHERE type in ('infonpc_close') order by gamets desc,ts desc LIMIT 1 OFFSET 0");
     if (!is_array($lastLoc) || sizeof($lastLoc)==0) {
         return "";
     }
@@ -4768,36 +4822,67 @@ function DataBeingsInCloseRange($excludeFarAway=false, $includeBusy=false)
             $beingsArray=[];
         $beingsArrayNew=[];
         foreach ($beingsArray as $k=>$v) {
-            $v = trim((string)$v);
-            if ($excludeFarAway && chimDataActorStatusBlocksCloseRange($v, $includeBusy))
-                continue;
-            if (preg_match('/\((?:dead|disabled)\)\s*$/i', $v)) //??
-                continue;
-            if (empty($v))
-                continue;
-            $actorName = chimDataStripActorStateSuffix($v);
-            if (empty($actorName))
-                continue;
-            //if (strpos($v,")")===false) 
-                if (strpos($actorName,"Horse")!==0)
-                    if (strpos($actorName,"Chicken")!==0)
-                    if (strpos($actorName,"Goat")!==0)
-                    if (strpos($actorName,"House Cat")!==0)
-                    if (strpos($actorName,"Stray Cat")!==0)
-                    if (strpos($actorName,"Cow")!==0)
-                    if (strpos($actorName,"Deer")!==0)
-                    if (strpos($actorName,"Elk")!==0)
-                    if (strpos($actorName,"Bear")!==0)
-                    if (strpos($actorName,"Rabbit")!==0)
-                    if (strpos($actorName,"Troll")!==0)
-                    if (strpos($actorName,"Fox")!==0)
-                        $beingsArrayNew[]=$actorName;
+            $actorName = chimDataCloseRangeBeingName($v, $excludeFarAway, $includeBusy);
+            if ($actorName !== "")
+                $beingsArrayNew[]=$actorName;
         }
         $beingsFormatted=implode("|",$beingsArrayNew);
         $s_res = "|".$beingsFormatted."|";
     }
 
     return $s_res;
+}
+
+// One close-range token (state suffix included) through the shared state/animal policy: its bare name,
+// or "" when excluded.
+function chimDataCloseRangeBeingName($token, $excludeFarAway = false, $includeBusy = false): string
+{
+    $v = trim((string)$token);
+    if ($excludeFarAway && chimDataActorStatusBlocksCloseRange($v, $includeBusy))
+        return "";
+    if (preg_match('/\((?:dead|disabled)\)\s*$/i', $v)) //??
+        return "";
+    if (empty($v))
+        return "";
+    $actorName = chimDataStripActorStateSuffix($v);
+    if (empty($actorName))
+        return "";
+    foreach (["Horse", "Chicken", "Goat", "House Cat", "Stray Cat", "Cow", "Deer", "Elk", "Bear", "Rabbit", "Troll", "Fox"] as $animal) {
+        if (strpos($actorName, $animal) === 0)
+            return "";
+    }
+    return $actorName;
+}
+
+// Typed roster of the latest infonpc_close event: each captured participant that passes the same filters
+// as DataBeingsInCloseRange, with its exact registered physical row. A participant without a physical key,
+// or whose key is not registered, keeps 'row' => null; no row is ever chosen by name.
+function DataCloseRangeActorRoster($excludeFarAway = false, $includeBusy = false): array
+{
+    global $db;
+    require_once __DIR__ . '/core/npc_reference.php';
+    $event = $db->fetchOne("SELECT data, people FROM eventlog WHERE type IN ('infonpc_close') ORDER BY gamets DESC, ts DESC LIMIT 1");
+    if (!is_array($event) || !$event) {
+        return [];
+    }
+    $parsed = chimParseEventParticipants($event['people'] ?? '');
+    $npcMaster = new NpcMaster();
+    $roster = [];
+    foreach ($parsed['participants'] as $participant) {
+        // Each participant's own captured name (with its state suffix) is filtered, so a living actor never
+        // admits a dead or busy namesake.
+        $name = chimDataCloseRangeBeingName((string)$participant['name'], $excludeFarAway, $includeBusy);
+        if ($name === '') {
+            continue;
+        }
+        $key = $parsed['version'] === CHIM_ACTOR_IDENTITY_VERSION ? $participant['id'] : null;
+        $row = null;
+        if (is_string($key) && preg_match('/^(ref|dyn):/', $key)) {
+            try { $row = $npcMaster->getByActorKey($key) ?: null; } catch (Throwable $e) { $row = null; }
+        }
+        $roster[] = ['name' => $name, 'key' => $key, 'row' => $row];
+    }
+    return $roster;
 }
 
 function DataItemsInCloseRange()
@@ -4965,76 +5050,128 @@ function DirectConversationsWith($actor, $speaker="")
     
 }
 
-function isIndividualMemoryEnabledForNpc($npcName)
+// Individual memory is a setting of the selected physical row (its extended_data), never of a name.
+// Without a typed physical row it is off; same-name rows never share the setting.
+function isIndividualMemoryEnabledForNpc($npcName, $actorScope = null)
 {
-    static $cache = [];
-
-    $npcName = trim((string) $npcName);
-    if ($npcName === '' || $npcName === '%' || strpos($npcName, '%') !== false || strpos($npcName, '_') !== false) {
+    $row = chimMemoryActorScope($npcName, $actorScope);
+    if (!is_array($row)) {
         return false;
     }
-
-    if (isset($cache[$npcName])) {
-        return $cache[$npcName];
+    $extendedData = is_array($row['extended_data'] ?? null)
+        ? $row['extended_data'] : json_decode((string)($row['extended_data'] ?? ''), true);
+    if (!is_array($extendedData) || !array_key_exists('individual_memory_enabled', $extendedData)
+        || $extendedData['individual_memory_enabled'] === null || $extendedData['individual_memory_enabled'] === '') {
+        return false;
     }
-
-    $enabled = false;
-    try {
-        $escaped = $GLOBALS["db"]->escape($npcName);
-        $row = $GLOBALS["db"]->fetchOne("SELECT extended_data FROM core_npc_master WHERE npc_name='$escaped' LIMIT 1");
-        if (is_array($row) && !empty($row["extended_data"])) {
-            $extendedData = json_decode($row["extended_data"], true);
-            if (
-                is_array($extendedData)
-                && array_key_exists('individual_memory_enabled', $extendedData)
-                && $extendedData['individual_memory_enabled'] !== null
-                && $extendedData['individual_memory_enabled'] !== ''
-            ) {
-                $enabled = !empty($extendedData['individual_memory_enabled']);
-            }
-        }
-    } catch (Throwable $e) {
-        Logger::warn("isIndividualMemoryEnabledForNpc failed for {$npcName}: " . $e->getMessage());
-    }
-
-    $cache[$npcName] = $enabled;
-    return $enabled;
+    return !empty($extendedData['individual_memory_enabled']);
 }
 
-function dataGetMemoryScopeConditionSql($npcName)
+// Individual summaries are scoped by the stable key of the physical row that generated them; linked
+// references read them through the current group key expansion and lose them on unlink. Legacy
+// scope=name rows stay stored but are never read by a name.
+function dataGetMemoryScopeConditionSql($npcName, $actorScope = null)
 {
-    if (isIndividualMemoryEnabledForNpc($npcName)) {
-        $npcEsc = $GLOBALS["db"]->escape($npcName);
-        return "scope='$npcEsc'";
+    $scope = chimMemoryActorScope($npcName, $actorScope);
+    if (is_array($scope) && isIndividualMemoryEnabledForNpc($npcName, $scope)) {
+        $quoted = [];
+        foreach (chimMemoryContextActorKeys($scope) as $key) {
+            $quoted[] = "'" . $GLOBALS['db']->escape($key) . "'";
+        }
+        return $quoted ? 'scope IN (' . implode(',', $quoted) . ')' : 'FALSE';
     }
 
     return "(scope IS NULL OR scope='global')";
 }
 
+// The typed principal of an actor-specific memory read: an explicit physical row or reserved principal,
+// else the request's selected physical row when it is this actor, else the Narrator when this request
+// was typed as a narrator request. Null otherwise: names never select a principal, so a physical NPC
+// named "The Narrator" or like the player is that NPC, not the omniscient Narrator.
+function chimMemoryActorScope($npcName, $actorScope = null)
+{
+    require_once __DIR__ . '/core/npc_reference.php';
+    if (is_array($actorScope)) {
+        return (int)($actorScope['id'] ?? 0) > 0 ? $actorScope : null;
+    }
+    if ($actorScope === CHIM_ACTOR_KEY_NARRATOR || $actorScope === CHIM_ACTOR_KEY_PLAYER) {
+        return $actorScope;
+    }
+    if ($actorScope !== null) {
+        return null;
+    }
+    require_once __DIR__ . '/eventlog_helper.php';
+    $npcName = trim((string)$npcName);
+    $row = $npcName !== '' ? chimCurrentContextActorRow($npcName) : null;
+    if ($row !== null) {
+        return $row;
+    }
+    if (($GLOBALS['CHIM_CONTEXT_ACTOR_PRINCIPAL'] ?? null) === CHIM_ACTOR_KEY_NARRATOR
+        && ($npcName === '' || $npcName === 'The Narrator')) {
+        return CHIM_ACTOR_KEY_NARRATOR;
+    }
+    return null;
+}
+
 function dataGetMemoryCompanionConditionSql(
     $npcName,
     string $column = 'companions',
-    string $classifierColumn = 'classifier'
+    string $classifierColumn = 'classifier',
+    $actorScope = null
 ): string
 {
-    $npcName = trim((string)$npcName);
-    if ($npcName === '') {
+    $keysColumn = preg_replace('/companions$/', 'audience_keys', $column);
+    $scope = chimMemoryActorScope($npcName, $actorScope);
+    if ($scope === CHIM_ACTOR_KEY_NARRATOR) {
         $narratorOnlyDiaryAccess = filter_var(
             $GLOBALS['NARRATOR_ONLY_DIARY_ACCESS'] ?? false,
             FILTER_VALIDATE_BOOLEAN
         );
         if (!$narratorOnlyDiaryAccess) {
-            // By default, the narrator searches every NPC diary in the global memory bank.
+            // By default, the typed Narrator searches every NPC diary in the global memory bank.
             return 'TRUE';
         }
 
-        $narratorName = $GLOBALS['db']->escape('The Narrator');
         return "(COALESCE($classifierColumn, '') NOT IN ('diary','auto_diary','backgroundlife_diary')"
-            . " OR $column LIKE '%|$narratorName|%' OR $column='$narratorName')";
+            . ' OR ' . chimMemoryAudienceKeysWhereClause([CHIM_ACTOR_KEY_NARRATOR], $keysColumn) . ')';
     }
 
-    $npcEsc = $GLOBALS['db']->escape($npcName);
-    return "($column LIKE '%|$npcEsc|%' OR $column='$npcEsc')";
+    // A keyed actor reads only summaries whose exact audience includes its key or an explicitly linked
+    // reference's key; this runs inside WHERE, before ranking and LIMIT. Without a typed physical key the
+    // read is empty: legacy (unresolved) summaries stay stored and displayable but are never injected.
+    if (is_array($scope)) {
+        return chimMemoryAudienceKeysWhereClause(chimMemoryContextActorKeys($scope), $keysColumn);
+    }
+    if ($scope === CHIM_ACTOR_KEY_PLAYER) {
+        return chimMemoryAudienceKeysWhereClause([CHIM_ACTOR_KEY_PLAYER], $keysColumn);
+    }
+    return 'FALSE';
+}
+
+// The keyed physical row for an actor-specific read, or null.
+function chimMemoryContextActorRow($npcName)
+{
+    require_once __DIR__ . '/eventlog_helper.php';
+    $row = chimCurrentContextActorRow($npcName);
+    return ($row !== null && chimNpcRowActorKey($row) !== null) ? $row : null;
+}
+
+function chimMemoryContextActorKeys(array $actorRow): array
+{
+    require_once __DIR__ . '/eventlog_helper.php';
+    return chimResolveContextActorKeys($GLOBALS['db'], $actorRow);
+}
+
+// Exact memory_summary audience condition; FALSE without valid keys.
+function chimMemoryAudienceKeysWhereClause(array $keys, string $keysColumn = 'audience_keys'): string
+{
+    require_once __DIR__ . '/core/npc_reference.php';
+    if (!preg_match('/^(?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_][A-Za-z0-9_]*$/', $keysColumn)) { $keysColumn = 'audience_keys'; }
+    $quoted = [];
+    foreach ($keys as $key) {
+        if (chimIsActorKey($key)) { $quoted[$key] = "'" . $GLOBALS['db']->escape($key) . "'"; }
+    }
+    return $quoted ? "($keysColumn IS NOT NULL AND $keysColumn && ARRAY[" . implode(',', $quoted) . "]::text[])" : 'FALSE';
 }
 
 /**
@@ -5075,7 +5212,7 @@ function chimShortTermMemoryInCompactChatEnabled(): bool
  * The middle-term digest only regenerates every ten summaries, so the rows past its hightide that
  * have already scrolled out of the window are invisible to the NPC. This reads exactly those.
  *
- *  lower bound = array_key_last(extended_data.middle_term_memory), or 0 if the NPC has no digest
+ *  lower bound = the latest digest usable by this actor's current group (chimMiddleTermLatestDigest), or 0
  *  upper bound = the straddling summary (the oldest whose bucket reaches $GLOBALS["CONTEXT_WINDOW_FLOOR"])
  *  cap         = $GLOBALS["SHORT_TERM_MEMORY_MAX"], default 10
  *
@@ -5107,13 +5244,14 @@ function DataShortTermMemoryFor($actor, $sqlfilter = "")
     try {
         // Lower bound: where the middle-term digest ends.
         $mtmHightide = 0;
-        $npcMaster = new NpcMaster();
-        $npcRow = $npcMaster->getByName($actor);
-        if ($npcRow) {
-            $ed = $npcMaster->getExtendedData($npcRow);
-            if (isset($ed["middle_term_memory"]) && is_array($ed["middle_term_memory"]) && count($ed["middle_term_memory"])) {
-                $mtmHightide = intval(array_key_last($ed["middle_term_memory"]));
-            }
+        // The selected physical row's usable middle-term hightide; never a same-name row's, and never an
+        // entry this group cannot read (legacy, edited or from an unlinked reference), which would hide
+        // summaries no prompt digest covers.
+        require_once __DIR__ . '/core/npc_profile_sharing.php';
+        $npcRow = chimMemoryActorScope($actor);
+        $mtmDigest = is_array($npcRow) ? chimMiddleTermLatestDigest($npcRow) : null;
+        if ($mtmDigest) {
+            $mtmHightide = $mtmDigest['gamets'];
         }
 
         $scopeConditionSql     = dataGetMemoryScopeConditionSql($actor);
@@ -5206,7 +5344,7 @@ function chimAttachShortTermMemoryToWindow(array $window, string $actor, string 
 }
 
 
-function DataSearchMemory($rawstring,$npcfilter) {
+function DataSearchMemory($rawstring,$npcfilter,$actorScope=null) {
     
     //$kw=explode(" ",($rawstring));
     if (is_array($rawstring)) {
@@ -5330,8 +5468,8 @@ function DataSearchMemory($rawstring,$npcfilter) {
     
     
     
-    $scopeConditionSql = dataGetMemoryScopeConditionSql($npcfilter);
-    $companionConditionSql = dataGetMemoryCompanionConditionSql($npcfilter, 'A.companions', 'A.classifier');
+    $scopeConditionSql = dataGetMemoryScopeConditionSql($npcfilter, $actorScope);
+    $companionConditionSql = dataGetMemoryCompanionConditionSql($npcfilter, 'A.companions', 'A.classifier', $actorScope);
 
     $memory=$GLOBALS["db"]->fetchAll("
         SELECT summary,gamets_truncated,
@@ -5383,7 +5521,7 @@ function chimNormalizeTsQueryTerms(string $text): array {
     return array_values(array_unique($terms));
 }
 
-function DataSearchMemoryByVector($rawstring,$npcfilter,$useContextKw=false,$timeThreshold=0) {
+function DataSearchMemoryByVector($rawstring,$npcfilter,$useContextKw=false,$timeThreshold=0,$actorScope=null) {
     
         $localStartTime=microtime(true);
         Logger::info("Using DataSearchMemoryByVector $rawstring,$npcfilter,$useContextKw=false,$timeThreshold=0");
@@ -5539,11 +5677,11 @@ function DataSearchMemoryByVector($rawstring,$npcfilter,$useContextKw=false,$tim
 
        
         if (!empty($npcfilter) && $useContextKw) {
-            $result=array_merge($result,lastKeyWordsContext(5,$npcfilter));
+            $result=array_merge($result,lastKeyWordsContext(5,$npcfilter,$actorScope));
         }
 
-        $scopeConditionSql = dataGetMemoryScopeConditionSql($npcfilter);
-        $companionConditionSql = dataGetMemoryCompanionConditionSql($npcfilter);
+        $scopeConditionSql = dataGetMemoryScopeConditionSql($npcfilter, $actorScope);
+        $companionConditionSql = dataGetMemoryCompanionConditionSql($npcfilter, 'companions', 'classifier', $actorScope);
 
         $contextKeywords  = implode(" ", $result);
         $contextKeywords=strtr(internalDumbTranslator($contextKeywords),["remember"=>"","Remember"=>"","do you remember"=>""]);
@@ -5639,7 +5777,7 @@ function DataSearchMemoryByVector($rawstring,$npcfilter,$useContextKw=false,$tim
                          ts_rank(native_vec, to_tsquery('$kwStringAll')) AS rank_all_fts
                     FROM public.memory_summary 
                     WHERE embedding IS NOT NULL
-                    and companions like '%{$GLOBALS["db"]->escape($npcfilter)}%'
+                    AND $companionConditionSql
                     ORDER BY (embedding <-> $vectorString)-ts_rank(native_vec, to_tsquery('$kwStringAny')) 
                     LIMIT 5 OFFSET 0
                 ");*/
@@ -6533,6 +6671,17 @@ function call_llm_internal() {
                 }
             }
             
+            // Rewritten actions keep their original identity envelope; a rewrite that cannot carry it is dropped.
+            foreach ($actions as $n=>$singleaction) {
+                if (isset($copyActions[$n]) && $copyActions[$n] !== $singleaction) {
+                    $actions[$n] = chimResponseReattachIdentity($singleaction, $copyActions[$n]);
+                    if ($actions[$n] === '') {
+                        error_log("[RESPONSE_IDENTITY] Dropping rewritten action that cannot carry its identity: " . $singleaction);
+                        unset($actions[$n]);
+                    }
+                }
+            }
+
             // Log actions
             foreach ($actions as $n=>$singleaction) {
                 $actionPart=explode("|",$singleaction); 
@@ -6544,6 +6693,7 @@ function call_llm_internal() {
                         'action' => $actionArg[0],
                         'fullcall' =>$singleaction,
                         'actorname'=> isset($GLOBALS["PATCH_ACTION_ALL_ACTORS"])?$GLOBALS["PATCH_ACTION_ALL_ACTORS"]:$actionPart[0],
+                        'actor_key' => isset($GLOBALS["PATCH_ACTION_ALL_ACTORS"]) ? null : chimResponseActionActorKey($actionPart),
                         'ts' => $gameRequest[1],
                         'gamets' => $gameRequest[2],
                         'localts'=>time(),
@@ -6579,12 +6729,21 @@ function call_llm_internal() {
     return $outputWasValid;
 }
 
-function AddFirstTimeMet($followerName,$momentum,$gamets,$ts) {
+// First-met memory for the selected physical row registered by this request. The owner is that row's
+// key, the first meeting is the earliest speech its key witnessed, and the already-recorded check is by
+// owner_key; nothing is inferred from the follower name. Unkeyed (legacy) rows get no new memory.
+function AddFirstTimeMet($followerName,$momentum,$gamets,$ts,$actorRow=null) {
 
-    $fn=$GLOBALS["db"]->escape($followerName);
-    
+    require_once __DIR__ . '/eventlog_helper.php';
+    require_once __DIR__ . '/core/npc_reference.php';
+    $ownerKey = is_array($actorRow) && (int)($actorRow['id'] ?? 0) > 0 ? chimNpcRowActorKey($actorRow) : null;
+    if ($ownerKey === null) {
+        return;
+    }
+    $ownerEsc = $GLOBALS["db"]->escape($ownerKey);
+
     // Check if already recorded - with error handling
-    $already = @$GLOBALS["db"]->fetchAll("select 1 as t from memory where event='first_met' and message like '%met {$fn}%'");
+    $already = @$GLOBALS["db"]->fetchAll("select 1 as t from memory where event='first_met' and owner_key='{$ownerEsc}'");
     if ($already === false) {
         Logger::warn("[AddFirstTimeMet] Query to memory table failed for follower: {$followerName}");
         return;
@@ -6596,7 +6755,8 @@ function AddFirstTimeMet($followerName,$momentum,$gamets,$ts) {
     }
 
     // Get first interaction timestamp - with error handling
-    $realFirst = @$GLOBALS["db"]->fetchAll("SELECT gamets,convert_gamets2skyrim_date(gamets) as sk_date,ts,localts FROM speech where companions ilike '%$fn%' order by rowid asc limit 1 offset 0");
+    $speechSql = chimBuildSpeechActorKeysWhereClause($GLOBALS["db"], [$ownerKey]);
+    $realFirst = @$GLOBALS["db"]->fetchAll("SELECT gamets,convert_gamets2skyrim_date(gamets) as sk_date,ts,localts FROM speech where $speechSql order by rowid asc limit 1 offset 0");
     
     if ($realFirst === false) {
         Logger::warn("[AddFirstTimeMet] Query to speech table failed for follower: {$followerName}");
@@ -6611,14 +6771,42 @@ function AddFirstTimeMet($followerName,$momentum,$gamets,$ts) {
 
         logMemory($GLOBALS["PLAYER_NAME"], $followerName,
         "(Important note: {$GLOBALS["PLAYER_NAME"]} met {$followerName} for the first time on {$sk_date}. This is an important event, so use tag #FirstTimeMet.)",
-        $momentum, $gamets,'first_met',$ts);
+        $momentum, $gamets,'first_met',$ts, $ownerKey);
     }
 
 
 }
 
 
-function DataRetrieveFirstTimeMet($s_player_name, $s_npc_name) {
+// Speech between the player and the typed actor scope by captured roles: player speaker with the actor's
+// key among listener_keys, or the actor's key as speaker with the player among listener_keys. Names (and
+// a namesake row) never match; FALSE without a typed key.
+function chimPlayerSpeechPairWhereClause($npcName, $actorScope = null)
+{
+    require_once __DIR__ . '/eventlog_helper.php';
+    $db = $GLOBALS['db'];
+    $keys = chimResolveContextActorKeys($db, $actorScope ?? chimCurrentContextActorRow($npcName));
+    $keys = array_values(array_filter($keys, static fn($key) => chimIsActorKey($key) && $key !== CHIM_ACTOR_KEY_PLAYER));
+    if (!$keys) {
+        return 'FALSE';
+    }
+    $list = implode(',', array_map(static fn($key) => "'" . $db->escape($key) . "'", $keys));
+    $listeners = "(CASE WHEN left(COALESCE(listener_keys, ''), 1) = '[' THEN listener_keys::jsonb END)";
+    return "((speaker_key = 'player' AND $listeners ?| ARRAY[$list]::text[])"
+        . " OR (speaker_key IN ($list) AND $listeners ? 'player'))";
+}
+
+// first_met memories owned by the typed actor scope's keys; FALSE without one.
+function chimFirstMetOwnerWhereClause($npcName, $actorScope = null)
+{
+    require_once __DIR__ . '/eventlog_helper.php';
+    $db = $GLOBALS['db'];
+    $keys = chimResolveContextActorKeys($db, $actorScope ?? chimCurrentContextActorRow($npcName));
+    $keys = array_values(array_filter($keys, static fn($key) => chimIsActorKey($key)));
+    return $keys ? 'owner_key IN (' . implode(',', array_map(static fn($key) => "'" . $db->escape($key) . "'", $keys)) . ')' : 'FALSE';
+}
+
+function DataRetrieveFirstTimeMet($s_player_name, $s_npc_name, $actorScope = null) {
     global $db;
 
 	$s_res = "";
@@ -6632,18 +6820,17 @@ function DataRetrieveFirstTimeMet($s_player_name, $s_npc_name) {
 
         $crt_gamets = intval(DataLastKnownGameTS());
 
+		$ownerSql = chimFirstMetOwnerWhereClause($s_npc_name, $actorScope);
 		$db_rec = $db->fetchAll("SELECT speaker,listener,
 			message,gamets,momentum,rowid  
 			FROM memory 
-			WHERE event = 'first_met' AND gamets > 0 AND
-			((speaker = '{$s_player}' AND listener = '$s_npc') OR
-			(listener = '{$s_player}' AND speaker = '$s_npc'))
+			WHERE event = 'first_met' AND gamets > 0 AND $ownerSql
 			ORDER BY rowid ASC LIMIT 1; ");
             
         $b_found_memory = (is_array($db_rec) && sizeof($db_rec)>0); 
         
         if (!$b_found_memory) { // check conversations
-            $gts_met = GetFirstInteraction($s_player, $s_npc); 
+            $gts_met = GetFirstInteraction($s_player_name, $s_npc_name, $actorScope);
         } else {
 			$gts_met = intval($db_rec[0]['gamets'] ?? 0);
 		}
@@ -6669,7 +6856,7 @@ function DataRetrieveFirstTimeMet($s_player_name, $s_npc_name) {
 	return $s_res;
 }
 
-function GetFirstTimeMetMemory($s_player_name, $s_npc_name) {
+function GetFirstTimeMetMemory($s_player_name, $s_npc_name, $actorScope = null) {
     global $db;
     $i_res = 0;
 
@@ -6679,12 +6866,11 @@ function GetFirstTimeMetMemory($s_player_name, $s_npc_name) {
 
         //$crt_gamets = intval(DataLastKnownGameTS());
 
+		$ownerSql = chimFirstMetOwnerWhereClause($s_npc_name, $actorScope);
 		$db_rec = $db->fetchAll("SELECT speaker,listener,
 			message,gamets,momentum,rowid  
 			FROM memory 
-			WHERE event = 'first_met' AND gamets > 0 AND
-			((speaker = '{$s_player}' AND listener = '$s_npc') OR
-			(listener = '{$s_player}' AND speaker = '$s_npc'))
+			WHERE event = 'first_met' AND gamets > 0 AND $ownerSql
 			ORDER BY rowid ASC LIMIT 1; ");
             
         $b_found_memory = (is_array($db_rec) && sizeof($db_rec)>0); 
@@ -6697,30 +6883,27 @@ function GetFirstTimeMetMemory($s_player_name, $s_npc_name) {
 	return $i_res;
 }
 
-function GetFirstTimeMet($s_player_name, $s_npc_name) {
+function GetFirstTimeMet($s_player_name, $s_npc_name, $actorScope = null) {
     $i_res = 0;
 
 	if ((strlen($s_player_name)>0) && (strlen($s_npc_name)>0) && ($s_player_name != $s_npc_name)) {
         
-        $i_res = GetFirstTimeMetMemory($s_player_name, $s_npc_name); 
+        $i_res = GetFirstTimeMetMemory($s_player_name, $s_npc_name, $actorScope);
 
         if ($i_res <= 0) { // check conversations
-            $i_res = GetFirstInteraction($s_player_name, $s_npc_name); 
+            $i_res = GetFirstInteraction($s_player_name, $s_npc_name, $actorScope);
 		}
 	}
 	return $i_res;
 }
 
-function GetLastInteraction($s_player_name, $s_npc_name) {
+function GetLastInteraction($s_player_name, $s_npc_name, $actorScope = null) {
     global $db;
 	$i_res = 0;
 	if ((strlen($s_player_name)>0) && (strlen($s_npc_name)>0) && ($s_player_name != $s_npc_name)) {
-		$s_player = $db->escape($s_player_name);
-		$s_npc = $db->escape($s_npc_name);
+		$pairSql = chimPlayerSpeechPairWhereClause($s_npc_name, $actorScope);
 		$db_rec = $db->fetchAll("SELECT gamets FROM speech 
-        WHERE (gamets > 0) AND 
-          ((speaker = '{$s_player}' AND listener = '{$s_npc}') OR 
-          (listener = '{$s_player}' AND speaker = '{$s_npc}'))  
+        WHERE (gamets > 0) AND $pairSql
         ORDER BY gamets DESC LIMIT 1 ");
 		if (is_array($db_rec) && sizeof($db_rec)>0) {
 			$i_res = intval($db_rec[0]['gamets']);
@@ -6741,16 +6924,13 @@ function GetLastSpeechTs() {
 	return $i_res;
 }
 
-function GetFirstInteraction($s_player_name, $s_npc_name) {
+function GetFirstInteraction($s_player_name, $s_npc_name, $actorScope = null) {
     global $db;
 	$i_res = 0;
 	if ((strlen($s_player_name)>0) && (strlen($s_npc_name)>0) && ($s_player_name != $s_npc_name)) {
-		$s_player = $db->escape($s_player_name);
-		$s_npc = $db->escape($s_npc_name);
+		$pairSql = chimPlayerSpeechPairWhereClause($s_npc_name, $actorScope);
 		$db_rec = $db->fetchAll("SELECT gamets FROM speech 
-        WHERE (gamets > 0) AND 
-          ((speaker = '{$s_player}' AND listener = '{$s_npc}') OR 
-          (listener = '{$s_player}' AND speaker = '{$s_npc}'))  
+        WHERE (gamets > 0) AND $pairSql
         ORDER BY gamets ASC LIMIT 1 ");
 		if (is_array($db_rec) && sizeof($db_rec)>0) {
 			$i_res = intval($db_rec[0]['gamets']);
@@ -7061,7 +7241,7 @@ function profile_exists($npcname) {
     return file_exists($path . "conf".DIRECTORY_SEPARATOR."conf_$newConfFile.php");
 }
 
-function createProfile($npcname, $FORCE_PARMS = [], $overwrite = false, $baseprofile = '')
+function createProfile($npcname, $FORCE_PARMS = [], $overwrite = false, $baseprofile = '', $profileIdentity = [])
 {
     // This should be done at NpcMaster::createProfile
     global $db;
@@ -7076,7 +7256,22 @@ function createProfile($npcname, $FORCE_PARMS = [], $overwrite = false, $basepro
     $baseprofileName = npcNameToCodename($baseprofile);
 
     $npcMaster = new NpcMaster();
-    $currentNpcData = $npcMaster->getByName($npcname);
+    $refid = is_array($profileIdentity) ? NpcMaster::normalizeRefId($profileIdentity['refid'] ?? '') : '';
+    $identityFields = $refid !== ''
+        ? ['refid' => $refid, 'md5' => NpcMaster::identityMd5(['npc_name' => $npcname, 'refid' => $refid])]
+        : [];
+    // A dynamic actor's dyn: key selects and creates its own row; its FF slot or name never reuses another.
+    $dynamicActorKey = is_array($profileIdentity) && is_string($profileIdentity['actor_key'] ?? null)
+        && str_starts_with($profileIdentity['actor_key'], 'dyn:') && chimIsActorKey($profileIdentity['actor_key'])
+        ? $profileIdentity['actor_key'] : null;
+    if ($dynamicActorKey !== null) {
+        $identityFields['metadata'] = json_encode(['actor_key' => $dynamicActorKey], JSON_UNESCAPED_SLASHES);
+        $identityFields['md5'] = md5($dynamicActorKey);
+    }
+    $lookupIdentity = $dynamicActorKey ?? ($refid !== '' ? NpcMaster::displayIdentifier($npcname, $refid) : null);
+    $currentNpcData = $lookupIdentity !== null
+        ? $npcMaster->getByPromptIdentifier($lookupIdentity)
+        : $npcMaster->getByName($npcname);
 
     $EMPTY_PROFILE=false;
 
@@ -7126,7 +7321,7 @@ function createProfile($npcname, $FORCE_PARMS = [], $overwrite = false, $basepro
                 $coreFull = trim($npcname);
             }
 
-            $npcMaster->create([
+            $npcMaster->create(array_merge([
 
                     "npc_name" => $npcname,
                     'npc_static_bio' => $npcNewFields[0]["npc_static_bio"] ?? '',
@@ -7140,8 +7335,7 @@ function createProfile($npcname, $FORCE_PARMS = [], $overwrite = false, $basepro
                     'goals' => $npcNewFields[0]["goals"] ?? '',
                     'oghma_knowledge_tags' => $npcNewFields[0]["oghma_knowledge_tags"] ?? ''
 
-                ]
-            );
+                ], $identityFields));
 
             // RealNamesExtended support for generic npcs
         } elseif (!empty($bracketMatch)) {
@@ -7159,7 +7353,7 @@ function createProfile($npcname, $FORCE_PARMS = [], $overwrite = false, $basepro
                 }
                 if ($coreFull2 === '') { $coreFull2 = trim($npcname); }
 
-                $npcMaster->create([
+                $npcMaster->create(array_merge([
                         "npc_name" => $npcname,
                         'npc_static_bio' => $npcNewFields2[0]["npc_static_bio"] ?? '',
                         'personality' => $npcNewFields2[0]["personality"] ?? '',
@@ -7171,23 +7365,22 @@ function createProfile($npcname, $FORCE_PARMS = [], $overwrite = false, $basepro
                         'speechstyle' => $npcNewFields2[0]["speechstyle"] ?? '',
                         'goals' => $npcNewFields2[0]["goals"] ?? '',
                         'oghma_knowledge_tags' => $npcNewFields2[0]["oghma_knowledge_tags"] ?? ''
-                    ]
-                );
+                    ], $identityFields));
             } else {
                 error_log("Creating initial empty profile");
-                $npcMaster->create([
+                $npcMaster->create(array_merge([
                         "npc_name" => $npcname
-                    ]
-                );
+                    ], $identityFields));
             }
         } else {
             error_log("Creating initial empty profile");
-            $npcMaster->create([
+            $npcMaster->create(array_merge([
                     "npc_name" => $npcname
-                ]
-            );
+                ], $identityFields));
             $EMPTY_PROFILE=true;
-            $newData = $npcMaster->GetByName($npcname);
+            $newData = $lookupIdentity !== null
+                ? $npcMaster->getByPromptIdentifier($lookupIdentity)
+                : $npcMaster->GetByName($npcname);
             
 
         }
@@ -7252,7 +7445,9 @@ function createProfile($npcname, $FORCE_PARMS = [], $overwrite = false, $basepro
         }
 
         // 3) Assign (may remain empty if nothing found)
-        $currentData = $npcMaster->GetByName($npcname);
+        $currentData = $lookupIdentity !== null
+            ? $npcMaster->getByPromptIdentifier($lookupIdentity)
+            : $npcMaster->GetByName($npcname);
         $currentData["voiceid"] = $voiceid;
 
         $existingMetadata = [];
@@ -7285,7 +7480,7 @@ function createProfile($npcname, $FORCE_PARMS = [], $overwrite = false, $basepro
         }
 
         $currentData['profile_id'] = $defaultProfileId;
-        $currentData['md5'] = md5($currentData["npc_name"]);
+        $currentData['md5'] = NpcMaster::identityMd5($currentData);
         $currentData['gamets_last_updated'] = $GLOBALS["gameRequest"][2];
 
         if ($EMPTY_PROFILE) {
@@ -8636,12 +8831,12 @@ function resolveTravelLocation($location, $currentNpcData, $db)
     return $loc ?: null;
 }
 
-function DataSearchMemoryByVectorFromContextKeywords($contextKeywords,$npcfilter,$timeThreshold=0) {
+function DataSearchMemoryByVectorFromContextKeywords($contextKeywords,$npcfilter,$timeThreshold=0,$actorScope=null) {
     
         $localStartTime=microtime(true);
 
-        $scopeConditionSql = dataGetMemoryScopeConditionSql($npcfilter);
-        $companionConditionSql = dataGetMemoryCompanionConditionSql($npcfilter);
+        $scopeConditionSql = dataGetMemoryScopeConditionSql($npcfilter, $actorScope);
+        $companionConditionSql = dataGetMemoryCompanionConditionSql($npcfilter, 'companions', 'classifier', $actorScope);
         
         $url = $GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["TXTAI_URL"].'/embed';
 
@@ -8734,7 +8929,7 @@ function DataSearchMemoryByVectorFromContextKeywords($contextKeywords,$npcfilter
                          ts_rank(native_vec, to_tsquery('$kwStringAll')) AS rank_all_fts
                     FROM public.memory_summary 
                     WHERE embedding IS NOT NULL
-                    and companions like '%{$GLOBALS["db"]->escape($npcfilter)}%'
+                    AND $companionConditionSql
                     ORDER BY (embedding <-> $vectorString)-ts_rank(native_vec, to_tsquery('$kwStringAny')) 
                     LIMIT 5 OFFSET 0
                 ");*/

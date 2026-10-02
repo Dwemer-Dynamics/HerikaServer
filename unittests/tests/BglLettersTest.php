@@ -53,6 +53,9 @@ final class BglLettersFakeDb
         if (str_contains($query, 'state_changed_localts <')) {
             return $this->stale ? ['id' => 1] : [];
         }
+        if (str_contains($query, 'FROM core_npc_master')) {
+            return ['n' => '1']; // one courier profile: its name is an exact target
+        }
         if (str_contains($query, 'COUNT(*) AS n')) {
             return ['n' => (string)$this->sentToday];
         }

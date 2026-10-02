@@ -302,14 +302,17 @@ class web_connector
                 continue;
             }
 
-            // Example: "The Narrator|command|Attack@Jesse"
-            $commandString = "{$parsed['character']}|command|{$action}@{$target}";
+            // Example: "The Narrator|command|Attack@Jesse"; built for the selected typed principal (null = drop).
+            $commandLine = chimBuildLegacyConnectorCommandLine((string)($parsed['character'] ?? ''), "{$action}@{$target}");
+            if ($commandLine === null) {
+                continue;
+            }
 
             // Avoid duplicates if we’ve already “sent” it
-            $hash = md5($commandString."\r\n");
+            $hash = md5($commandLine);
             if (!isset($ALREADY_SENT_BUFFER[$hash])) {
-                $this->_actionBuffer[] = $commandString."\r\n";
-                $ALREADY_SENT_BUFFER[$hash] = $commandString."\r\n";
+                $this->_actionBuffer[] = $commandLine;
+                $ALREADY_SENT_BUFFER[$hash] = $commandLine;
             }
         }
 

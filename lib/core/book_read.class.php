@@ -15,6 +15,115 @@ if (!defined('MINIMUM_SENTENCE_SIZE')) {
 }
 
 
+// ─── Reader/commenter identity (docs/actor-identity.md) ───────────────────────
+// Keys are captured when a reading request is created and never re-derived from names later. The
+// typed narrator is 'narrator' only when no physical row with that name is the current context actor;
+// a physical NPC named "The Narrator" keeps its own key. Unresolved commenters stay null (legacy).
+function bookReadActorKeyFor($name)
+{
+    require_once __DIR__ . DIRECTORY_SEPARATOR . 'npc_reference.php';
+    $name = trim(strval($name));
+    if ($name === '') {
+        return null;
+    }
+    $current = $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] ?? null;
+    if (is_array($current) && (int)($current['id'] ?? 0) > 1 && trim(strval($current['npc_name'] ?? '')) === $name) {
+        return chimNpcRowActorKey($current);
+    }
+    $configured = class_exists('Narrator') ? strval((new Narrator())->getRoleplayName()) : '';
+    if (strcasecmp($name, 'The Narrator') === 0 || ($configured !== '' && strcasecmp($name, $configured) === 0)) {
+        return CHIM_ACTOR_KEY_NARRATOR;
+    }
+    return null;
+}
+
+function bookReadTimeline()
+{
+    $row = isset($GLOBALS['db']) ? $GLOBALS['db']->fetchOne("SELECT value FROM core_player WHERE id = 'playthrough_id' LIMIT 1") : null;
+    return strval($row['value'] ?? '');
+}
+
+function bookReadIdentityFields($narratorName, $playerName, $commenter, array $bookCandidate = [])
+{
+    $fields = [
+        'identity_version' => 1,
+        'narrator_key' => bookReadActorKeyFor($narratorName),
+        'player_key' => 'player',
+        'commenter_key' => bookReadActorKeyFor($commenter ?: $narratorName),
+        'timeline' => bookReadTimeline(),
+    ];
+    foreach (['book_key', 'book_instance', 'content_version'] as $field) {
+        if (!empty($bookCandidate[$field])) {
+            $fields[$field] = $bookCandidate[$field];
+        }
+    }
+    return $fields;
+}
+
+// The commenter may still receive a delayed instruction only if its captured key still names the same
+// physical row, or (legacy state without a key) its name is not shared by several NPCs.
+function bookReadCommenterStillValid(array $state)
+{
+    require_once __DIR__ . DIRECTORY_SEPARATOR . 'npc_reference.php';
+    $commenter = trim(strval($state['commenter'] ?? ''));
+    $key = $state['commenter_key'] ?? null;
+    if (!empty($state['timeline']) && $state['timeline'] !== bookReadTimeline()) {
+        return false;
+    }
+    if ($key === CHIM_ACTOR_KEY_NARRATOR || $key === CHIM_ACTOR_KEY_PLAYER) {
+        return true;
+    }
+    if (is_string($key) && $key !== '') {
+        if (!class_exists('NpcMaster')) {
+            require_once __DIR__ . DIRECTORY_SEPARATOR . 'npc_master.class.php';
+        }
+        $row = (new NpcMaster())->getByActorKey($key);
+        return is_array($row) && trim(strval($row['npc_name'] ?? '')) === $commenter;
+    }
+    if ($commenter === '' || $commenter === trim(strval($state['narrator'] ?? ''))) {
+        return true;
+    }
+    $rows = $GLOBALS['db']->fetchAll("SELECT id FROM core_npc_master WHERE lower(npc_name) = lower('"
+        . $GLOBALS['db']->escape($commenter) . "') LIMIT 2");
+    return !is_array($rows) || count($rows) <= 1;
+}
+
+// Rolecommand selector for the delayed commenter: a physical keyed row is addressed as "Name [RefID: XXXXXXXX]"
+// so the queued Suggestion/Instruction targets that exact row (the enqueue hook attaches its key as arg 0).
+// The typed narrator/player and legacy unkeyed commenters keep their plain label. Call after
+// bookReadCommenterStillValid(); a key that no longer resolves yields null and the comment is skipped.
+function bookReadCommenterSelector(array $state)
+{
+    $commenter = trim(strval($state['commenter'] ?? ''));
+    $key = $state['commenter_key'] ?? null;
+    if (!is_string($key) || $key === '' || $key === CHIM_ACTOR_KEY_NARRATOR || $key === CHIM_ACTOR_KEY_PLAYER) {
+        return $commenter;
+    }
+    if (!class_exists('NpcMaster')) {
+        require_once __DIR__ . DIRECTORY_SEPARATOR . 'npc_master.class.php';
+    }
+    $row = (new NpcMaster())->getByActorKey($key);
+    $refid = strtoupper(preg_replace('/^0X/i', '', trim(strval($row['refid'] ?? ''))));
+    if (!is_array($row) || trim(strval($row['npc_name'] ?? '')) !== $commenter || !preg_match('/^[0-9A-F]{1,8}$/D', $refid)) {
+        return null;
+    }
+    return $commenter . ' [RefID: ' . str_pad($refid, 8, '0', STR_PAD_LEFT) . ']';
+}
+
+// Format-2 people for book-reading innerchat: exact reader (narrator/physical) and the player.
+function bookReadInnerchatPeople(array $state, $narratorName, $playerName)
+{
+    require_once __DIR__ . DIRECTORY_SEPARATOR . 'npc_reference.php';
+    try {
+        return chimSerializeEventParticipants([
+            chimEventParticipant(strval($narratorName), $state['narrator_key'] ?? null),
+            chimEventParticipant(strval($playerName), CHIM_ACTOR_KEY_PLAYER),
+        ]);
+    } catch (Throwable $e) {
+        return "|{$narratorName}|{$playerName}|";
+    }
+}
+
 // ─── Public API helpers for outside callers ───────────────────────────────────
 
 /**
@@ -168,7 +277,7 @@ function bookReadStateForBook(array $bookCandidate, $narratorName, $playerName, 
         'narrator' => $narratorName,
         'player' => $playerName,
         'commenter' => $commenter ?: $narratorName,
-    ];
+    ] + bookReadIdentityFields($narratorName, $playerName, $commenter, $bookCandidate);
 }
 
 /**
@@ -234,6 +343,7 @@ function bookReadStateCreateContentRequest($bookTitle, $formId, $narratorName, $
     $requestedAt = time();
     $normalizedTitle = bookReadNormalizeTitle($bookTitle);
     $resolvedCommenter = $commenter ?: $narratorName;
+    $identity = bookReadIdentityFields($narratorName, $playerName, $resolvedCommenter);
     $requestedTitleQuery = $titleIsQuery ? $normalizedTitle : '';
     $currentState = bookReadStateGet();
     if (
@@ -246,6 +356,8 @@ function bookReadStateCreateContentRequest($bookTitle, $formId, $narratorName, $
         && strval($currentState['narrator'] ?? '') === strval($narratorName)
         && strval($currentState['player'] ?? '') === strval($playerName)
         && strval($currentState['commenter'] ?? ($currentState['narrator'] ?? '')) === strval($resolvedCommenter)
+        && ($currentState['commenter_key'] ?? null) === $identity['commenter_key']
+        && ($currentState['timeline'] ?? '') === $identity['timeline']
     ) {
         $currentState['_request_created'] = false;
         return $currentState;
@@ -262,7 +374,7 @@ function bookReadStateCreateContentRequest($bookTitle, $formId, $narratorName, $
         'request_token' => bin2hex(random_bytes(16)),
         'requested_at' => $requestedAt,
         'expires_at' => $requestedAt + BOOK_READ_PENDING_TIMEOUT_SECONDS,
-    ];
+    ] + $identity;
     if ($titleIsQuery) {
         $state['requested_title_query'] = bookReadNormalizeTitle($bookTitle);
     }
@@ -360,12 +472,19 @@ function bookReadStateAcceptUploadedContent(array $bookCandidate, $formId, $requ
         return false;
     }
 
-    bookReadStateSet(bookReadStateForBook(
+    if (!empty($state['timeline']) && $state['timeline'] !== bookReadTimeline()) {
+        return false;
+    }
+    $fresh = bookReadStateForBook(
         $bookCandidate,
         $state['narrator'] ?? '',
         $state['player'] ?? '',
         $state['commenter'] ?? null
-    ));
+    );
+    foreach (['identity_version', 'narrator_key', 'player_key', 'commenter_key', 'timeline'] as $field) {
+        $fresh[$field] = $state[$field] ?? null;
+    }
+    bookReadStateSet($fresh);
     return true;
 }
 
@@ -1357,7 +1476,10 @@ class BookReader
 
             if ($linesEnqueued - $linesSpoken <= 1 && empty($state['comment_instruction_sent'])) {
 
-                if ($this->commenter == $this->narratorName) {
+                $selector = bookReadCommenterStillValid($state) ? bookReadCommenterSelector($state) : null;
+                if ($selector === null) {
+                    error_log("[book_read] Commenter identity changed; skipping delayed comment request.");
+                } else if ($this->commenter == $this->narratorName) {
                     $this->db->insert(
                         'responselog',
                         [
@@ -1365,7 +1487,7 @@ class BookReader
                             'sent' => 0,
                             'actor' => "rolemaster",
                             'text' => "",
-                            'action' => "rolecommand|Suggestion@{$this->commenter}@Briefly comments on {$this->narratorName}'s reading of '{$state['title']}' without making any spoilers. Short sentence.{$nextLineSpoilerText}@0",
+                            'action' => "rolecommand|Suggestion@{$selector}@Briefly comments on {$this->narratorName}'s reading of '{$state['title']}' without making any spoilers. Short sentence.{$nextLineSpoilerText}@0",
                             'tag' => "",
                         ]
                     );
@@ -1378,7 +1500,7 @@ class BookReader
                             'sent' => 0,
                             'actor' => "rolemaster",
                             'text' => "",
-                            'action' => "rolecommand|Suggestion@{$this->commenter}@Briefly comments on reading of '{$state['title']}' - without making any spoilers -. Short sentence.{$nextLineSpoilerText}@0",
+                            'action' => "rolecommand|Suggestion@{$selector}@Briefly comments on reading of '{$state['title']}' - without making any spoilers -. Short sentence.{$nextLineSpoilerText}@0",
                             'tag' => "",
                         ]
                     );
@@ -1392,7 +1514,8 @@ class BookReader
                     'data' => "{$this->narratorName} has finished reading some pages of the book '{$state['title']}'.(Readed: {$linesSpoken} lines, Total: {$totalLines} lines). Will pause reading and will wait for comments.",
                     'sess' => 0,
                     'localts' => time(),
-                    'people' => "|{$this->narratorName}|{$this->playerName}|",
+                    'people' => bookReadInnerchatPeople($state, $this->narratorName, $this->playerName),
+                    'speaker_key' => $state['narrator_key'] ?? null,
                     'location' => null,
                     'party' => '',
                 ]);
@@ -1432,7 +1555,13 @@ class BookReader
 
         if (!$pendingPlayback && (empty($state['comment_instruction_sent']) || $state['comment_instruction_sent'] == false) && !$this->allLinesEnqued()) {
 
-            if (!isset($state['resume_mode']) || $state['resume_mode'] == "auto") {
+            $autoResume = !isset($state['resume_mode']) || $state['resume_mode'] == "auto";
+            $selector = $autoResume && bookReadCommenterStillValid($state) ? bookReadCommenterSelector($state) : null;
+            if ($autoResume && $selector === null) {
+                // The captured commenter is stale: drop its comment, but continue reading instead of waiting forever.
+                $state['status'] = 'resume_requested';
+                error_log("[book_read] Commenter identity changed; continuing '{$state['title']}' without a comment.");
+            } else if ($autoResume) {
                 $this->db->insert(
                     'responselog',
                     [
@@ -1440,7 +1569,7 @@ class BookReader
                         'sent' => 0,
                         'actor' => "rolemaster",
                         'text' => "",
-                        'action' => "rolecommand|Instruction@{$this->commenter}@Briefly comment on {$this->narratorName}'s reading of '{$state['title']}', then use the Read_Book action with item '{$state['title']}' so the reading continues. Short sentence.@0",
+                        'action' => "rolecommand|Instruction@{$selector}@Briefly comment on {$this->narratorName}'s reading of '{$state['title']}', then use the Read_Book action with item '{$state['title']}' so the reading continues. Short sentence.@0",
                         'tag' => "",
                     ]
                 );
@@ -1453,7 +1582,8 @@ class BookReader
                     'data' => "{$this->narratorName} has finished reading some pages of the book '{$state['title']}' and will continue after a brief comment.",
                     'sess' => 0,
                     'localts' => time(),
-                    'people' => "|{$this->narratorName}|{$this->playerName}|",
+                    'people' => bookReadInnerchatPeople($state, $this->narratorName, $this->playerName),
+                    'speaker_key' => $state['narrator_key'] ?? null,
                     'location' => null,
                     'party' => '',
                 ]);
@@ -1712,14 +1842,15 @@ class BookReader
             $this->saveState($state);
             error_log("[book_read] Finished reading '{$state['title']}'.");
 
-            $this->db->insert(
+            $selector = bookReadCommenterStillValid($state) ? bookReadCommenterSelector($state) : null;
+            if ($selector !== null) $this->db->insert(
                 'responselog',
                 [
                     'localts' => time(),
                     'sent' => 0,
                     'actor' => "rolemaster",
                     'text' => "",
-                    'action' => "rolecommand|Suggestion@{$this->commenter}@{$this->commenter}\'s reading of '{$state['title']}' ended,{$this->commenter} should comment the narrator's reading, expressing interest and wondering about the plot end@0",
+                    'action' => "rolecommand|Suggestion@{$selector}@{$this->commenter}\'s reading of '{$state['title']}' ended,{$this->commenter} should comment the narrator's reading, expressing interest and wondering about the plot end@0",
                     'tag' => "",
                 ]
             );

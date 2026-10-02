@@ -147,6 +147,50 @@ function chimBglHistoryCategorySelect(sql $db): string
     return $select;
 }
 
+// bgl_history.actor_key exists (bgl_history 20260930001); before that every row is legacy name-only.
+function chimBglHistoryHasActorKey($db): bool
+{
+    static $exists = null;
+    if ($exists === null) {
+        $exists = !empty($db->fetchAll(
+            "SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'bgl_history' AND column_name = 'actor_key' LIMIT 1"
+        ));
+    }
+    return $exists;
+}
+
+// Derived table "(...) bgl_owner(id, actor_key, legacy_name)" naming each profile row's own Background Life history,
+// as chimBglHistoryOwnerClause() does for one row: its physical actor_key, plus unkeyed legacy rows under its
+// name only while no other profile shares that name. $where filters core_npc_master (alias master).
+function chimBglHistoryOwnerRelation($db, string $where): string
+{
+    require_once __DIR__ . '/core/npc_reference.php';
+    $literal = static fn(?string $value): string => $value === null ? 'NULL::text' : "'" . $db->escape($value) . "'::text";
+    $values = [];
+    foreach ($db->fetchAll(
+        "SELECT master.id, master.npc_name, master.metadata,
+                (SELECT count(*) FROM core_npc_master other
+                 WHERE lower(btrim(other.npc_name)) = lower(btrim(master.npc_name))) AS name_rows
+         FROM core_npc_master master
+         WHERE {$where}"
+    ) ?: [] as $row) {
+        $legacyName = (int)($row['name_rows'] ?? 0) === 1 ? (string)$row['npc_name'] : null;
+        $values[] = '(' . (int)$row['id'] . '::bigint, ' . $literal(chimNpcRowActorKey($row)) . ', ' . $literal($legacyName) . ')';
+    }
+    $rows = $values ? 'VALUES ' . implode(', ', $values) : 'SELECT NULL::bigint, NULL::text, NULL::text WHERE FALSE';
+    return "({$rows}) bgl_owner(id, actor_key, legacy_name)";
+}
+
+// Join condition between a bgl_history alias and chimBglHistoryOwnerRelation()'s owner alias.
+function chimBglHistoryOwnerCondition($db, string $history = 'history', string $owner = 'bgl_owner'): string
+{
+    if (!chimBglHistoryHasActorKey($db)) {
+        return "{$history}.npc = {$owner}.legacy_name";
+    }
+    return "({$history}.actor_key = {$owner}.actor_key OR ({$history}.actor_key IS NULL AND {$history}.npc = {$owner}.legacy_name))";
+}
+
 // Resolve the same portrait candidates used by the web NPC cards.
 function chimBglDashboardPortrait(
     string $enginePath,
@@ -247,6 +291,8 @@ function chimBglDashboardPayload(sql $db, string $enginePath, string $webRoot, b
     $latestCategorySelect = $categorySelect === ''
         ? 'NULL::text AS category'
         : 'history.category AS category';
+    $ownerRelation = chimBglHistoryOwnerRelation($db, $where);
+    $ownerCondition = chimBglHistoryOwnerCondition($db);
     $rows = $db->fetchAll(
         "SELECT master.id,
                 master.npc_name,
@@ -258,10 +304,11 @@ function chimBglDashboardPayload(sql $db, string $enginePath, string $webRoot, b
                 latest.gamets AS latest_gamets,
                 latest.category AS latest_category
          FROM core_npc_master master
+         LEFT JOIN {$ownerRelation} ON bgl_owner.id = master.id
          LEFT JOIN LATERAL (
              SELECT history.data, history.gamets, {$latestCategorySelect}
              FROM bgl_history history
-             WHERE history.npc = master.npc_name
+             WHERE {$ownerCondition}
              ORDER BY history.gamets DESC, history.ts DESC, history.rowid DESC
              LIMIT 1
          ) latest ON TRUE

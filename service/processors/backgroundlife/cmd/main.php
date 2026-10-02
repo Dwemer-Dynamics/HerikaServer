@@ -126,11 +126,18 @@ $COMMAND_PROMPT = '';
 $npcMaster = new NpcMaster();
 $connector = new LLMConnector();
 
-$currentNpcData = $npcMaster->getByName($npcName);
+$currentNpcData = $npcMaster->getByPromptIdentifier($npcName);
 if (!$currentNpcData) {
     error_log("[BGL RUN] NPC not found: {$npcName}");
     return;
 }
+$workerNpcId = (int)$currentNpcData['id'];
+$workerProfileBinding = $currentNpcData['_profile_binding'];
+$npcName = $currentNpcData['npc_name'];
+$GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] = $currentNpcData;
+// Issued-action reads for this worker: the exact row's key when keyed (NULL legacy rows not adopted), else its
+// unkeyed name rows only while the name is unshared, so a namesake's history is never read as its own.
+$GLOBALS['CHIM_BGL_ISSUED_OWNER'] = chimIssuedPhysicalOwnerClause($GLOBALS['db'], $currentNpcData);
 $currentConnectorData = $connector->getById($GLOBALS['CORE_CONNECTOR_BGL']);
 
 $profile = new CoreProfile();
@@ -172,6 +179,11 @@ $momentum = time();
 
 $gameRequest = ['inputtext', '0', $last_gamets, $npcName];
 $npcNameEsc = $db->escape($npcName);
+// Speech the worker's selected physical row witnessed (captured speaker/audience keys); names never match.
+require_once $enginePath . 'lib/eventlog_helper.php';
+require_once $enginePath . 'lib/core/npc_reference.php';
+$bglSpeechSql = chimBuildSpeechContextWhereClause($db, $GLOBALS['HERIKA_NAME'], $currentNpcData);
+$bglMemorySql = dataGetMemoryCompanionConditionSql($GLOBALS['HERIKA_NAME'], 'companions', 'classifier', $currentNpcData);
 chimBglRetryPendingEncounterCommands($db, (int)$currentNpcData['id']);
 if (chimBglEncounterIsActiveForNpc($db, (int)$currentNpcData['id'])) {
     return;
@@ -190,7 +202,7 @@ if (isset($extdata["background_life_last_run"]) && $extdata["background_life_las
 
 $lastIssuedAction = $db->fetchOne(
     "SELECT gamets, action,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEsc' 
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']}
      and gamets is not null
      ORDER BY gamets DESC, ts ASC"
 );
@@ -200,7 +212,7 @@ $lastIssuedAction = $db->fetchOne(
 $spreadRumorsCooldownGamets = 48 / GAMETS_TO_HOURS;
 $recentSpreadRumor = $db->fetchOne(
     "SELECT gamets FROM actions_issued
-         WHERE actorname='$npcNameEsc'
+         WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']}
              AND action='SpreadRumors'
              AND gamets > ($last_gamets - $spreadRumorsCooldownGamets)
          ORDER BY gamets DESC, ts DESC
@@ -237,7 +249,7 @@ if (checkLastCallsFor($GLOBALS['HERIKA_NAME'])) {
 
 $lastInteractionRow = $db->fetchOne(
     "SELECT max(gamets) AS gamets FROM speech
-     WHERE speaker='$npcNameEsc' OR listener='$npcNameEsc' OR companions LIKE '%|$npcNameEsc|%'"
+     WHERE {$bglSpeechSql}"
 );
 
 if (empty($lastInteractionRow['gamets'])) {
@@ -246,7 +258,7 @@ if (empty($lastInteractionRow['gamets'])) {
     } else {
         error_log('[BGL RUN] No prior interaction found, but background_life_player_unattached is false — skipping.');
         $extdata['background_life_last_updated'] = $last_gamets;
-        $npcMaster->updateExtendedKeysByName($npcName, $extdata);
+        $npcMaster->updateExtendedKeysById($workerNpcId, $extdata, [], $workerProfileBinding);
 
 
         return;
@@ -259,11 +271,17 @@ if (empty($lastInteractionRow['gamets'])) {
 $lastItGamets = (int) $lastInteractionRow['gamets'];
 
 $npcNameEscDb = $db->escape($GLOBALS['HERIKA_NAME']);
+// Journal/letter context: this profile group's keyed authors; an unkeyed worker reads its unassigned rows only
+// while no other profile shares its name.
+require_once $enginePath . 'lib/core/physical_npc_diaries.php';
+$bglDiaryOwnerSql = chimNpcRowActorKey($currentNpcData) !== null
+    ? chimDiaryAuthorKeysWhereClause(chimDiaryReadKeys($npcName, $currentNpcData))
+    : (chimNpcNameIsUnshared($db, $npcName) ? "(author_key IS NULL AND people='$npcNameEscDb')" : 'FALSE');
 
 // Check if there are more than 10 journal notes since last interaction, and if so, update lastItGamets to the gamets of the last diary entry
 $diaryEntryRowsCheck = $db->fetchAll(
     "SELECT content, gamets, topic FROM diarylog
-     WHERE people='$npcNameEscDb'
+     WHERE $bglDiaryOwnerSql
        AND gamets > $lastItGamets
        AND topic IN ('Journal Note')
      ORDER BY gamets DESC, ts DESC
@@ -288,7 +306,7 @@ if (($last_gamets - $lastItGamets) < $minDeltaForRerun) {
     error_log("[BGL RUN] $npcNameEsc — last interaction was less than {$bglTriggerHours} hours ago.");
 
     $extLocaldata['background_life_last_updated'] = $last_gamets;
-    $npcMaster->updateExtendedKeysByName($npcName, $extLocaldata);
+    $npcMaster->updateExtendedKeysById($workerNpcId, $extLocaldata, [], $workerProfileBinding);
 
     if ($forceLetter) {
         error_log("[BGL RUN] $npcNameEsc — bypassing interaction cooldown via forceletter.");
@@ -314,7 +332,7 @@ if ($GUARD_TRAVELTO) {
 
     $actionsRows = $db->fetchAll(
         "SELECT action,actorname,gamets,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEscDb' 
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']}
        AND gamets > $lastItGamets
      ORDER BY gamets DESC, ts DESC
      LIMIT 10 OFFSET 0"
@@ -396,6 +414,7 @@ if ($GUARD_TRAVELTO) {
                         'action' => 'TeleportTo',
                         'fullcall' => "TeleportTo:{$candidateLocation['name']}:Teleporting to resolve stuck NPC",
                         'actorname' => $npcName,
+                        'actor_key' => chimNpcRowActorKey($currentNpcData),
                         'ts' => $last_ts,
                         'gamets' => $last_gamets,
                         'localts' => time(),
@@ -454,6 +473,7 @@ if ($GUARD_TRAVELTO) {
                             'action' => 'TeleportTo',
                             'fullcall' => "TeleportTo:{$candidateLocation['name']}:Teleporting to resolve stuck NPC",
                             'actorname' => $npcName,
+                            'actor_key' => chimNpcRowActorKey($currentNpcData),
                             'ts' => $last_ts,
                             'gamets' => $last_gamets,
                             'localts' => time(),
@@ -506,7 +526,8 @@ if ($GUARD_TRAVELTO) {
             );
 
             if ($sameTargetNpc) {
-                $targetNpcData = $npcMaster->getByName($targetNpcName);
+                // A shared destination name is ambiguous; never pick one namesake to teleport to.
+                $targetNpcData = chimNpcNameIsUnshared($db, (string)$targetNpcName) ? $npcMaster->getByName($targetNpcName) : null;
 
                 if ($targetNpcData && isset($targetNpcData['refid'])) {
                     $skyrimCmd = new SkyrimCommandBuilder();
@@ -522,6 +543,7 @@ if ($GUARD_TRAVELTO) {
                         'action' => 'TeleportTo',
                         'fullcall' => "TeleportTo:{$targetNpcName}:Teleporting to resolve stuck NPC",
                         'actorname' => $npcName,
+                        'actor_key' => chimNpcRowActorKey($currentNpcData),
                         'ts' => $last_ts,
                         'gamets' => $last_gamets,
                         'localts' => time(),
@@ -562,10 +584,11 @@ $dynamicBiography = preg_replace('/<spells>.*?<\/spells>/s', '', $dynamicBiograp
 
 // ──────────────────────────────────────────────────────────────────────────────
 
-if (isset($extdata['middle_term_memory'])) {
-    $middleTermMemory = end($extdata['middle_term_memory']);
-    $middleTerm_memoryTs = array_keys($extdata['middle_term_memory']);
-    $middleTermMemorygameTs = end($middleTerm_memoryTs);
+// The usable digest and its hightide; an entry this group cannot read neither prompts nor hides summaries.
+$middleTermMemorygameTs = 0;
+if ($mtmDigest = chimMiddleTermLatestDigest($currentNpcData)) {
+    $middleTermMemory = $mtmDigest['text'];
+    $middleTermMemorygameTs = $mtmDigest['gamets'];
     $dynamicBiography .= "\n\n<middle_term_memory>\nPast events\n{$middleTermMemory}\n</middle_term_memory>";
 }
 
@@ -626,7 +649,7 @@ if ($middleTermMemorygameTs < ($lastItGamets + (24 / GAMETS_TO_HOURS))) {
     error_log("[BGL] Last middle term memory is more recent than 24 hours from the last interaction with the player. Appending last memory to history.");
     $lastMemory = $db->fetchOne("select * from memory_summary
      where gamets_truncated>$middleTermMemorygameTs 
-     and companions like '%$npcNameEsc%' 
+     and {$bglMemorySql}
      and summary is not null
      order by gamets_truncated asc limit 1");
     if ($lastMemory) {
@@ -642,7 +665,7 @@ if ($middleTermMemorygameTs < ($lastItGamets + (24 / GAMETS_TO_HOURS))) {
 
 $lastLocRow = $db->fetchOne(
     "SELECT location, gamets FROM speech
-     WHERE speaker='$npcNameEsc' OR listener='$npcNameEsc' OR companions LIKE '%|$npcNameEsc|%'
+     WHERE {$bglSpeechSql}
      ORDER BY gamets DESC, ts DESC"
 );
 
@@ -651,7 +674,7 @@ $lastLocRow = $db->fetchOne(
 $npcNameEscDb = $db->escape($GLOBALS['HERIKA_NAME']);
 $diaryEntryRows = $db->fetchAll(
     "SELECT content, gamets, topic FROM diarylog
-     WHERE people='$npcNameEscDb'
+     WHERE $bglDiaryOwnerSql
        AND gamets > $lastItGamets
        AND topic IN ('Sent Letter','Journal Note')
      ORDER BY gamets DESC, ts DESC
@@ -677,9 +700,12 @@ foreach (array_reverse($diaryEntryRows) as $row) {
 // ─── Remote dialogues  ──────────────────────────────────────
 
 $npcNameEscDb = $db->escape($GLOBALS['HERIKA_NAME']);
+// Keyed rows of this profile group; legacy name-only rows only while no other profile shares the name.
+$innerChatOwnerSql = chimBuildKeyedOrUnsharedLegacyWhereClause($db, chimResolveContextActorKeys($db, $currentNpcData),
+    $GLOBALS['HERIKA_NAME'], "people like '%|$npcNameEscDb|%' or people='$npcNameEscDb'");
 $innerChatEntryRows = $db->fetchAll(
     "SELECT data, gamets,ts,people FROM eventlog
-     WHERE (people like '%|$npcNameEscDb|%' or people='$npcNameEscDb')
+     WHERE $innerChatOwnerSql
        AND gamets > $lastItGamets
        AND type IN ('innerchat')
      ORDER BY gamets DESC, ts DESC
@@ -723,7 +749,7 @@ foreach (array_reverse($innerChatEntryRows) as $row) {
 
 $actionsRows = $db->fetchAll(
     "SELECT action,actorname,gamets,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEscDb' and action in ('TravelTo','MoveTo')
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} and action in ('TravelTo','MoveTo')
        AND gamets > $lastItGamets
      ORDER BY gamets DESC, ts DESC
      LIMIT 16 OFFSET 0"
@@ -838,7 +864,8 @@ if (isset($metadata['low_process_actors'])) {
             if (is_array($actor)) {
 
                 $npcMaster = new NpcMaster();
-                $actorRow = $npcMaster->getByName($actor[1]);
+                // No exact key in this legacy shape: describe only an unshared name, never guess a namesake.
+                $actorRow = chimNpcNameIsUnshared($db, (string)$actor[1]) ? $npcMaster->getByName($actor[1]) : null;
                 if ($actorRow && isset($actorRow['oghma_knowledge_tags']) && !empty($actorRow['oghma_knowledge_tags'])) {
                     $actorListExpanded[] = "$key;$actor;{$actorRow['oghma_knowledge_tags']}";
                 } else if ($actorRow && isset($actorRow['race']) && !empty($actorRow['race'])) {
@@ -849,7 +876,21 @@ if (isset($metadata['low_process_actors'])) {
             } else {
 
                 $npcMaster = new NpcMaster();
-                $actorRow = $npcMaster->getByName($actor);
+                // A keyed (C18) entry describes only its exact row while it holds that ref; no name fallback.
+                $keyedEntry = $metadata['low_process_actor_keys'][$gamets_lpa_processed][$key] ?? null;
+                if (is_array($keyedEntry)) {
+                    try {
+                        $actorRow = is_string($keyedEntry['actor_key'] ?? null) ? $npcMaster->getByActorKey($keyedEntry['actor_key']) : null;
+                    } catch (RuntimeException $e) {
+                        $actorRow = null;
+                    }
+                    if ($actorRow && NpcMaster::normalizeRefId($actorRow['refid'] ?? '') !== (string)($keyedEntry['actor_refid'] ?? '')) {
+                        $actorRow = null;
+                    }
+                } else {
+                    // Unkeyed entry: the runtime refid is not a physical key, so describe only an unshared name.
+                    $actorRow = chimNpcNameIsUnshared($db, (string)$actor) ? $npcMaster->getByName($actor) : null;
+                }
                 if ($actorRow && isset($actorRow['oghma_knowledge_tags']) && !empty($actorRow['oghma_knowledge_tags'])) {
                     $actorListExpanded[] = "$key;$actor;{$actorRow['oghma_knowledge_tags']}";
                 } else if ($actorRow && isset($actorRow['race']) && !empty($actorRow['race'])) {
@@ -960,7 +1001,7 @@ $lastMinuteNotes = "\n";
 $fortyEightHoursAgo = $last_gamets - 48 / GAMETS_TO_HOURS;
 $actionIdleRows = $db->fetchAll(
     "SELECT action,actorname,gamets,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEscDb' and action in ('Idle')
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} and action in ('Idle')
        AND gamets > $fortyEightHoursAgo
      ORDER BY gamets DESC, ts DESC
      LIMIT 10 OFFSET 0"
@@ -1016,7 +1057,7 @@ $lastMinuteNotes .= "\n";
 $fortyEightHoursAgo = $last_gamets - 48 / GAMETS_TO_HOURS;
 $actionMoveTo = $db->fetchAll(
     "SELECT action,actorname,gamets,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEscDb' and action in ('MoveTo')
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} and action in ('MoveTo')
        AND gamets > $fortyEightHoursAgo
      ORDER BY gamets DESC, ts DESC
      LIMIT 10 OFFSET 0"
@@ -1038,11 +1079,10 @@ $profileMetadata = json_decode($currentProfileData['metadata'], true) ?? [];
 // 1) If NPC was on a relaxing scenario (inn..home..), ask if we consumed any item in inventory (food, drink, potion, etc)
 // 2) If NPC was on a working (scenario), ask if we produced any good. (iron ore, leather, etc). Subsection production at <goals> specifies what is produced and how much per hour. We must check if we have produced any good.
 
-$npcNameEscBg = $db->escape($GLOBALS['HERIKA_NAME']);
 $lastBackgroundAction = $db->fetchOne(
     "SELECT action, fullcall, gamets
      FROM actions_issued
-     WHERE actorname='$npcNameEscBg' AND original='backgroundaction'
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} AND original='backgroundaction'
      AND gamets is not null
      ORDER BY gamets DESC, localts DESC
      LIMIT 1"
@@ -1129,11 +1169,10 @@ if ($isIdleAction && $idleHours > 1) { // If last Idle was Socialize, there a ch
 // ─── Last iteration was speak ───────────────────────────────────────────────────────
 
 
-$npcNameEscBg = $db->escape($GLOBALS['HERIKA_NAME']);
 $lastBackgroundAction = $db->fetchOne(
     "SELECT action, fullcall, gamets
      FROM actions_issued
-     WHERE actorname='$npcNameEscBg' AND original='backgroundaction'
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} AND original='backgroundaction'
      and gamets is not null
      ORDER BY gamets DESC, localts DESC
      LIMIT 1"
@@ -1182,7 +1221,7 @@ if ($lastBackgroundAction['action'] === 'BuyItem' || $lastBackgroundAction['acti
 
 $localHoursPassed = round($last_gamets - (1 / GAMETS_TO_HOURS), 2);
 
-$tradingGuard = $db->fetchAll("select * from actions_issued where actorname='$npcNameEscDb' and action in ('BuyItem','SellItem','SellService') and gamets>$localHoursPassed order by gamets desc limit 5");
+$tradingGuard = $db->fetchAll("select * from actions_issued where {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} and action in ('BuyItem','SellItem','SellService') and gamets>$localHoursPassed order by gamets desc limit 5");
 if (sizeof($tradingGuard) > 3) {
     error_log(date("YMd H:i:s") . " [BGL RUN] HINT bypass Trading actions: because transactions>=3 in the last hour");
     $bypassTradingActions = true;
@@ -1233,15 +1272,15 @@ if ($localHoursPassed < 0.5 && !$wasSocializeIntentAction) {
 if (isset($extdata['bgl_inception']) && !empty($extdata['bgl_inception'])) {
     $lastMinuteNotes .= "\nImportant:A thought crosses {$GLOBALS['HERIKA_NAME']}'s mind: He should {$extdata['bgl_inception']}\n";
     $npcMaster = new NpcMaster();
-    $npcData = $npcMaster->getByName($GLOBALS['HERIKA_NAME']);
-    $npcMaster->updateExtendedKeysByName($GLOBALS['HERIKA_NAME'], ['bgl_inception' => ""]);
+    $npcData = $npcMaster->getById($workerNpcId);
+    $npcMaster->updateExtendedKeysById($workerNpcId, ['bgl_inception' => ""], [], $workerProfileBinding);
     error_log("[BGL RUN] HINT inception: {$extdata['bgl_inception']}");
 }
 
 
 // Check gold
 
-$currentNpcData = $npcMaster->getByName($npcName); // Refresh NPC data to ensure we have the latest metadata
+$currentNpcData = $npcMaster->getById($workerNpcId); // Refresh this physical actor, not an ambiguous name.
 
 $npcMetadata = json_decode($currentNpcData['metadata'], true) ?? [];
 $profileMetadata = json_decode($currentProfileData['metadata'], true) ?? [];
@@ -1280,7 +1319,7 @@ if ($wasSocializeIntentAction && !$bypassInnerThoughts) {
 
 // Keep persistent duties visible to both Background Life prompt stages.
 require_once $enginePath . 'lib/core/npc_commitments.php';
-$lastMinuteNotes .= "\n" . chimCommitmentFormatContext($npcName, $last_gamets);
+$lastMinuteNotes .= "\n" . chimCommitmentFormatContext($currentNpcData, $last_gamets);   // exact worker row
 
 $innerThoughtBuffer = requestForInnerThought(
     $npcName,
@@ -1347,14 +1386,14 @@ echo $decisionBuffer . PHP_EOL;
 // Refresh NPC data to ensure we have the latest information before executing any actions
 // This is important because the NPC's state may have changed during the decision-making process
 
-$currentNpcData = $npcMaster->getByName($npcName);
+$currentNpcData = $npcMaster->getById($workerNpcId);
 $extdata = $npcMaster->getExtendedData($currentNpcData);
 $metadata = $npcMaster->getMetadata($currentNpcData);
 
 // ─── Update Background-Life Timestamp ────────────────────────────────────────
 
 $extdata['background_life_last_updated'] = $last_gamets;
-$npcMaster->updateExtendedKeysByName($npcName, $extdata);
+$npcMaster->updateExtendedKeysById($workerNpcId, $extdata, [], $workerProfileBinding);
 
 
 // ─── Parse LLM Decision Response ─────────────────────────────────────────────
@@ -1544,9 +1583,15 @@ if ($innerThoughtBuffer && $recordInnerThoughts) {
         'location' => $lastEventParsed['location'] ?? null,
         'party' => '',
     ]);
+    // Throttle against the same journal scope this worker reads: its profile group's keyed authors; an unkeyed
+    // worker its unassigned rows only while no other profile shares its name. A namesake's notes never count.
+    $journalAuthorKey = chimNpcRowActorKey($currentNpcData);
     $cnName = $db->escape($GLOBALS['HERIKA_NAME']);
-    $checkLatestDiaryEntry = $db->fetchOne("SELECT * FROM diarylog WHERE topic='Journal Note' AND people='$cnName' ORDER BY gamets DESC, ts DESC LIMIT 1");
-    $latestDiaryGamets = (float) $checkLatestDiaryEntry['gamets'];
+    $journalOwner = $journalAuthorKey !== null
+        ? chimDiaryAuthorKeysWhereClause(chimDiaryReadKeys($npcName, $currentNpcData))
+        : (chimNpcNameIsUnshared($db, $npcName) ? "(author_key IS NULL AND people='$cnName')" : 'FALSE');
+    $checkLatestDiaryEntry = $db->fetchOne("SELECT * FROM diarylog WHERE topic='Journal Note' AND $journalOwner ORDER BY gamets DESC, ts DESC LIMIT 1");
+    $latestDiaryGamets = (float) ($checkLatestDiaryEntry['gamets'] ?? 0);
     if ($last_gamets - $latestDiaryGamets < (1 / GAMETS_TO_HOURS) * 4) {
         // If the last diary entry was less than 4 hours ago, we skip adding a new diary entry to avoid cluttering the diary with too many entries in a short time.
         $recordDiaryEntry = false;
@@ -1560,17 +1605,20 @@ if ($innerThoughtBuffer && $recordInnerThoughts) {
             'content' => convert_gamets2skyrim_long_date($last_gamets) . "\n" . trim($innerThoughtBuffer),
             'tags' => 'Auto-diary, backgroundlife',
             'people' => $GLOBALS['HERIKA_NAME'],
+            'author_key' => $journalAuthorKey,
             'location' => $lastEventParsed['location'] ?? null,
             'sess' => $momentum,
             'localts' => time(),
         ]);
     }
 
-    logMemory($GLOBALS['HERIKA_NAME'], $GLOBALS['HERIKA_NAME'], trim($innerThoughtBuffer), $momentum, $last_gamets, 'backgroundlife_diary', $last_ts);
+    logMemory($GLOBALS['HERIKA_NAME'], $GLOBALS['HERIKA_NAME'], trim($innerThoughtBuffer), $momentum, $last_gamets, 'backgroundlife_diary', $last_ts,
+        chimNpcRowActorKey($currentNpcData)); // The worker's physical row, never the name.
 }
 // ─── Mark NPC as Background-Life Enabled ─────────────────────────────────────
 
-$currentNpcData = $npcMaster->getByName($npcName);
+$currentNpcData = $npcMaster->getById($workerNpcId);
+$currentNpcData['_profile_binding'] = $workerProfileBinding;
 $extdata = $npcMaster->getExtendedData($currentNpcData);
 if (!$extdata['background_life_enabled']) {
     $extdata['background_life_enabled'] = true;

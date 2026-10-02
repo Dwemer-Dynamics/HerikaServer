@@ -301,6 +301,7 @@ Rules:
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets - 10,
                 'localts' => time(),
@@ -315,8 +316,9 @@ Rules:
         $dynamicBiography = buildDynamicBiography($GLOBALS, true, true, true);
         $dynamicBiography = $npcMaster->appendBackgroundLifeGoals($dynamicBiography, $currentNpcData);
 
-        if (isset($extdata['middle_term_memory'])) {
-            $middleTermMemory = end($extdata['middle_term_memory']);
+        // Only a digest whose sources all belong to this actor's current profile group.
+        if ($mtmDigest = chimMiddleTermLatestDigest($currentNpcData)) {
+            $middleTermMemory = $mtmDigest['text'];
             $dynamicBiography .= "\n\n<middle_term_memory>\nPast events\n{$middleTermMemory}\n</middle_term_memory>";
         }
         return "$actionTextFinal $actionTextDescriptionFinal. Reasoning: $reasoning. Inventory will get updated next turn.";
@@ -452,7 +454,9 @@ function requestForaction(
         $step2Content .= "<context_history>\nContext History (chronological order)\n$historyShort\n</context_history>{$postHistory} {$lastMinuteNotes}\n\n";
     }
 
-    $lastActions = $db->fetchAll("SELECT fullcall,gamets FROM actions_issued where actorname='$npcNameEsc' and gamets>$startGamets and original='backgroundaction' order by gamets desc limit 20");
+    // The worker's own physical owner filter when set (main.php); the legacy name match otherwise.
+    $lastActionsOwner = $GLOBALS['CHIM_BGL_ISSUED_OWNER'] ?? "actorname='$npcNameEsc'";
+    $lastActions = $db->fetchAll("SELECT fullcall,gamets FROM actions_issued where $lastActionsOwner and gamets>$startGamets and original='backgroundaction' order by gamets desc limit 20");
     $lastActionsSummary = [];
     foreach ($lastActions as $action) {
         $actionParts = explode(':', $action['fullcall']);

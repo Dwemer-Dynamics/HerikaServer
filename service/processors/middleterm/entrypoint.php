@@ -55,13 +55,11 @@ $GLOBALS["TASKS"]["middleterm"]["fn"] = function () {
             if ($secondsSinceLastSpeech >= 15) {
                 logger::info("[DELAYED-EVENT] Posting delayed event for {$npc['npc_name']}");
 
-                // Insert the pending event into responselog
+                // Clear only this actor's pending event, without writing its dormant shared data.
+                if (!$npcMaster->updateExtendedKeysById($npc['id'], [], ['pending_delayed_event'], chimNpcProfileBinding($npc))) {
+                    continue;
+                }
                 $db->insert('responselog', $pendingEvent);
-
-                // Remove the pending event from extended_data
-                unset($extendedData['pending_delayed_event']);
-                $npc = $npcMaster->setExtendedData($npc, $extendedData);
-                $npcMaster->updateByArray($npc);
 
                 logger::info("[DELAYED-EVENT] Event posted and cleared for {$npc['npc_name']}");
             } else {
@@ -84,14 +82,16 @@ $GLOBALS["TASKS"]["middleterm"]["fn"] = function () {
         $allEnabledMtNpc = $GLOBALS["db"]->fetchAll(
             "SELECT m.* FROM core_npc_master m
              LEFT JOIN core_profiles p ON p.id = m.profile_id
-             WHERE COALESCE(NULLIF(m.extended_data->>'middle_term_enabled',''),
-                            p.metadata->>'MIDDLE_TERM_MEMORY_ENABLED') = '1' "
-        );
+             WHERE m.profile_owner_npc_id IS NULL
+               AND COALESCE(NULLIF(m.extended_data->>'middle_term_enabled',''),
+                            p.metadata->>'MIDDLE_TERM_MEMORY_ENABLED') = '1' ");
 
         foreach ($allEnabledMtNpc as $npc) {
             // echo "[MIDDLETERM] {$npc["npc_name"]} has middleterm memory enabled".PHP_EOL;
             $GLOBALS["SELECTED_NPC"] = $npc["npc_name"];
+            $GLOBALS['SELECTED_NPC_ID'] = (int)$npc['id'];
             require("cmd" . DIRECTORY_SEPARATOR . "generate.php");
+            unset($GLOBALS['SELECTED_NPC_ID']);
         }
     } else {
         Logger::debug('[MIDDLETERM] Background & Memory Tasks are disabled globally');

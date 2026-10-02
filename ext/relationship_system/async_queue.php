@@ -17,6 +17,8 @@
 
 // Ensure Logger is available
 require_once $GLOBALS["ENGINE_PATH"] . "lib/logger.php";
+// Actor-key helpers used by endpoint capture; the standalone worker does not load them otherwise
+require_once $GLOBALS["ENGINE_PATH"] . "lib/core/npc_reference.php";
 
 /**
  * Convert malformed or unsuccessful LLM results into a retryable queue failure.
@@ -44,6 +46,87 @@ function _relRequireLlmSuccess($result, $operation) {
  *   - listener_npc_id: For NPC-to-NPC conversations
  *   - listener_name: For NPC-to-NPC conversations
  */
+// Timeline marker: the playthrough runtime generation (rotated by every manual switch/restore, see
+// lib/playthrough_runtime.php) plus the dynamic-profile clock epoch (rotated by older-save loads).
+// A cloned save or a switch back can carry the same clock epoch, so the epoch alone is not fresh.
+// Both are read from their current file/row on every call, never from the bootstrap snapshot.
+function _relRuntimeGenerationPath() {
+    // Scratch probes may point at a disposable file; production uses the runtime directory.
+    return (string)($GLOBALS['REL_RUNTIME_GENERATION_PATH'] ?? (dirname(__DIR__, 2) . '/log/playthrough_runtime/generation'));
+}
+
+function _relTimelineEpoch() {
+    $path = _relRuntimeGenerationPath();
+    clearstatcache(true, $path);
+    $generation = is_file($path) ? trim((string)@file_get_contents($path)) : '';
+    try {
+        $row = $GLOBALS['db']->fetchOne("SELECT value FROM conf_opts WHERE id = 'DYNAMIC_PROFILE_CLOCK'");
+        $clock = json_decode((string)($row['value'] ?? ''), true);
+        $epoch = is_array($clock) ? (string)($clock['epoch'] ?? '') : '';
+    } catch (Throwable $e) {
+        $epoch = '';
+    }
+    return $generation . '|' . $epoch;
+}
+
+// Identity captured when the job is queued: physical keys (endpoint and keeper), sharing bindings and timeline.
+function _relCaptureEndpoints(array $ids) {
+    $capture = ['bindings' => [], 'keys' => [], 'timeline' => _relTimelineEpoch()];
+    foreach ($ids as $id) {
+        $id = (int)$id;
+        if ($id <= 0) { continue; }  // core_npc_master id 1 is a physical row; the Narrator is skipped by its producer.
+        $row = $GLOBALS['db']->fetchOne("SELECT * FROM core_npc_master WHERE id = {$id}");
+        if (!$row) { continue; }
+        $capture['bindings'][$id] = chimNpcProfileBinding($row);
+        $capture['keys'][$id] = chimNpcRowActorKey($row);
+        $ownerId = (int)($row['profile_owner_npc_id'] ?? 0);
+        if ($ownerId > 0 && $ownerId !== $id) {
+            $owner = $GLOBALS['db']->fetchOne("SELECT * FROM core_npc_master WHERE id = {$ownerId}");
+            if ($owner) {
+                $capture['bindings'][$ownerId] = chimNpcProfileBinding($owner);
+                $capture['keys'][$ownerId] = chimNpcRowActorKey($owner);
+            }
+        }
+    }
+    return $capture;
+}
+
+// Compare a capture with the current rows/timeline. Called before the model and again inside the
+// guarded commit, where the endpoint and keeper rows are already locked by the write.
+function _relCaptureIsCurrent($capture) {
+    if (!is_array($capture) || !isset($capture['timeline'])) { return false; }
+    if ((string)$capture['timeline'] !== _relTimelineEpoch()) { return false; }
+    foreach ((array)($capture['keys'] ?? []) as $id => $key) {
+        $row = $GLOBALS['db']->fetchOne('SELECT * FROM core_npc_master WHERE id = ' . (int)$id);
+        if (!$row || chimNpcRowActorKey($row) !== $key
+            || chimNpcProfileBinding($row) !== (string)($capture['bindings'][$id] ?? '')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Every enqueue/upsert gets a fresh random token, so an identical replacement queued in the same second
+// is still a different job: ack/retry/delete compare the token and never touch a newer job.
+function _relQueueToken() {
+    return bin2hex(random_bytes(16));
+}
+
+function _relQueueClaimSql($table, $column, $id, $claim) {
+    $id = (int)$id;
+    $claim = $GLOBALS['db']->escape((string)$claim);
+    return "{$table} WHERE id = {$id} AND {$column}->>'queue_token' = '{$claim}'";
+}
+
+// Claim check evaluated inside the guarded write: the claimed job still exists and its capture is current.
+function _relQueueCommitGuard($table, $column, $id, $claim, $capture) {
+    $claimSql = _relQueueClaimSql($table, $column, $id, $claim);
+    return static function () use ($claimSql, $capture) {
+        $claimed = $GLOBALS['db']->fetchOne("SELECT id FROM {$claimSql} FOR UPDATE");
+        return (bool)$claimed && _relCaptureIsCurrent($capture);
+    };
+}
+
 function _relQueueEvaluation($evalData) {
     if (!isset($GLOBALS['db']) || !$GLOBALS['db']) {
         Logger::warn("[REL-ASYNC] Cannot queue: no database connection");
@@ -69,6 +152,12 @@ function _relQueueEvaluation($evalData) {
         'has_player_action' => $hasPlayerAction,
         'queued_at' => date('Y-m-d H:i:s')
     ];
+    $capture = _relCaptureEndpoints(array_filter([$npcId, $listenerNpcId]));
+    $queueData['npc_key'] = $capture['keys'][(int)$npcId] ?? null;
+    $queueData['listener_key'] = $listenerNpcId ? ($capture['keys'][(int)$listenerNpcId] ?? null) : null;
+    $queueData['context'] = (array)$queueData['context'];
+    $queueData['context']['_rel_capture'] = $capture;
+    $queueData['queue_token'] = _relQueueToken();
 
     $jsonData = json_encode($queueData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
@@ -154,7 +243,7 @@ function _relProcessQueue($limit = 5, $relLLM = null) {
     try {
         // Get pending evaluations (oldest first, prioritize items with fewer retries)
         $rows = $GLOBALS['db']->fetchAll(
-            "SELECT id, npc_id, eval_data, COALESCE(retry_count, 0) as retry_count
+            "SELECT id, npc_id, eval_data, eval_data->>'queue_token' AS claim, COALESCE(retry_count, 0) as retry_count
              FROM relationship_eval_queue
              ORDER BY COALESCE(retry_count, 0) ASC, created_at ASC
              LIMIT {$limit}"
@@ -186,14 +275,29 @@ function _relProcessQueue($limit = 5, $relLLM = null) {
             $retryCount = intval($row['retry_count']);
 
             if (!$data) {
-                $successIds[] = $row['id']; // Invalid data, just delete
+                $successIds[] = $row; // Invalid data, just delete
                 continue;
             }
 
             try {
+                // Bound to the timeline and endpoint identity it was queued under. Old unbound jobs carry
+                // no captured identity or token; they are dropped rather than assigned to a current actor.
+                $capture = $data['context']['_rel_capture'] ?? null;
+                if (!is_array($capture) || (string)$row['claim'] === '') {
+                    Logger::info("[REL-ASYNC] Discarding unbound legacy evaluation for NPC {$data['npc_id']}");
+                    $successIds[] = $row;
+                    continue;
+                }
+                if (!_relCaptureIsCurrent($capture)) {
+                    Logger::info("[REL-ASYNC] Discarding evaluation from another timeline or changed actor identity: {$data['npc_name']}");
+                    $successIds[] = $row;
+                    continue;
+                }
+                $relLLM->setCommitGuard(_relQueueCommitGuard('relationship_eval_queue', 'eval_data', $row['id'], $row['claim'], $capture));
+
                 // Lazy init for speaker NPC if not already done
                 if (!isset($lazyInitChecked[$data['npc_id']])) {
-                    $initResult = $relLLM->analyzeNpc($data['npc_id'], false);
+                    $initResult = $relLLM->analyzeNpc($data['npc_id'], false, $capture['bindings'][(int)$data['npc_id']] ?? null);
                     _relRequireLlmSuccess($initResult, 'Speaker relationship initialization');
                     if (!empty($initResult['ok']) && empty($initResult['skipped'])) {
                         Logger::info("[REL-ASYNC] Lazy-initialized {$data['npc_name']}");
@@ -203,7 +307,7 @@ function _relProcessQueue($limit = 5, $relLLM = null) {
 
                 // Lazy init for listener NPC if applicable
                 if (!empty($data['listener_npc_id']) && !isset($lazyInitChecked[$data['listener_npc_id']])) {
-                    $initResult = $relLLM->analyzeNpc($data['listener_npc_id'], false);
+                    $initResult = $relLLM->analyzeNpc($data['listener_npc_id'], false, $capture['bindings'][(int)$data['listener_npc_id']] ?? null);
                     _relRequireLlmSuccess($initResult, 'Listener relationship initialization');
                     if (!empty($initResult['ok']) && empty($initResult['skipped'])) {
                         Logger::info("[REL-ASYNC] Lazy-initialized {$data['listener_name']}");
@@ -258,10 +362,12 @@ function _relProcessQueue($limit = 5, $relLLM = null) {
                 }
 
                 // Success! Delete from queue
-                $successIds[] = $row['id'];
+                $successIds[] = $row;
                 $results['processed']++;
+                $relLLM->setCommitGuard(null);
 
             } catch (Throwable $e) {
+                $relLLM->setCommitGuard(null);
                 $errorMsg = $e->getMessage();
                 $errorClass = get_class($e);
                 $results['errors'][] = "NPC {$data['npc_id']}: {$errorClass}: " . $errorMsg;
@@ -273,27 +379,23 @@ function _relProcessQueue($limit = 5, $relLLM = null) {
                 if ($retryCount >= $maxRetries) {
                     // Exceeded max retries - log critical event and abandon
                     Logger::error("[REL-ASYNC] ABANDONED after {$retryCount} retries: NPC {$data['npc_name']} - {$errorClass}: {$errorMsg}");
-                    $abandonIds[] = $row['id'];
+                    $abandonIds[] = $row;
                     $results['abandoned']++;
                 } else {
                     // Increment retry count for next attempt
-                    $retryIds[] = ['id' => $row['id'], 'error' => substr("{$errorClass}: {$errorMsg}", 0, 500)];
+                    $retryIds[] = ['id' => $row['id'], 'claim' => $row['claim'], 'error' => substr("{$errorClass}: {$errorMsg}", 0, 500)];
                     $results['retried']++;
                     Logger::warn("[REL-ASYNC] Retry {$retryCount}/" . $maxRetries . " for NPC {$data['npc_name']}: {$errorClass}: {$errorMsg}");
                 }
             }
         }
 
-        // Delete successfully processed entries
-        if (!empty($successIds)) {
-            $idList = implode(',', array_map('intval', $successIds));
-            $GLOBALS['db']->query("DELETE FROM relationship_eval_queue WHERE id IN ({$idList})");
-        }
-
-        // Delete abandoned entries (exceeded max retries)
-        if (!empty($abandonIds)) {
-            $idList = implode(',', array_map('intval', $abandonIds));
-            $GLOBALS['db']->query("DELETE FROM relationship_eval_queue WHERE id IN ({$idList})");
+        // Delete processed and abandoned entries only while they still hold the claimed payload.
+        foreach (array_merge($successIds, $abandonIds) as $done) {
+            $claim = (string)($done['claim'] ?? '');
+            $GLOBALS['db']->query($claim !== ''
+                ? 'DELETE FROM ' . _relQueueClaimSql('relationship_eval_queue', 'eval_data', $done['id'], $claim)
+                : 'DELETE FROM relationship_eval_queue WHERE id = ' . (int)$done['id'] . " AND NOT (eval_data ? 'queue_token')");
         }
 
         // Increment retry count for failed entries (will try again later)
@@ -307,7 +409,7 @@ function _relProcessQueue($limit = 5, $relLLM = null) {
                 "UPDATE relationship_eval_queue
                  SET retry_count = COALESCE(retry_count, 0) + 1,
                      last_error = '{$escapedError}'
-                 WHERE id = {$id}"
+                 WHERE id = {$id} AND eval_data->>'queue_token' = '" . $GLOBALS['db']->escape($retry['claim']) . "'"
             );
         }
 
@@ -407,7 +509,10 @@ function _relQueueNpcInit($npcId, $npcName) {
         'npc_id' => $npcId,
         'npc_name' => $npcName,
         'type' => 'init',  // Mark as init-only (no conversation to evaluate)
-        'queued_at' => date('Y-m-d H:i:s')
+        'queued_at' => date('Y-m-d H:i:s'),
+        // Same capture/claim contract as evaluations: bound identity, timeline and a fresh token.
+        '_rel_capture' => _relCaptureEndpoints([$npcId]),
+        'queue_token' => _relQueueToken(),
     ];
 
     $jsonData = json_encode($queueData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -420,7 +525,7 @@ function _relQueueNpcInit($npcId, $npcName) {
         $GLOBALS['db']->query(
             "INSERT INTO relationship_init_queue (npc_id, init_data, created_at)
              VALUES ({$escapedNpcId}, '{$escapedJson}', NOW())
-             ON CONFLICT (npc_id) DO NOTHING"  // Don't replace - first request wins
+             ON CONFLICT (npc_id) DO UPDATE SET init_data = EXCLUDED.init_data, created_at = NOW()"
         );
 
         return true;
@@ -433,7 +538,7 @@ function _relQueueNpcInit($npcId, $npcName) {
                 $GLOBALS['db']->query(
                     "INSERT INTO relationship_init_queue (npc_id, init_data, created_at)
                      VALUES ({$escapedNpcId}, '{$escapedJson}', NOW())
-                     ON CONFLICT (npc_id) DO NOTHING"
+                     ON CONFLICT (npc_id) DO UPDATE SET init_data = EXCLUDED.init_data, created_at = NOW()"
                 );
                 return true;
             } catch (Exception $e2) {
@@ -459,7 +564,7 @@ function _relProcessInitQueue($limit = 5, $relLLM = null) {
 
     try {
         $rows = $GLOBALS['db']->fetchAll(
-            "SELECT id, npc_id, init_data, COALESCE(retry_count, 0) as retry_count
+            "SELECT id, npc_id, init_data, init_data->>'queue_token' AS claim, COALESCE(retry_count, 0) as retry_count
              FROM relationship_init_queue
              ORDER BY COALESCE(retry_count, 0) ASC, created_at ASC
              LIMIT {$limit}"
@@ -487,44 +592,57 @@ function _relProcessInitQueue($limit = 5, $relLLM = null) {
             $retryCount = intval($row['retry_count']);
 
             if (!$data) {
-                $successIds[] = $row['id'];
+                $successIds[] = $row;
                 continue;
             }
 
             try {
-                // Analyze available relationship source data into JSONB.
-                $initResult = $relLLM->analyzeNpc($data['npc_id'], false);
+                $capture = $data['_rel_capture'] ?? null;
+                if (!is_array($capture) || (string)$row['claim'] === '') {
+                    Logger::info("[REL-ASYNC] Discarding unbound legacy init for NPC {$data['npc_id']}");
+                    $successIds[] = $row;
+                    continue;
+                }
+                if (!_relCaptureIsCurrent($capture)) {
+                    Logger::info("[REL-ASYNC] Discarding init from another timeline or changed actor identity: {$data['npc_name']}");
+                    $successIds[] = $row;
+                    continue;
+                }
+                $relLLM->setCommitGuard(_relQueueCommitGuard('relationship_init_queue', 'init_data', $row['id'], $row['claim'], $capture));
+                // Analyze with the binding captured at enqueue, not the one current at execution.
+                $initResult = $relLLM->analyzeNpc($data['npc_id'], false, $capture['bindings'][(int)$data['npc_id']] ?? null);
                 _relRequireLlmSuccess($initResult, 'Queued relationship initialization');
                 if (!empty($initResult['ok']) && empty($initResult['skipped'])) {
                     Logger::info("[REL-ASYNC] Initialized relationships for {$data['npc_name']}");
                 }
-                $successIds[] = $row['id'];
+                $relLLM->setCommitGuard(null);
+                $successIds[] = $row;
                 $results['processed']++;
             } catch (Throwable $e) {
+                $relLLM->setCommitGuard(null);
                 $errorMsg = $e->getMessage();
                 $errorClass = get_class($e);
                 $maxRetries = defined('REL_QUEUE_MAX_RETRIES') ? REL_QUEUE_MAX_RETRIES : 3;
 
                 if ($retryCount >= $maxRetries) {
                     Logger::error("[REL-ASYNC] ABANDONED init after {$retryCount} retries: {$data['npc_name']} - {$errorClass}: {$errorMsg}");
-                    $abandonIds[] = $row['id'];
+                    $abandonIds[] = $row;
                     $results['abandoned']++;
                 } else {
-                    $retryIds[] = ['id' => $row['id'], 'error' => substr("{$errorClass}: {$errorMsg}", 0, 500)];
+                    $retryIds[] = ['id' => $row['id'], 'claim' => $row['claim'], 'error' => substr("{$errorClass}: {$errorMsg}", 0, 500)];
                     $results['retried']++;
                     Logger::warn("[REL-ASYNC] Init retry {$retryCount}/" . $maxRetries . " for {$data['npc_name']}: {$errorClass}: {$errorMsg}");
                 }
             }
         }
 
-        if (!empty($successIds)) {
-            $idList = implode(',', array_map('intval', $successIds));
-            $GLOBALS['db']->query("DELETE FROM relationship_init_queue WHERE id IN ({$idList})");
-        }
-
-        if (!empty($abandonIds)) {
-            $idList = implode(',', array_map('intval', $abandonIds));
-            $GLOBALS['db']->query("DELETE FROM relationship_init_queue WHERE id IN ({$idList})");
+        // Ack only the claimed token; a replacement queued while the model ran survives. Unbound legacy
+        // rows (no token) are deleted only while still unbound.
+        foreach (array_merge($successIds, $abandonIds) as $done) {
+            $claim = (string)($done['claim'] ?? '');
+            $GLOBALS['db']->query($claim !== ''
+                ? 'DELETE FROM ' . _relQueueClaimSql('relationship_init_queue', 'init_data', $done['id'], $claim)
+                : 'DELETE FROM relationship_init_queue WHERE id = ' . (int)$done['id'] . " AND NOT (init_data ? 'queue_token')");
         }
 
         if (!empty($retryIds)) {
@@ -537,7 +655,7 @@ function _relProcessInitQueue($limit = 5, $relLLM = null) {
                 "UPDATE relationship_init_queue
                  SET retry_count = COALESCE(retry_count, 0) + 1,
                      last_error = '{$escapedError}'
-                 WHERE id = {$id}"
+                 WHERE id = {$id} AND init_data->>'queue_token' = '" . $GLOBALS['db']->escape($retry['claim']) . "'"
             );
         }
 

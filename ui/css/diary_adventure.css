@@ -173,6 +173,23 @@
     color: #ffffff !important;
 }
 
+/* Narrow screens: month title on its own row, prev/next links share the row below. */
+@media (max-width: 600px) {
+    .diary-calendar-navigation {
+        flex-wrap: wrap;
+    }
+    .diary-calendar-navigation span {
+        order: -1;
+        flex-basis: 100%;
+        width: auto;
+        min-width: 0;
+    }
+    .diary-calendar-navigation .diary-calendar-nav {
+        flex: 1 1 0;
+        min-width: 0;
+    }
+}
+
 /* Calendar Mode Toggle */
 .calendar-mode-toggle {
     display: flex;

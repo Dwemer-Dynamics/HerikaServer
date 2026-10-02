@@ -27,6 +27,16 @@ ALTER TABLE public.npc_commitments
     ADD COLUMN IF NOT EXISTS occurrence_count INTEGER NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS last_resolved_gamets BIGINT;
 
+-- Exact ownership (S7): the owning core_npc_master row and its canonical key when the task was written, plus an
+-- explicitly resolved counterparty key. Nullable: legacy name-only rows stay unassigned (never backfilled by name).
+ALTER TABLE public.npc_commitments
+    ADD COLUMN IF NOT EXISTS npc_id BIGINT,
+    ADD COLUMN IF NOT EXISTS actor_key TEXT,
+    ADD COLUMN IF NOT EXISTS counterparty_key TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_npc_commitments_owner_status_due
+    ON public.npc_commitments (npc_id, status, due_gamets);
+
 CREATE INDEX IF NOT EXISTS idx_npc_commitments_actor_status_due
     ON public.npc_commitments (LOWER(actor_name), status, due_gamets);
 

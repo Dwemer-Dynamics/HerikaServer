@@ -4141,7 +4141,9 @@ try {
     Logger::error("Error creating combined_descriptions view: " . $e->getMessage());
 }
 
-try {
+// data/memory_actor_identity.sql appends provenance columns later; a narrower CREATE OR REPLACE
+// would fail against it, so this legacy definition only runs before memory_v 20251122001.
+if ($checkVersion("memory_v") < 20251122001) try {
     $db->execQuery("CREATE OR REPLACE VIEW \"public\".\"memory_v\" AS
  SELECT message,
     uid,
@@ -8085,6 +8087,32 @@ if ($checkVersion("npc_commitments") < 20260719002) {
     }
 }
 
+// Identity objects listed in lib/identity_schema_readiness.php (shared with runtime bootstrap). A missing
+// object reruns its idempotent migration even when the version is current. A column with the wrong type
+// cannot be converted by ADD COLUMN IF NOT EXISTS, so it is logged rather than rerun or rewritten.
+require_once(dirname(__DIR__) . DIRECTORY_SEPARATOR . "lib/identity_schema_readiness.php");
+$identityGaps = chimIdentitySchemaGaps($db);
+$identityRepairNeeded = function (string $migration) use ($identityGaps): bool {
+    if ($identityGaps === null) {
+        return true;
+    }
+    foreach ($identityGaps[$migration]['incompatible'] ?? [] as $object => $actualType) {
+        Logger::error("Identity schema $migration: $object has incompatible type $actualType; repair it manually");
+    }
+    return !empty($identityGaps[$migration]['missing']);
+};
+
+// Exact task ownership columns (nullable; legacy name-only tasks stay unassigned). The same idempotent file is
+// rerun when a column or index is missing, and private playthrough upgrades add the live columns to older saves as NULL.
+if ($identityRepairNeeded("npc_commitments") || $checkVersion("npc_commitments") < 20260930101) {
+    if ($db->execQuery(file_get_contents(__DIR__ . "/../lib/core/database_schema/npc_commitments.sql")) !== false) {
+        $updateVersion("npc_commitments", 20260930101);
+        Logger::info("Applied patch npc_commitments 20260930101");
+    } else {
+        Logger::error("Failed to apply patch npc_commitments 20260930101");
+    }
+}
+
 if ($checkVersion("npc_commitment_actions") < 20260719002) {
     Logger::debug("Applying npc_commitment_actions 20260719002 - add persistent NPC task actions");
 
@@ -8329,6 +8357,67 @@ if ($checkVersion("default_npc_tags") < 20260805003) {
 }
 
 //----------------------------------------------------
+// SAME-NAMED NPC DISPLAY IDENTITIES
+//----------------------------------------------------
+
+if ($checkVersion("npc_actor_identity") < 20260824003) {
+    Logger::debug("Applying npc_actor_identity 20260824003 - key same-named profiles by name and RefID");
+    $migrationOk = true;
+
+    try {
+        $migrationOk = $db->execQuery(
+            "ALTER TABLE public.core_npc_master DROP CONSTRAINT IF EXISTS npc_master_npc_name_key"
+        ) !== false && $migrationOk;
+        $migrationOk = $db->execQuery(
+            "UPDATE public.core_npc_master
+             SET refid = LPAD(UPPER(REGEXP_REPLACE(BTRIM(refid), '^0x', '', 'i')), 8, '0'),
+                 md5 = MD5(BTRIM(npc_name) || ' [RefID: '
+                     || LPAD(UPPER(REGEXP_REPLACE(BTRIM(refid), '^0x', '', 'i')), 8, '0') || ']')
+             WHERE BTRIM(COALESCE(refid, '')) ~* '^(0x)?[0-9a-f]{1,8}$'"
+        ) !== false && $migrationOk;
+        $migrationOk = $db->execQuery(
+            "UPDATE public.core_npc_master_history
+             SET refid = LPAD(UPPER(REGEXP_REPLACE(BTRIM(refid), '^0x', '', 'i')), 8, '0'),
+                 md5 = MD5(BTRIM(npc_name) || ' [RefID: '
+                     || LPAD(UPPER(REGEXP_REPLACE(BTRIM(refid), '^0x', '', 'i')), 8, '0') || ']')
+             WHERE BTRIM(COALESCE(refid, '')) ~* '^(0x)?[0-9a-f]{1,8}$'"
+        ) !== false && $migrationOk;
+        $migrationOk = $db->execQuery(
+            "DROP INDEX IF EXISTS public.idx_core_npc_master_actor_key"
+        ) !== false && $migrationOk;
+        $migrationOk = $db->execQuery(
+            "ALTER TABLE public.core_npc_master DROP COLUMN IF EXISTS actor_key"
+        ) !== false && $migrationOk;
+        $migrationOk = $db->execQuery(
+            "ALTER TABLE public.core_npc_master_history DROP COLUMN IF EXISTS actor_key"
+        ) !== false && $migrationOk;
+        $migrationOk = $db->execQuery(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_core_npc_master_display_identity
+             ON public.core_npc_master (lower(npc_name), upper(refid))
+             WHERE refid IS NOT NULL AND BTRIM(refid) <> ''"
+        ) !== false && $migrationOk;
+        $migrationOk = $db->execQuery(
+            "CREATE INDEX IF NOT EXISTS idx_core_npc_master_name_lookup
+             ON public.core_npc_master (lower(npc_name), id)"
+        ) !== false && $migrationOk;
+        $migrationOk = $db->execQuery(
+            "CREATE INDEX IF NOT EXISTS idx_core_npc_master_refid_lookup
+             ON public.core_npc_master (lower(refid))
+             WHERE refid IS NOT NULL"
+        ) !== false && $migrationOk;
+    } catch (Throwable $e) {
+        $migrationOk = false;
+        Logger::error("Failed applying npc_actor_identity 20260824003: " . $e->getMessage());
+    }
+
+    if ($migrationOk) {
+        $updateVersion("npc_actor_identity", 20260824003);
+        Logger::info("Applied patch npc_actor_identity 20260824003");
+    }
+}
+
+
+//----------------------------------------------------
 // AUDIT REQUEST RESPONSE - Store the response text for audit requests
 // Version 20260806001
 //----------------------------------------------------
@@ -8388,6 +8477,86 @@ if ($migrationOk) {
     }
 } else {
     Logger::error("Failed to apply eventlog_session_payload migration; existing views were preserved");
+}
+
+// Re-key existing actor rows without changing their IDs, character data or profile ownership.
+if ($checkVersion('npc_stable_identity') < 20260927001) {
+    require_once __DIR__ . '/../lib/core/npc_master.class.php';
+    try {
+        chimMigrateStableNpcIdentity();
+        $updateVersion('npc_stable_identity', 20260927001);
+    } catch (Throwable $error) {
+        Logger::error('Stable NPC identity migration failed: ' . $error->getMessage());
+    }
+}
+
+// Run the idempotent constraint check after snapshot restores too: LIKE does not clone foreign keys.
+if ($db->execQuery(file_get_contents(__DIR__ . '/../data/npc_profile_sharing.sql')) !== false) {
+    // 20261002001: empty reference lists (plugin '*') are explicit same-name catch-all groups.
+    if ($checkVersion('npc_profile_sharing') < 20261002001) {
+        $updateVersion('npc_profile_sharing', 20261002001);
+    }
+} else {
+    Logger::error('Failed to apply npc_profile_sharing migration');
+}
+
+// Additive exact-identity lookup for eventlog.people format 2; readers and writers are unchanged.
+// Runtime bootstrap checks the same object list, so a missing object reruns this idempotent file.
+// Restores refill public.eventlog in place, which keeps and maintains the index (docs/actor-identity.md).
+if ($identityRepairNeeded('eventlog_actor_identity') || $checkVersion('eventlog_actor_identity') < 20260930002) {
+    if ($db->execQuery(file_get_contents(__DIR__ . '/../data/eventlog_actor_identity.sql')) !== false) {
+        $updateVersion('eventlog_actor_identity', 20260930002);
+        Logger::info('Applied patch eventlog_actor_identity 20260930002');
+    } else {
+        Logger::error('Failed to apply eventlog_actor_identity 20260930002');
+    }
+}
+
+// Exact memory audience/provenance columns and memory_v source references (docs/actor-identity.md).
+// Idempotent; reruns when any object is missing. Requires the eventlog identity function above.
+if ($identityRepairNeeded('memory_actor_identity') || $checkVersion('memory_actor_identity') < 20260930001) {
+    if ($db->execQuery(file_get_contents(__DIR__ . '/../data/memory_actor_identity.sql')) !== false) {
+        $updateVersion('memory_actor_identity', 20260930001);
+        Logger::info('Applied patch memory_actor_identity 20260930001');
+    } else {
+        Logger::error('Failed to apply memory_actor_identity 20260930001');
+    }
+}
+
+// Nullable exact owner keys on actions_issued/moods_issued; legacy rows stay NULL (docs/actor-identity.md).
+if ($identityRepairNeeded('action_mood_actor_identity') || $checkVersion('action_mood_actor_identity') < 20260930001) {
+    if ($db->execQuery(file_get_contents(__DIR__ . '/../data/action_mood_actor_identity.sql')) !== false) {
+        $updateVersion('action_mood_actor_identity', 20260930001);
+        Logger::info('Applied patch action_mood_actor_identity 20260930001');
+    } else {
+        Logger::error('Failed to apply action_mood_actor_identity 20260930001');
+    }
+}
+
+// Physical owner key on Background Life history (the table exists since bgl_history 20260623001 above).
+// Nullable and idempotent: legacy name-only rows stay NULL and unassigned; reruns when an object is missing.
+// Playthrough upgrades add the column to older saves as NULL; restores keep the live index.
+if ($identityRepairNeeded('bgl_history') || $checkVersion('bgl_history') < 20260930001) {
+    if ($db->execQuery("
+        ALTER TABLE public.bgl_history ADD COLUMN IF NOT EXISTS actor_key text;
+        CREATE INDEX IF NOT EXISTS idx_bgl_history_actor_key ON public.bgl_history (actor_key, gamets DESC, ts DESC) WHERE actor_key IS NOT NULL;
+    ") !== false) {
+        $updateVersion('bgl_history', 20260930001);
+        Logger::info('Applied patch bgl_history 20260930001');
+    } else {
+        Logger::error('Failed to apply bgl_history 20260930001');
+    }
+}
+
+// Exact diary/book authorship and author-keyed physical diary tracking (docs/actor-identity.md).
+// Idempotent; reruns when any object is missing (fresh installs and restores). Legacy rows stay NULL.
+if ($identityRepairNeeded('diary_actor_identity') || $checkVersion('diary_actor_identity') < 20260930001) {
+    if ($db->execQuery(file_get_contents(__DIR__ . '/../data/diary_actor_identity.sql')) !== false) {
+        $updateVersion('diary_actor_identity', 20260930001);
+        Logger::info('Applied patch diary_actor_identity 20260930001');
+    } else {
+        Logger::error('Failed to apply diary_actor_identity 20260930001');
+    }
 }
 
 if ($checkVersion("default_npc_tags") < 20260814001) {
@@ -8497,7 +8666,9 @@ if ($checkVersion('npc_plugin_extended_data') < 20260919001) {
 }
 
 // Two-way courier letters between the player and Background Life NPCs (lib/bgl_letters.php).
-if ($checkVersion("bgl_letters") < 20260924001) {
+// Both steps are idempotent and rerun when lib/identity_schema_readiness.php reports courier_refid missing.
+$bglLettersRepair = $identityRepairNeeded("bgl_letters");
+if ($bglLettersRepair || $checkVersion("bgl_letters") < 20260924001) {
     Logger::debug("Applying bgl_letters 20260924001 - create player/NPC letter correspondence table");
 
     $db->execQuery("
@@ -8530,6 +8701,14 @@ if ($checkVersion("bgl_letters") < 20260924001) {
 
     $updateVersion("bgl_letters", 20260924001);
     Logger::info("Applied patch bgl_letters 20260924001");
+}
+
+// The exact RefID of the spawned courier, so arrival, greeting and Despawn never address a namesake courier.
+if ($bglLettersRepair || $checkVersion("bgl_letters") < 20260930001) {
+    Logger::debug("Applying bgl_letters 20260930001 - add courier_refid");
+    $db->execQuery("ALTER TABLE public.bgl_letters ADD COLUMN IF NOT EXISTS courier_refid varchar");
+    $updateVersion("bgl_letters", 20260930001);
+    Logger::info("Applied patch bgl_letters 20260930001");
 }
 
 // Install durable event accounting before refreshing the snapshot schema.

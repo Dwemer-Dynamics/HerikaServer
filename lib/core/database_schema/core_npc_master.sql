@@ -53,7 +53,8 @@ CREATE TABLE public.core_npc_master (
     gamets_last_updated numeric,
     core text,
     base text,
-    tags text
+    tags text,
+    profile_owner_npc_id integer
 );
 
 
@@ -122,11 +123,19 @@ SELECT pg_catalog.setval('public.npc_master_id_seq', 2189, true);
 
 
 --
--- Name: core_npc_master npc_master_npc_name_key; Type: CONSTRAINT; Schema: public; Owner: dwemer
+-- Name: core_npc_master display identity; Type: INDEX; Schema: public; Owner: dwemer
 --
 
-ALTER TABLE ONLY public.core_npc_master
-    ADD CONSTRAINT npc_master_npc_name_key UNIQUE (npc_name);
+CREATE UNIQUE INDEX idx_core_npc_master_display_identity
+    ON public.core_npc_master (lower(npc_name), upper(refid))
+    WHERE refid IS NOT NULL AND BTRIM(refid) <> '';
+
+CREATE INDEX idx_core_npc_master_name_lookup
+    ON public.core_npc_master (lower(npc_name), id);
+
+CREATE INDEX idx_core_npc_master_refid_lookup
+    ON public.core_npc_master (lower(refid))
+    WHERE refid IS NOT NULL;
 
 
 --
@@ -135,6 +144,19 @@ ALTER TABLE ONLY public.core_npc_master
 
 ALTER TABLE ONLY public.core_npc_master
     ADD CONSTRAINT npc_master_pkey PRIMARY KEY (id);
+
+CREATE UNIQUE INDEX idx_npc_stable_reference
+    ON public.core_npc_master (lower(metadata->>'refid_source'))
+    WHERE COALESCE(metadata->>'refid_source', '') <> '';
+
+CREATE INDEX idx_npc_profile_owner ON public.core_npc_master (profile_owner_npc_id)
+    WHERE profile_owner_npc_id IS NOT NULL;
+
+ALTER TABLE public.core_npc_master ADD CONSTRAINT npc_profile_owner_not_self
+    CHECK (profile_owner_npc_id IS NULL OR profile_owner_npc_id <> id);
+ALTER TABLE public.core_npc_master ADD CONSTRAINT npc_profile_owner_fk
+    FOREIGN KEY (profile_owner_npc_id) REFERENCES public.core_npc_master(id)
+    DEFERRABLE INITIALLY DEFERRED;
 
 
 --

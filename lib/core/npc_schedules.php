@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/npc_commitments.php';
+require_once __DIR__ . '/npc_master.class.php';  // response identity endpoints for exact task routing
 require_once __DIR__ . '/game_plugins.php';
 require_once __DIR__ . '/../background_life_encounters.php';
 
@@ -42,16 +43,15 @@ function chimScheduleSave(array $npc, array $input, int $taskId = 0, bool $outer
     $locationStable = chimConvertRuntimeFormIdToStableReference(sprintf('%08X', $locationId & 0xffffffff));
     if (!$actorStable || !$locationStable) throw new InvalidArgumentException('The actor and destination need registered, persistent game references. Refresh game data first.');
     $npcId = (int)$npc['id'];
-    if ($mode === 'task') {
-        $actorName = $db->escape($npc['npc_name']);
-        if (count($db->fetchAll("SELECT id FROM core_npc_master WHERE lower(npc_name)=lower('{$actorName}')")) !== 1) throw new InvalidArgumentException('AI duties require a unique NPC name. Use a destination-only schedule for this NPC.');
-    }
+    // AI duties are bound to this exact row (npc_id/actor_key) through create, context, worker and completion,
+    // so namesakes no longer need a unique-name guard.
     $schedule = ['mode'=>$mode,'duration_hours'=>$duration,'actor'=>$actorStable,'destination'=>$locationStable,'name'=>$locations[0]['name'],'validation'=>'pending'];
     if (!$outerTransaction) chimScheduleExec('BEGIN');
     try {
         $db->fetchAll("SELECT pg_advisory_xact_lock(hashtext('dynamic_profile_clock'))");
         if ((chimScheduleClock()['epoch'] ?? '') !== $clock['epoch']) throw new RuntimeException('The game timeline changed. Refresh schedules.');
         $db->fetchAll("SELECT pg_advisory_xact_lock(7419, {$npcId})");
+        if (array_key_exists('expected_actor_key', $input)) chimScheduleGuardActorKey($npcId, (string)$input['expected_actor_key']);
         $others = $db->fetchAll("SELECT id,due_gamets,repeat_interval_gamets,schedule FROM npc_commitments WHERE npc_id={$npcId} AND schedule IS NOT NULL AND status IN ('scheduled','due') AND id<>{$taskId}");
         $start = $due - chimCommitmentHoursToGamets(3); $end = $due + (int)round($duration / 0.0000024);
         foreach ($others as $other) {
@@ -78,7 +78,7 @@ function chimScheduleSave(array $npc, array $input, int $taskId = 0, bool $outer
                 chimScheduleExec("DELETE FROM responselog WHERE sent=0 AND rowid IN (SELECT command_id FROM npc_schedule_runs WHERE task_id={$taskId})");
             }
         } else {
-            $created = chimCommitmentCreate($npc['npc_name'], ['subject'=>$subject,'location'=>$locations[0]['name'],'due_in_hours'=>($due-$now)*0.0000024,'repeat_every_hours'=>$repeat], $now);
+            $created = chimCommitmentCreate($npc, ['subject'=>$subject,'location'=>$locations[0]['name'],'due_in_hours'=>($due-$now)*0.0000024,'repeat_every_hours'=>$repeat], $now);
             if (empty($created['ok'])) throw new RuntimeException('Could not create schedule.');
             $taskId = $created['id'];
         }
@@ -88,6 +88,15 @@ function chimScheduleSave(array $npc, array $input, int $taskId = 0, bool $outer
         if (!$active) chimScheduleNewRun($taskId, $due, $schedule, $clock);
         if (!$outerTransaction) chimScheduleExec('COMMIT'); return $taskId;
     } catch (Throwable $e) { if (!$outerTransaction) chimScheduleExec('ROLLBACK'); throw $e; }
+}
+
+// Menu writes carry the physical key the editor was shown. Recheck it on the row locked inside the write
+// transaction (after the NPC schedule lock), so a row replacement or key change cannot slip between an
+// earlier API check and the write. Callers without an expected key keep their own captured-row guards.
+function chimScheduleGuardActorKey(int $npcId, ?string $expectedKey): void {
+    if ($expectedKey === null) return;
+    $row = $GLOBALS['db']->fetchOne("SELECT * FROM core_npc_master WHERE id={$npcId} FOR SHARE");
+    if (!$row || chimNpcRowActorKey($row) !== $expectedKey) throw new RuntimeException('This NPC changed since it was opened. Reopen it before continuing.');
 }
 
 function chimScheduleNewRun(int $taskId, int $due, array $schedule, array $clock): void {
@@ -175,7 +184,7 @@ function chimScheduleReply(string $message): void {
     try {
         $db->fetchAll("SELECT pg_advisory_xact_lock(hashtext('dynamic_profile_clock'))");
         $clock = chimScheduleClock();
-        $r=$db->fetchOne("SELECT r.*,t.status,t.actor_name,t.subject,t.schedule AS current_schedule,t.due_gamets AS current_due,t.repeat_interval_gamets FROM npc_schedule_runs r JOIN npc_commitments t ON t.id=r.task_id WHERE r.id={$id} FOR UPDATE OF r,t");
+        $r=$db->fetchOne("SELECT r.*,t.status,t.actor_name,t.npc_id,t.subject,t.schedule AS current_schedule,t.due_gamets AS current_due,t.repeat_interval_gamets FROM npc_schedule_runs r JOIN npc_commitments t ON t.id=r.task_id WHERE r.id={$id} FOR UPDATE OF r,t");
         if (!$r || !hash_equals($r['token'],$token) || strcasecmp($r['actor_ref'],$actor)!==0 || $r['pending_op']!==$op || $r['epoch']!==($clock['epoch']??'')) { chimScheduleExec('ROLLBACK'); return; }
         $allowed=['busy','invalid','stale'];
         $allowed=array_merge($allowed, ['validate'=>['validated'],'travel'=>['travelling','arrived'],'check'=>['travelling','arrived'],'ensure'=>['arrived','teleported'],'release'=>['released']][$op] ?? []);
@@ -201,15 +210,23 @@ function chimScheduleReply(string $message): void {
                 chimScheduleExec('COMMIT'); return;
             }
             $phase=$r['status']==='cancelled'?'cancelled':'finished';
-            if (in_array($r['status'],['scheduled','due'],true) && (int)$r['current_due']===(int)$r['due_gamets'] && (int)(json_decode($r['current_schedule'],true)['revision']??0)===(int)($s['revision']??0)) chimCommitmentSetStatus($r['actor_name'],$task,'completed','Appointment completed in game.',$now);
+            if (in_array($r['status'],['scheduled','due'],true) && (int)$r['current_due']===(int)$r['due_gamets'] && (int)(json_decode($r['current_schedule'],true)['revision']??0)===(int)($s['revision']??0)) { $owner=$db->fetchOne('SELECT * FROM core_npc_master WHERE id='.(int)$r['npc_id']); if (!empty($owner['id'])) chimCommitmentSetStatus($owner,$task,'completed','Appointment completed in game.',$now); }
             $t=$db->fetchOne("SELECT * FROM npc_commitments WHERE id={$task}");
             if ($t['status']==='scheduled') chimScheduleNewRun($task,(int)$t['due_gamets'],json_decode($t['schedule'],true),$clock);
         } elseif (in_array($result,['arrived','teleported'],true)) {
             $phase=$op==='ensure'?'active':'waiting';
             if ($phase==='active' && $s['mode']==='task' && !chimInteractionAllowed()) $phase='waiting';
             if ($phase==='active' && $s['mode']==='task') {
-                $name=str_replace(['|','@',"\n"], ' ', $r['actor_name']); $subject=str_replace(['|','@',"\n"], ' ', $r['subject']);
-                $db->insert('responselog',['localts'=>time(),'sent'=>0,'actor'=>'rolemaster','text'=>'','action'=>"rolecommand|Instruction@{$name}@Scheduled task #{$task} is due. You have arrived: {$subject}. Use available actions and resolve only after the outcome happens.@schedule{$id}",'tag'=>'']);
+                // Route to the task's exact row by its current RefID (the envelope target); never a bare namesake label.
+                $taskRow=$db->fetchOne('SELECT * FROM core_npc_master WHERE id='.(int)$r['npc_id']);
+                try { $taskEndpoint=!empty($taskRow['id']) ? chimResponseEndpointForNpcRow($taskRow) : null; }
+                catch (ChimResponseIdentityException $e) { $taskEndpoint=null; }  // invalid/stale binding: skip, keep the arrival
+                // Only the physical actor that travelled (the run's actor_ref) receives the task; a re-bound row does not.
+                $normRef=static fn($v)=>str_pad(strtoupper(preg_replace('/^0x/i','',trim((string)$v))),8,'0',STR_PAD_LEFT);
+                if ($taskEndpoint && ($taskEndpoint['refid']===null || $normRef($taskEndpoint['refid'])!==$normRef($r['actor_ref']))) $taskEndpoint=null;
+                $name=$taskEndpoint && $taskEndpoint['refid']!==null ? trim(str_replace(['|','@',"\n",'[',']'], ' ', (string)$taskRow['npc_name'])).' [RefID: '.$taskEndpoint['refid'].']' : '';
+                $subject=str_replace(['|','@',"\n"], ' ', $r['subject']);
+                if ($name!=='') $db->insert('responselog',['localts'=>time(),'sent'=>0,'actor'=>'rolemaster','text'=>'','action'=>"rolecommand|Instruction@{$name}@Scheduled task #{$task} is due. You have arrived: {$subject}. Use available actions and resolve only after the outcome happens.@schedule{$id}",'tag'=>'']);
             }
         } elseif ($result==='travelling') $phase='travelling';
         $json=$db->escape(json_encode($s,JSON_THROW_ON_ERROR));
@@ -219,13 +236,14 @@ function chimScheduleReply(string $message): void {
 }
 
 // Serialize menu changes with game replies; active deletion waits for package release.
-function chimScheduleManage(int $npcId, int $id, string $operation, string $epoch): void {
+function chimScheduleManage(int $npcId, int $id, string $operation, string $epoch, ?string $expectedActorKey = null): void {
     $db=$GLOBALS['db'];
             chimScheduleExec('BEGIN');
             try {
                 $db->fetchAll("SELECT pg_advisory_xact_lock(hashtext('dynamic_profile_clock'))");
                 if ($epoch !== (chimScheduleClock()['epoch'] ?? '')) throw new InvalidArgumentException('The game timeline changed. Refresh this menu.');
                 $db->fetchAll("SELECT pg_advisory_xact_lock(7419, {$npcId})");
+                chimScheduleGuardActorKey($npcId, $expectedActorKey);
                 $task=$db->fetchOne("SELECT * FROM npc_commitments WHERE id={$id} AND npc_id={$npcId} AND schedule IS NOT NULL FOR UPDATE");
                 if (!$task) throw new InvalidArgumentException('Schedule not found.');
                 $active=$db->fetchOne("SELECT id FROM npc_schedule_runs WHERE task_id={$id} AND phase NOT IN ('finished','cancelled','invalidated')");

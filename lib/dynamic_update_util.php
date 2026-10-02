@@ -17,8 +17,31 @@ function processNearbyDiary($gameRequest, $eventType) {
     echo "The Narrator|rolecommand|DebugNotification@Checking for nearby NPCs within 400 units..." . PHP_EOL;
 }
 
+// Owner key of a diary/memory writer from its explicit typed scope only: a physical row's key, or the typed
+// Narrator. Never from a name, the first participant, or a current global for a different actor.
+function chimDiaryOwnerKey($actorScope): ?string
+{
+    require_once __DIR__ . '/core/npc_reference.php';
+    if (is_array($actorScope) && (int)($actorScope['id'] ?? 0) > 0) { return chimNpcRowActorKey($actorScope); }
+    return $actorScope === CHIM_ACTOR_KEY_NARRATOR ? CHIM_ACTOR_KEY_NARRATOR : null;
+}
+
+// Re-read the exact row after generation: a deleted, re-keyed or relinked author discards the LLM output
+// instead of writing it under whoever now holds the name. Typed principals and unscoped legacy calls pass.
+function chimDiaryAuthorStillCurrent($actorScope): bool
+{
+    if (!is_array($actorScope) || (int)($actorScope['id'] ?? 0) <= 0) { return true; }
+    require_once __DIR__ . '/core/npc_reference.php';
+    $row = $GLOBALS['db']->fetchOne('SELECT * FROM core_npc_master WHERE id = ' . (int)$actorScope['id']);
+    if (empty($row) || chimNpcRowActorKey($row) !== chimNpcRowActorKey($actorScope)) { return false; }
+    if (isset($actorScope['_profile_binding']) && function_exists('chimNpcProfileBinding')) {
+        return chimNpcProfileBinding($row) === (string)$actorScope['_profile_binding'];
+    }
+    return true;
+}
+
 // Function to generate diary entry for a nearby NPC (similar to followers but for any NPC)
-function generateNearbyDiary($npcName, $gameRequest, $eventType) {
+function generateNearbyDiary($npcName, $gameRequest, $eventType, $actorScope = null) {
     global $db;
 
     $defaultDiaryConnector = function_exists('chimResolveDiaryConnectorName') ? chimResolveDiaryConnectorName() : null;
@@ -182,6 +205,10 @@ function generateNearbyDiary($npcName, $gameRequest, $eventType) {
             unset($GLOBALS["gameRequest"]);
         }
         
+        if (!empty(trim($buffer)) && !chimDiaryAuthorStillCurrent($actorScope)) {
+            Logger::warn("DIARY_NEARBY: author of $npcName changed during generation; diary discarded");
+            return false;
+        }
         if (!empty(trim($buffer))) {
             // Save diary entry to database
             $topic = DataLastKnowDate();
@@ -196,19 +223,20 @@ function generateNearbyDiary($npcName, $gameRequest, $eventType) {
                     'content' => trim($buffer),
                     'tags' => "Nearby-diary,$eventType",
                     'people' => $npcName,
+                    'author_key' => chimDiaryOwnerKey($actorScope),
                     'location' => $location,
                     'sess' => $momentum,
                     'localts' => time()
                 )
             );
 
-            if ($diarySaved !== false) {
-                chimPhysicalDiarySyncForNpc($npcName, (int)$gameRequest[2]);
+            if ($diarySaved !== false && is_array($actorScope)) {
+                chimPhysicalDiarySyncForNpc($actorScope, (int)$gameRequest[2]);
             }
             
             // Log memory
             if (function_exists('logMemory')) {
-                logMemory($npcName, $npcName, trim($buffer), $momentum, $gameRequest[2], 'nearby_diary', $gameRequest[1]);
+                logMemory($npcName, $npcName, trim($buffer), $momentum, $gameRequest[2], 'nearby_diary', $gameRequest[1], chimDiaryOwnerKey($actorScope));
             }
             
             return true;
@@ -395,7 +423,8 @@ function generatePlayerDiary($gameRequest, $eventType)
     }
 
     $sqlfilter = " and type<>'prechat' and type<>'itemfound' and type<>'infoaction' and type<>'npcspellcast' ";
-    $contextDataHistoric = DataLastDataExpandedFor($playerName, $lastNDataForContext * -1, $sqlfilter);
+    require_once __DIR__ . '/core/npc_reference.php';
+    $contextDataHistoric = DataLastDataExpandedFor($playerName, $lastNDataForContext * -1, $sqlfilter, CHIM_ACTOR_KEY_PLAYER);
     $historyData = "";
     foreach ($contextDataHistoric as $element) {
         $historyData .= trim((string)($element["content"] ?? '')) . PHP_EOL . PHP_EOL;
@@ -534,6 +563,7 @@ function generatePlayerDiary($gameRequest, $eventType)
                 'content' => trim($buffer),
                 'tags' => "Player-diary,$eventType",
                 'people' => $playerName,
+                'author_key' => CHIM_ACTOR_KEY_PLAYER,
                 'location' => $location,
                 'sess' => $momentum,
                 'localts' => time()
@@ -541,7 +571,7 @@ function generatePlayerDiary($gameRequest, $eventType)
         );
 
         if (function_exists('logMemory')) {
-            logMemory($playerName, $playerName, trim($buffer), $momentum, $gameRequest[2], 'player_diary', $gameRequest[1]);
+            logMemory($playerName, $playerName, trim($buffer), $momentum, $gameRequest[2], 'player_diary', $gameRequest[1], CHIM_ACTOR_KEY_PLAYER);
         }
 
         echo $playerName . "|rolecommand|DebugNotification@Diary Entry Written for " . $playerName . PHP_EOL;
@@ -564,27 +594,16 @@ function processAutoDiary($gameRequest, $eventType) {
     $shouldProcessPlayerDiary = ($eventType === "goodnight" && $playerDiaryEnabled && $playerAutoDiaryEnabled)
         || ($eventType === "waitstart" && $playerDiaryEnabled && $playerAutoDiaryEnabled && $playerAutoDiaryWaitEnabled);
     
-    // Get nearby NPCs
-    $nearbyNpcsStr = DataBeingsInCloseRange();
-    Logger::info("AUTO_DIARY: DataBeingsInCloseRange returned: " . var_export($nearbyNpcsStr, true));
-    
-    $nearbyNpcs = [];
-    
-    if (!empty($nearbyNpcsStr)) {
-        Logger::debug("AUTO_DIARY: Raw nearby data: " . $nearbyNpcsStr);
-        
-        // Parse nearby NPCs (pipe-delimited string like "|Lydia|Serana|")
-        $nearbyNpcsStr = trim($nearbyNpcsStr, '|');
-        if (!empty($nearbyNpcsStr)) {
-            $nearbyNpcs = explode('|', $nearbyNpcsStr);
-            $nearbyNpcs = array_filter(array_map('trim', $nearbyNpcs));
-        }
-    }
-    
+    // Nearby actors from the captured close-range roster: exact registered rows by key. Participants
+    // without a registered physical key stay unresolved and are skipped; same-name actors stay distinct.
+    require_once __DIR__ . '/core/npc_reference.php';
+    $nearbyNpcs = DataCloseRangeActorRoster();
+    Logger::info("AUTO_DIARY: close-range roster has " . count($nearbyNpcs) . " actors");
+
     // Add The Narrator if auto diary is enabled for narrator
     // The Narrator is always "nearby" (conceptually omnipresent)
     if (!empty($GLOBALS["NARRATOR_AUTO_DIARY_ENABLED"])) {
-        $nearbyNpcs[] = "The Narrator";
+        $nearbyNpcs[] = ['name' => 'The Narrator', 'key' => CHIM_ACTOR_KEY_NARRATOR, 'row' => null];
         Logger::info("AUTO_DIARY: Added The Narrator to auto diary processing (auto toggle enabled)");
     }
     
@@ -650,13 +669,14 @@ function processAutoDiary($gameRequest, $eventType) {
 
     Logger::info("AUTO_DIARY: Processing $eventType event for " . count($nearbyNpcs) . " nearby NPCs/entities");
     
-    foreach ($nearbyNpcs as $npcName) {
-        if (empty($npcName)) {
+    foreach ($nearbyNpcs as $nearbyActor) {
+        $npcName = (string)$nearbyActor['name'];
+        if ($npcName === '') {
             continue;
         }
         
-        // Special handling for The Narrator
-        if ($npcName === "The Narrator") {
+        // Special handling for the typed Narrator principal (a physical NPC with that name is a row)
+        if ($nearbyActor['key'] === CHIM_ACTOR_KEY_NARRATOR) {
             // Check if narrator auto diary is enabled
             if (empty($GLOBALS["NARRATOR_AUTO_DIARY_ENABLED"])) {
                 Logger::debug("AUTO_DIARY: The Narrator auto diary is disabled, skipping");
@@ -682,7 +702,8 @@ function processAutoDiary($gameRequest, $eventType) {
             
             // Generate diary for The Narrator
             Logger::info("AUTO_DIARY: Generating diary for The Narrator");
-            $success = generateFollowerDiary("The Narrator", $gameRequest, $eventType);
+            require_once __DIR__ . '/core/npc_reference.php';
+            $success = generateFollowerDiary("The Narrator", $gameRequest, $eventType, CHIM_ACTOR_KEY_NARRATOR);
             
             if ($success) {
                 $generatedCount++;
@@ -700,13 +721,16 @@ function processAutoDiary($gameRequest, $eventType) {
             continue; // Skip to next NPC
         }
         
-        // Regular NPC processing
-        // Get NPC data from database
+        // Regular NPC processing: only the exact registered row captured for this roster entry.
         $npcMaster = new NpcMaster();
-        $currentNpcData = $npcMaster->getByName($npcName);
-        
+        $currentNpcData = $nearbyActor['row'];
+
         if (empty($currentNpcData)) {
-            Logger::debug("AUTO_DIARY: NPC '$npcName' not found in database, skipping");
+            Logger::debug("AUTO_DIARY: '$npcName' has no registered physical key in the close-range roster, skipping");
+            continue;
+        }
+        $diaryActorKey = chimNpcRowActorKey($currentNpcData);
+        if ($diaryActorKey === null) {
             continue;
         }
         
@@ -753,9 +777,8 @@ function processAutoDiary($gameRequest, $eventType) {
         
         $processedCount++;
         
-        // Check diary cooldown for this specific NPC
-        $npcNameSafe = preg_replace('/[^a-zA-Z0-9_]/', '_', $npcName);
-        $cooldownKey = "DIARY_LAST_TIMESTAMP_" . $npcNameSafe;
+        // Check diary cooldown for this specific physical actor (same-name actors have separate cooldowns)
+        $cooldownKey = "DIARY_LAST_TIMESTAMP_KEY_" . md5($diaryActorKey);
         
         $diaryRecord = $db->fetchAll("SELECT value FROM conf_opts WHERE id='" . $db->escape($cooldownKey) . "'");
         
@@ -813,8 +836,8 @@ function processAutoDiary($gameRequest, $eventType) {
                 "id"
             );
             
-            // Generate diary entry for this NPC
-            if (generateFollowerDiary($npcName, $gameRequest, $eventType)) {
+            // Generate diary entry for this exact row; its memory is owned by the row's key.
+            if (generateFollowerDiary($npcName, $gameRequest, $eventType, $currentNpcData)) {
                 $generatedCount++;
                 Logger::info("AUTO_DIARY: Generated diary entry for $npcName");
             } else {
@@ -829,9 +852,12 @@ function processAutoDiary($gameRequest, $eventType) {
 }
 
 // Function to process a single NPC's dynamic profile
-function processSingleDynamicProfile($npcName, $gameRequest) {
+// $npc may be the exact row (or its id); a bare name is accepted only when unique.
+function processSingleDynamicProfile($npc, $gameRequest) {
     require_once __DIR__ . '/dynamic_profile_scheduler.php';
-    return dps_run($npcName)['updated'] > 0;
+    $selector = is_array($npc) ? (int)($npc['id'] ?? 0) : $npc;
+    if ($selector === 0) return false;
+    return dps_run($selector)['updated'] > 0;
 }
 
 /**
@@ -880,13 +906,31 @@ function saveNarratorDynamicProfileUpdates($updatedFields) {
 }
 
 // Function to generate diary entry for a specific follower
-function generateFollowerDiary($followerName, $gameRequest, $eventType) {
+function generateFollowerDiary($followerName, $gameRequest, $eventType, $actorScope = null) {
     global $db;
-    
+
     error_log("generateFollowerDiary called for $followerName");
-    
+    // The writer is a typed principal: the Narrator, or an explicit physical row. Names select neither.
+    require_once __DIR__ . '/core/npc_reference.php';
+    $isNarratorDiary = $actorScope === CHIM_ACTOR_KEY_NARRATOR;
+    if (!$isNarratorDiary && !(is_array($actorScope) && (int)($actorScope['id'] ?? 0) > 1)) {
+        Logger::warn("generateFollowerDiary: '$followerName' has no typed actor; diary skipped");
+        return false;
+    }
+    $previousSelectedNpc = $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] ?? null;
+    try {
+        return chimGenerateFollowerDiaryFor($followerName, $gameRequest, $eventType, $actorScope, $isNarratorDiary);
+    } finally {
+        // Context readers scope to the selected row; never leave the diary actor selected for the request.
+        $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] = $previousSelectedNpc;
+    }
+}
+
+function chimGenerateFollowerDiaryFor($followerName, $gameRequest, $eventType, $actorScope, bool $isNarratorDiary) {
+    global $db;
+
     // Special handling for The Narrator
-    if ($followerName === "The Narrator") {
+    if ($isNarratorDiary) {
         // Load narrator data
         require_once(__DIR__ . "/core/narrator.class.php");
         $narrator = new Narrator();
@@ -946,14 +990,16 @@ function generateFollowerDiary($followerName, $gameRequest, $eventType) {
         unset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"]["stop"]);
         
     } else {
-        // Regular NPC processing
+        // Regular NPC processing: refresh the exact physical row (current shared profile) by id.
         $npcMaster = new NpcMaster();
-        $currentNpcData = $npcMaster->getByName($followerName);
-        
-        if (empty($currentNpcData)) {
-            Logger::warn("generateFollowerDiary: NPC '$followerName' not found in database");
+        $currentNpcData = $npcMaster->getById((int)$actorScope['id']);
+
+        if (empty($currentNpcData) || chimNpcRowActorKey($currentNpcData) !== chimNpcRowActorKey($actorScope)) {
+            Logger::warn("generateFollowerDiary: NPC '$followerName' changed identity; diary skipped");
             return false;
         }
+        $actorScope = $currentNpcData;
+        $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] = $currentNpcData;
         
         $profile = new CoreProfile();
         $currentProfileData = $profile->getById($currentNpcData["profile_id"]);
@@ -999,7 +1045,8 @@ function generateFollowerDiary($followerName, $gameRequest, $eventType) {
     }
 
     $sqlfilter=" and type<>'prechat' and type<>'itemfound' and type<>'infoaction' and type<>'npcspellcast' ";
-    $contextDataHistoric = DataLastDataExpandedFor("{$GLOBALS["HERIKA_NAME"]}", $lastNDataForContext * -1,$sqlfilter);
+    $contextDataHistoric = DataLastDataExpandedFor("{$GLOBALS["HERIKA_NAME"]}", $lastNDataForContext * -1,$sqlfilter,
+        $isNarratorDiary ? CHIM_ACTOR_KEY_NARRATOR : $actorScope);
     $contextDataHistoric = filterHistoricContextForNarratorVisibility(
         $contextDataHistoric,
         $GLOBALS["HERIKA_NAME"] ?? ""
@@ -1080,6 +1127,10 @@ function generateFollowerDiary($followerName, $gameRequest, $eventType) {
         unset($GLOBALS["gameRequest"]);
     }
         
+    if (!empty(trim($buffer)) && !$isNarratorDiary && !chimDiaryAuthorStillCurrent($actorScope)) {
+        Logger::warn("generateFollowerDiary: author of '$followerName' changed during generation; diary discarded");
+        return false;
+    }
     if (!empty(trim($buffer))) {
         // Save diary entry to database
         $topic = DataLastKnowDate();
@@ -1094,19 +1145,21 @@ function generateFollowerDiary($followerName, $gameRequest, $eventType) {
                 'content' => trim($buffer),
                 'tags' => "Auto-diary,$eventType",
                 'people' => $followerName,
+                'author_key' => chimDiaryOwnerKey($isNarratorDiary ? CHIM_ACTOR_KEY_NARRATOR : $actorScope),
                 'location' => $location,
                 'sess' => $momentum,
                 'localts' => time()
             )
         );
 
-        if ($diarySaved !== false && strcasecmp($followerName, 'The Narrator') !== 0) {
-            chimPhysicalDiarySyncForNpc($followerName, (int)$gameRequest[2]);
+        if ($diarySaved !== false && !$isNarratorDiary) {
+            chimPhysicalDiarySyncForNpc($actorScope, (int)$gameRequest[2]);
         }
             
         // Log memory
         if (function_exists('logMemory')) {
-            logMemory($followerName, $followerName, trim($buffer),  $momentum, $gameRequest[2], 'auto_diary', $gameRequest[1]);
+            logMemory($followerName, $followerName, trim($buffer),  $momentum, $gameRequest[2], 'auto_diary', $gameRequest[1],
+                chimDiaryOwnerKey($actorScope));
         }
 
         // Send notification to plugin for this follower (same format as manual diary)
@@ -1194,7 +1247,11 @@ function updateDynamicProfileField($npcName, $field, $historyData) {
         return false;
     }
 
-    $isNarrator = ($npcName === "The Narrator");
+    // Callers pass the exact candidate row, or ['narrator'=>true] for the typed Narrator. A bare string stays
+    // accepted for legacy callers: "The Narrator" is the typed narrator, anything else must be a unique row.
+    $npcRow = is_array($npcName) ? $npcName : null;
+    $isNarrator = $npcRow !== null ? !empty($npcRow['narrator']) : ($npcName === "The Narrator");
+    if ($npcRow !== null) { $npcName = $isNarrator ? 'The Narrator' : (string)($npcRow['npc_name'] ?? $npcRow['name'] ?? ''); }
 
     if ($isNarrator) {
         require_once(__DIR__ . "/core/narrator.class.php");
@@ -1205,7 +1262,7 @@ function updateDynamicProfileField($npcName, $field, $historyData) {
     } else {
         require_once(__DIR__ . "/core/npc_master.class.php");
         $npcMaster = new NpcMaster();
-        $npcData = $npcMaster->getByName($npcName);
+        $npcData = $npcRow ?? chimDynamicProfileUniqueRow($npcMaster, $npcName);
         $promptNpcName = $npcName;
     }
 
@@ -1347,7 +1404,20 @@ function updateDynamicProfileField($npcName, $field, $historyData) {
     }
 }
 
+// Bare names resolve only a prompt identifier or a unique physical row; ambiguous namesakes are refused.
+function chimDynamicProfileUniqueRow(NpcMaster $npcMaster, string $npcName) {
+    if (preg_match('/\[RefID:\s*(?:0x)?[0-9a-f]{1,8}\]\s*$/i', trim($npcName))) { return $npcMaster->getByName($npcName); }
+    $rows = $GLOBALS['db']->fetchAll("SELECT id FROM core_npc_master WHERE npc_name = '" . $GLOBALS['db']->escape($npcName) . "' LIMIT 2");
+    if (!is_array($rows) || count($rows) !== 1) { return null; }
+    $row = $npcMaster->getById((int)$rows[0]['id']);
+    return $row ?: null;
+}
+
+// $npcName may be the exact row captured before generation (id, _profile_binding and actor key). That
+// path writes through the shared-profile keeper, rechecking binding and key under row locks.
 function saveDynamicProfileUpdates($npcName, $updatedFields, $db, $updateTimeStamp = true, $generationSource = null) {
+    $expectedRow = is_array($npcName) ? $npcName : null;
+    if ($expectedRow !== null) { $npcName = (string)($expectedRow['npc_name'] ?? ''); }
     $newConfFile = md5($npcName);
     $path = dirname(__FILE__) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
     $configFile = $path . "conf" . DIRECTORY_SEPARATOR . "conf_$newConfFile.php";
@@ -1365,7 +1435,34 @@ function saveDynamicProfileUpdates($npcName, $updatedFields, $db, $updateTimeSta
         //
 
         $npcMaster=new NpcMaster();
-        $currentNpcData=$npcMaster->getByName($npcName);
+        $currentNpcData =$expectedRow !== null ? $npcMaster->getById((int)($expectedRow['id'] ?? 0)) : chimDynamicProfileUniqueRow($npcMaster, $npcName);
+        if ($expectedRow !== null && $currentNpcData) {
+            require_once __DIR__ . '/core/npc_profile_sharing.php';
+            require_once __DIR__ . '/core/npc_reference.php';
+            $write = array_intersect_key($updatedFields, array_flip(['personality','occupation','skills','speechstyle','goals','backstory','relationships']));
+            if ($generationSource === 'manual' || $generationSource === 'auto') {
+                $extended = $npcMaster->getExtendedData($currentNpcData);
+                $extended['auto_profile_pending'] = false;
+                $extended['auto_profile_generated'] = true;
+                $extended['auto_profile_generated_by'] = $generationSource;
+                $extended['auto_profile_generated_at_gamets'] = DataLastKnownGameTS();
+                unset($extended['auto_profile_last_error'], $extended['auto_profile_last_attempt_ts']);
+                $write['extended_data'] = json_encode($extended, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            }
+            if ($updateTimeStamp) { $write['gamets_last_updated'] = DataLastKnownGameTS(); }
+            $npcMaster->backupNpcById((int)($currentNpcData['profile_owner_npc_id'] ?? 0) ?: (int)$currentNpcData['id']);
+            $write['_profile_binding'] = (string)($expectedRow['_profile_binding'] ?? '');
+            $write['_expected_keys'] = [(int)$expectedRow['id'] => (string)($expectedRow['_actor_key'] ?? '')];
+            $timeline = $expectedRow['_timeline'] ?? null;
+            if ($timeline !== null) { $write['_commit_guard'] = static fn() => chimRechatTimelineEpoch() === $timeline; }
+            if (!chimNpcWriteSharedProfile($npcMaster, (int)$expectedRow['id'], $write)) {
+                Logger::warn("saveDynamicProfileUpdates: stale profile identity for NPC id " . (int)$expectedRow['id'] . "; generated fields discarded");
+                return false;
+            }
+            Logger::info("saveDynamicProfileUpdates: Successfully saved updates for NPC id " . (int)$expectedRow['id']);
+            return true;
+        }
+        if ($expectedRow !== null) { return false; }
     
         if ($currentNpcData) {
             foreach ($updatedFields as $field => $newValue) {

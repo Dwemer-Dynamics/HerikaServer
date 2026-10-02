@@ -40,14 +40,18 @@ try {
             chimCommitmentsApiReply(['success' => false, 'error' => 'Invalid task operation'], 400);
         }
 
-        $result = chimCommitmentSetStatus($actorName, $taskId, $operation, $outcome, $currentGamets);
+        // Exact row first; an unassigned legacy same-name task (npc_id NULL) stays manageable by the admin only.
+        $result = chimCommitmentSetStatus($npc, $taskId, $operation, $outcome, $currentGamets);
+        if (empty($result['ok'])) {
+            $result = chimCommitmentSetStatus($actorName, $taskId, $operation, $outcome, $currentGamets);
+        }
         if (empty($result['ok'])) {
             chimCommitmentsApiReply(['success' => false, 'error' => $result['error'] ?? 'Task update failed'], 409);
         }
     }
 
-    chimCommitmentGetActive($actorName, $currentGamets);
-    $tasks = chimCommitmentGetAll($actorName);
+    chimCommitmentGetActive($npc, $currentGamets, 20, true);
+    $tasks = chimCommitmentGetAll($npc, 100, true);
     foreach ($tasks as &$task) {
         $task['id'] = (int)$task['id'];
         $task['created_gamets'] = (int)$task['created_gamets'];

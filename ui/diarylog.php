@@ -24,6 +24,7 @@ if ($webRoot == '/') $webRoot = '';
 $webRoot = rtrim($webRoot, '/');
 
 require_once(__DIR__.DIRECTORY_SEPARATOR."profile_loader.php");
+require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."core".DIRECTORY_SEPARATOR."npc_reference.php");
 
 $TITLE = "📔CHIM Diaries";
 $isEmbed = (isset($_GET['embed']) && $_GET['embed'] == '1');
@@ -122,78 +123,94 @@ function sanitize_int($value, $default) {
     return ($value !== false) ? $value : $default;
 }
 
-/**
- * Function to get list of people with their diary entry counts
- * 
- * @param resource $conn Database connection
- * @param string $schema Database schema
- * @return array Array of people with their entry counts
- */
+// Diary authors: one selector per exact author_key, plus legacy unassigned names kept separate. A snapshot
+// schema without author_key (older saves) lists only legacy names; no key is guessed from a name.
+function diarylogHasAuthorKey($conn, $schema) {
+    $result = pg_query_params($conn, "SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'diarylog' AND column_name = 'author_key'", [$schema]);
+    return $result && pg_num_rows($result) > 0;
+}
+
 function getPeopleList($conn, $schema) {
-    $query = "
-        WITH split_people AS (
-            SELECT 
-                d.rowid,
-                trim(unnest(string_to_array(trim(d.people, '|'), '|'))) as person
-            FROM {$schema}.diarylog d
-            WHERE d.people IS NOT NULL AND d.people != ''
-            AND d.topic NOT IN ('Sent Letter', 'Journal Note')
-        )
-        SELECT 
-            person,
-            COUNT(DISTINCT rowid) as entry_count
-        FROM split_people
-        WHERE person != ''
-        GROUP BY person
-        ORDER BY entry_count DESC, person ASC
-    ";
-    
-    $result = pg_query($conn, $query);
+    $hasKey = diarylogHasAuthorKey($conn, $schema);
     $peopleList = [];
-    
-    if ($result) {
-        while ($row = pg_fetch_assoc($result)) {
-            $peopleList[] = $row;
+    if ($hasKey) {
+        $result = pg_query($conn, "
+            SELECT author_key, (array_agg(trim(people, '|') ORDER BY gamets DESC, rowid DESC))[1] AS person,
+                   COUNT(*) AS entry_count
+            FROM {$schema}.diarylog
+            WHERE author_key IS NOT NULL AND topic NOT IN ('Sent Letter', 'Journal Note')
+            GROUP BY author_key
+        ");
+        while ($result && ($row = pg_fetch_assoc($result))) {
+            $peopleList[] = ['selector' => ['author' => $row['author_key']], 'person' => (string)$row['person'],
+                'entry_count' => (int)$row['entry_count'], 'legacy' => false, 'author_key' => $row['author_key']];
         }
     }
-    
+    $legacyScope = $hasKey ? 'd.author_key IS NULL AND ' : '';
+    $result = pg_query($conn, "
+        WITH split_people AS (
+            SELECT d.rowid, trim(unnest(string_to_array(trim(d.people, '|'), '|'))) as person
+            FROM {$schema}.diarylog d
+            WHERE {$legacyScope}d.people IS NOT NULL AND d.people != ''
+            AND d.topic NOT IN ('Sent Letter', 'Journal Note')
+        )
+        SELECT person, COUNT(DISTINCT rowid) as entry_count
+        FROM split_people WHERE person != '' GROUP BY person
+    ");
+    while ($result && ($row = pg_fetch_assoc($result))) {
+        $peopleList[] = ['selector' => ['person' => $row['person']], 'person' => (string)$row['person'],
+            'entry_count' => (int)$row['entry_count'], 'legacy' => $hasKey, 'author_key' => null];
+    }
+    // Namesakes: a label shared by several selectors gets a disambiguating hint.
+    $names = [];
+    foreach ($peopleList as $entry) { $names[mb_strtolower($entry['person'])][] = 1; }
+    foreach ($peopleList as &$entry) {
+        $entry['label_shared'] = count($names[mb_strtolower($entry['person'])]) > 1;
+    }
+    unset($entry);
+    usort($peopleList, static fn($a, $b) => [$b['entry_count'], $a['person'], $a['legacy']] <=> [$a['entry_count'], $b['person'], $b['legacy']]);
     return $peopleList;
 }
 
-/**
- * Function to get diary entries by person
- * 
- * @param resource $conn Database connection
- * @param string $schema Database schema
- * @param string $person Person name to filter by
- * @return array Array of diary entries
- */
-function getEntriesByPerson($conn, $schema, $person) {
-    // Debug log
-    error_log("Searching for person: " . $person);
-    
+// The selected diary scope: ?author=<exact key> or ?person=<legacy unassigned name>. Returns null when
+// neither is selected. Never a substring match against another entry's people list.
+function diarylogSelectedScope($conn, $schema) {
+    $author = isset($_GET['author']) ? trim((string)$_GET['author']) : '';
+    $person = isset($_GET['person']) ? trim((string)$_GET['person']) : '';
+    $hasKey = diarylogHasAuthorKey($conn, $schema);
+    if ($author !== '') {
+        if (!$hasKey || !chimIsActorKey($author)) {
+            return ['where' => 'FALSE', 'params' => [], 'label' => $author, 'query' => ['author' => $author]];
+        }
+        $result = pg_query_params($conn, "SELECT trim(people, '|') AS person FROM {$schema}.diarylog WHERE author_key = $1 ORDER BY gamets DESC, rowid DESC LIMIT 1", [$author]);
+        $row = $result ? pg_fetch_assoc($result) : null;
+        return ['where' => 'author_key = $1', 'params' => [$author], 'label' => $row ? (string)$row['person'] : $author,
+            'query' => ['author' => $author]];
+    }
+    if ($person === '') {
+        return null;
+    }
+    $where = ($hasKey ? 'author_key IS NULL AND ' : '') . "$1 = ANY (SELECT trim(x) FROM unnest(string_to_array(trim(people, '|'), '|')) x)";
+    return ['where' => $where, 'params' => [$person], 'label' => $person, 'query' => ['person' => $person]];
+}
+
+function getEntriesByPerson($conn, $schema, $scope) {
     $query = "
         SELECT rowid, topic, content, tags, people, location, localts, gamets
         FROM {$schema}.diarylog
-        WHERE people LIKE $1
+        WHERE {$scope['where']}
         AND topic NOT IN ('Sent Letter', 'Journal Note')
         ORDER BY localts DESC
     ";
-    
-    $result = pg_query_params($conn, $query, ['%' . $person . '%']);
-    
+    $result = pg_query_params($conn, $query, $scope['params']);
     if (!$result) {
         error_log("Query error: " . pg_last_error($conn));
         return [];
     }
-    
     $entries = [];
     while ($row = pg_fetch_assoc($result)) {
-        error_log("Found entry with people: " . $row['people']);
         $entries[] = $row;
     }
-    
-    error_log("Found " . count($entries) . " entries for person: " . $person);
     return $entries;
 }
 
@@ -285,21 +302,21 @@ function handle_csv_export($conn, $schema) {
             // Build the query based on the current view
             if ($exportType === 'csv') {
                 // Determine which view we're in
-                $isPersonFilter = isset($_GET['filter']) && $_GET['filter'] === 'people' && isset($_GET['person']);
+                $csvScope = (isset($_GET['filter']) && $_GET['filter'] === 'people') ? diarylogSelectedScope($conn, $schema) : null;
+                $isPersonFilter = $csvScope !== null;
                 $isTamrielicView = isset($_GET['tamrielic']) && $_GET['tamrielic'] === 'true';
                 $isRegularCalendar = isset($_GET['date']);
 
                 if ($isPersonFilter) {
                     // People filter mode - get entries for specific person
-                    $person = urldecode($_GET['person']);
                     $query = "
                         SELECT rowid, topic, content, tags, people, location, localts, gamets
                         FROM {$schema}.diarylog
-                        WHERE people LIKE '%' || $1 || '%'
+                        WHERE {$csvScope['where']}
                         AND topic NOT IN ('Sent Letter', 'Journal Note')
                         ORDER BY localts DESC
                     ";
-                    $result = pg_query_params($conn, $query, [$person]);
+                    $result = pg_query_params($conn, $query, $csvScope['params']);
                 } elseif ($isTamrielicView && isset($_GET['month']) && isset($_GET['year']) && isset($_GET['day'])) {
                     // Tamrielic calendar mode
                     $query = "
@@ -353,8 +370,8 @@ function handle_csv_export($conn, $schema) {
             // Set headers to prompt file download
             header('Content-Type: text/csv; charset=utf-8');
             if ($exportType === 'csv') {
-                if (isset($_GET['filter']) && $_GET['filter'] === 'people' && isset($_GET['person'])) {
-                    $filename = 'diary_log_' . urlencode($_GET['person']) . '.csv';
+                if (!empty($csvScope)) {
+                    $filename = 'diary_log_' . urlencode($csvScope['label']) . '.csv';
                 } else if (isset($_GET['tamrielic']) && $_GET['tamrielic'] === 'true') {
                     $filename = sprintf('diary_log_%dth_%s_4E%d.csv', 
                         intval($_GET['day']), 
@@ -995,12 +1012,15 @@ if ($shouldFetchEvents) {
                 $peopleList = getPeopleList($conn, $schema);
                 if (!empty($peopleList)) {
                     foreach ($peopleList as $person) {
-                        $encodedPerson = urlencode($person['person']);
+                        $selectorName = key($person['selector']);
+                        $selectorValue = htmlspecialchars((string)current($person['selector']), ENT_QUOTES);
+                        $hint = $person['legacy'] ? 'unassigned' : ($person['label_shared'] ? $person['author_key'] : '');
                         echo "<form method='get' style='margin: 0;'>";
                         echo "<input type='hidden' name='filter' value='people'>";
-                        echo "<input type='hidden' name='person' value='{$encodedPerson}'>";
+                        echo "<input type='hidden' name='{$selectorName}' value='{$selectorValue}'>";
                         echo "<button type='submit' class='people-item'>";
-                        echo "<span>" . htmlspecialchars($person['person']) . "</span>";
+                        echo "<span>" . htmlspecialchars($person['person'])
+                            . ($hint !== '' ? " <small style='opacity:0.7; overflow-wrap:anywhere;'>(" . htmlspecialchars($hint) . ")</small>" : '') . "</span>";
                         echo "<span class='people-count'>" . $person['entry_count'] . "</span>";
                         echo "</button>";
                         echo "</form>";
@@ -1010,11 +1030,12 @@ if ($shouldFetchEvents) {
                 }
                 ?>
             </div>
-            <?php if (isset($_GET['person'])): ?>
+            <?php $selectedDiaryScope = diarylogSelectedScope($conn, $schema); ?>
+            <?php if ($selectedDiaryScope !== null): ?>
             <div style="max-width: 400px; margin: 12px auto 0; display: flex; justify-content: center;">
-                <a class="pdf-export-btn" target="_blank" title="Open as book (print to PDF)" href="<?php echo $webRoot; ?>/ui/diary_book.php?person=<?php echo urlencode(urldecode($_GET['person'])); ?>">
+                <a class="pdf-export-btn" target="_blank" title="Open as book (print to PDF)" href="<?php echo $webRoot; ?>/ui/diary_book.php?<?php echo htmlspecialchars(http_build_query($selectedDiaryScope['query'])); ?>">
                     <span>📄</span>
-                    <span>Open The Diary of <?php echo htmlspecialchars(urldecode($_GET['person'])); ?></span>
+                    <span>Open The Diary of <?php echo htmlspecialchars($selectedDiaryScope['label']); ?></span>
                 </a>
             </div>
             <?php endif; ?>
@@ -1126,11 +1147,10 @@ if ($shouldFetchEvents) {
                 <th>Actions</th>
             </tr>
             <?php
-            if (isset($_GET['filter']) && $_GET['filter'] === 'people' && isset($_GET['person'])) {
-                //error_log("Filtering by person: " . urldecode($_GET['person']));
-                
-                // Get entries for the selected person
-                $entries = getEntriesByPerson($conn, $schema, urldecode($_GET['person']));
+            $entryScope = (isset($_GET['filter']) && $_GET['filter'] === 'people') ? diarylogSelectedScope($conn, $schema) : null;
+            if ($entryScope !== null) {
+                // Get entries for the selected exact author or legacy name
+                $entries = getEntriesByPerson($conn, $schema, $entryScope);
                 //error_log("Retrieved entries: " . print_r($entries, true));
                 
                 if (!empty($entries)) {

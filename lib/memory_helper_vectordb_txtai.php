@@ -177,8 +177,11 @@ function queryMemory($embeddings,$category='past dialogues',$limitNpc="")
 		die("Error: Unable to fetch response.".__LINE__);
 	}
 
-	if ($limitNpc)
-		$limitNpcFilter=" where companions like '%$limitNpc%'";
+	// Always scoped by the typed principal (selected physical row or typed Narrator) before ranking/LIMIT;
+	// an untyped name reads nothing. Never a name LIKE over companions.
+	$limitNpcName = $limitNpc ? $limitNpc : ($GLOBALS["HERIKA_NAME"] ?? '');
+	$limitNpcFilter = ' where ' . (function_exists('dataGetMemoryCompanionConditionSql')
+		? dataGetMemoryScopeConditionSql($limitNpcName) . ' AND ' . dataGetMemoryCompanionConditionSql($limitNpcName) : 'FALSE');
 	
 	error_log("Similarity Search");
 	// Decode the JSON response

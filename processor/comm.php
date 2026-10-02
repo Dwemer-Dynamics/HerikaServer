@@ -30,9 +30,51 @@ if (
     chimMaybeSyncPlayerName($_chimPlayerNameMatch[1]);
 }
 
-if (!function_exists("resolvePeopleForIncomingEvent")) {
-    function resolvePeopleForIncomingEvent($eventType, $eventData, $fallbackPeople = "")
+if (!function_exists("chimCapturedIncomingEventIdentity")) {
+    // The client capture applies only to the request's own event: same type and timestamp.
+    function chimCapturedIncomingEventIdentity($eventType, $eventTs)
     {
+        $identity = $GLOBALS["CHIM_EVENT_IDENTITY"] ?? null;
+        if (!is_array($identity) || strtolower((string) $eventType) !== ($identity["type"] ?? null)) {
+            return null;
+        }
+        return chimCapturedEventIdentity('', $eventType, $eventTs);
+    }
+}
+
+if (!function_exists("chimSpeechRoleColumns")) {
+    // speech.speaker_key/listener_keys come only from this _speech request's own client capture.
+    function chimSpeechRoleColumns($eventTs)
+    {
+        // An opted-in _speech also stores its captured format-2 audience ('[]' when empty); companions
+        // keeps the legacy name list. Legacy requests leave audience NULL (never guessed from names).
+        $captured = chimCapturedIncomingEventIdentity('_speech', $eventTs);
+        return chimEventRoleColumns($captured, false) + ($captured === null ? [] : ['audience' => $captured['people']]);
+    }
+}
+
+if (!function_exists("chimIncomingEventColumns")) {
+    // people plus the persisted role columns for one incoming eventlog row.
+    function chimIncomingEventColumns($eventType, $eventData, $eventTs, $fallbackPeople = "")
+    {
+        $captured = chimCapturedIncomingEventIdentity($eventType, $eventTs);
+        if ($captured === null) {
+            return ['people' => resolvePeopleForIncomingEvent($eventType, $eventData, $fallbackPeople)];
+        }
+        return ['people' => $captured['people']] + chimEventRoleColumns($captured);
+    }
+}
+
+if (!function_exists("resolvePeopleForIncomingEvent")) {
+    function resolvePeopleForIncomingEvent($eventType, $eventData, $fallbackPeople = "", $eventTs = null)
+    {
+        // An opted-in client captured the complete audience of the request event itself; keep it untouched.
+        // Other rows written while handling it (welcome, model toggle, time skip) keep legacy names.
+        $capturedPeople = $eventTs !== null && function_exists("chimCapturedIncomingEventIdentity")
+            ? (chimCapturedIncomingEventIdentity($eventType, $eventTs)['people'] ?? null) : null;
+        if ($capturedPeople !== null) {
+            return $capturedPeople;
+        }
         $strictModeEnabled = function_exists("isStrictSpatialPeopleModeEnabled") ? isStrictSpatialPeopleModeEnabled() : false;
         $normalizedEventType = strtolower((string) $eventType);
         $pluginAuthoritativeActorEvents = [
@@ -187,7 +229,7 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
             'data' => $gameRequest[3],
             'sess' => 'pending',
             'localts' => time(),
-            'people' => resolvePeopleForIncomingEvent($gameRequest[0], $gameRequest[3] ?? "")
+            ...chimIncomingEventColumns($gameRequest[0], $gameRequest[3] ?? "", $gameRequest[1])
         )
     );
 
@@ -340,7 +382,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 'data' => $gameRequest[3],
                 'sess' => 'pending',
                 'localts' => time(),
-                'people' => resolvePeopleForIncomingEvent($gameRequest[0], $gameRequest[3] ?? "")
+                ...chimIncomingEventColumns($gameRequest[0], $gameRequest[3] ?? "", $gameRequest[1])
             )
         );
         $db->execQuery("COMMIT");
@@ -382,7 +424,8 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
     // Do nothing
     $responseDataMl = DataDequeue(time() + 1);// Allow responses queued up to 1 second in the future
     foreach ($responseDataMl as $responseData) {
-        echo "{$responseData["actor"]}|{$responseData["action"]}|{$responseData["text"]}\r\n";
+        $responseLine = chimResponseDequeueLine($responseData);// Identity captured at enqueue; stale refs drop
+        if ($responseLine !== null) echo $responseLine;
     }
 
     if (time() % 5 == 0) {
@@ -715,7 +758,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 'utterance_id' => $speechUtteranceId,
                 'topic' => $topic,
                 'localts' => time()
-            )
+            ) + chimSpeechRoleColumns($gameRequest[1])
         );
 
         $matchedUtteranceRowIds = [];
@@ -1010,7 +1053,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             'data' => $gameRequest[3],
             'sess' => 'pending',
             'localts' => time(),
-            'people' => resolvePeopleForIncomingEvent($gameRequest[0], $gameRequest[3] ?? "")
+            ...chimIncomingEventColumns($gameRequest[0], $gameRequest[3] ?? "", $gameRequest[1])
         )
     );
 
@@ -1038,7 +1081,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             'data' => $gameRequest[3],
             'sess' => 'pending',
             'localts' => time(),
-            'people' => resolvePeopleForIncomingEvent($gameRequest[0], $gameRequest[3] ?? "")
+            ...chimIncomingEventColumns($gameRequest[0], $gameRequest[3] ?? "", $gameRequest[1])
         )
     );
 
@@ -1047,7 +1090,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 } elseif ($gameRequest[0] == "togglemodel") {
 
     $newModel = DMtoggleModel();
-    echo "{$GLOBALS["HERIKA_NAME"]}|command|ToggleModel@$newModel\r\n";
+    echo (string)chimBuildCurrentResponseLine($GLOBALS["HERIKA_NAME"], "command", "ToggleModel@$newModel");
     while (@ob_end_flush())
         ;
 
@@ -1213,7 +1256,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 'data' => $gameRequest[3],
                 'sess' => 'pending',
                 'localts' => time(),
-                'people' => resolvePeopleForIncomingEvent($gameRequest[0], $gameRequest[3] ?? "")
+                ...chimIncomingEventColumns($gameRequest[0], $gameRequest[3] ?? "", $gameRequest[1])
             )
         );
     }
@@ -1367,21 +1410,100 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         $baseProfile = "";
 
     $npcMaster = new NpcMaster();
-    // Refids are not stable identity for profile creation: spawned actors, recycled refs,
-    // and modlist changes can make a new visible actor collide with an old profile row.
-    // Always create/resolve by the incoming visible name, then store refid as metadata below.
-    $retVal = createProfile($localName, [], false, $baseProfile); //1-NEW PROFILE, 2-PROFILE ALREADY EXISTS
-    $currentNpcData = $npcMaster->getByName($localName);
+    $incomingRefid = NpcMaster::normalizeRefId($splitNameBase[4] ?? '');
+    $referenceSource = chimConvertRuntimeFormIdToStableReference($incomingRefid);
+    if (!empty($splitNameBase[44])) {
+        $reportedSource = chimParseNpcReferenceSource($splitNameBase[44]);
+        if (!$reportedSource || !$referenceSource ||
+            !chimStableFormReferenceEquals($referenceSource, $reportedSource['stable_key'])) {
+            // A late packet or an unsynced load order must never bind the wrong profile.
+            error_log('[ADDNPC] Reference origin does not match the current plugin manifest; registration skipped');
+            $MUST_END = true;
+            return;
+        }
+    }
+    // Field 45 actor_key (docs/actor-identity.md): a ref: key must agree with the verified stable source.
+    try {
+        $registrationActorKey = chimRegistrationActorKey($splitNameBase[45] ?? '', $referenceSource);
+    } catch (ChimEventIdentityException $identityError) {
+        error_log('[ADDNPC] actor_key does not match the verified reference; registration skipped');
+        $MUST_END = true;
+        return;
+    }
+    $dynamicActorKey = $registrationActorKey !== null && str_starts_with($registrationActorKey, 'dyn:') ? $registrationActorKey : null;
+    $dynamicRegistered = false;
+    if ($dynamicActorKey !== null) {
+        // Select by key only; a recycled FF slot is released by its previous row, whose profile, selector
+        // and history stay intact. Release, bind and create commit together (lib/core/npc_reference.php).
+        try {
+            [$currentNpcData, $dynamicCreated] = chimRegisterDynamicActorRow($db, $npcMaster, $dynamicActorKey, $incomingRefid,
+                static function ($key, $refid) use ($localName, $baseProfile) {
+                    createProfile($localName, [], false, $baseProfile, array_filter(['refid' => $refid, 'actor_key' => $key]));
+                });
+        } catch (Throwable $registrationError) {
+            error_log('[ADDNPC] dynamic actor registration rolled back: ' . $registrationError->getMessage());
+            $MUST_END = true;
+            return;
+        }
+        $dynamicRegistered = true;
+    }
+    $currentNpcData = $dynamicActorKey !== null ? $currentNpcData
+        : ($referenceSource ? $npcMaster->getByReferenceSource($referenceSource) : null);
+    if (!$currentNpcData && $dynamicActorKey === null) {
+        $currentNpcData = $incomingRefid !== ''
+            ? $npcMaster->getByRefId($incomingRefid)
+            : $npcMaster->getByName($localName);
+    }
+    if ($currentNpcData && $referenceSource) {
+        $storedSource = $npcMaster->getMetadata($currentNpcData)['refid_source'] ?? '';
+        if ($storedSource !== '' && !chimStableFormReferenceEquals($storedSource, $referenceSource)) {
+            error_log('[ADDNPC] Stored reference origin conflicts with registration; profile left unchanged');
+            $MUST_END = true;
+            return;
+        }
+    }
+    if (!$currentNpcData && $incomingRefid !== '' && $dynamicActorKey === null) {
+        // Reuse one legacy name-only row; otherwise create a separate Name + RefID profile.
+        $escapedName = $db->escape($localName);
+        $legacyRows = $db->fetchAll(
+            "SELECT * FROM core_npc_master
+             WHERE lower(npc_name) = lower('{$escapedName}') AND COALESCE(BTRIM(refid), '') = ''
+               AND COALESCE(metadata->>'refid_source', '') = ''
+             ORDER BY id ASC"
+        );
+        if (count((array)$legacyRows) === 1) {
+            $npcMaster->update((int)$legacyRows[0]['id'], ['refid' => $incomingRefid]);
+            $currentNpcData = $npcMaster->getById((int)$legacyRows[0]['id']);
+            error_log("[ADDNPC] Bound legacy profile #{$legacyRows[0]['id']} to {$localName} [RefID: {$incomingRefid}]");
+        }
+    }
+
+    if ($dynamicRegistered) {
+        $retVal = $dynamicCreated ? 1 : 2;
+    } elseif ($currentNpcData) {
+        $retVal = 2;
+    } else {
+        $retVal = createProfile(
+            $localName,
+            [],
+            false,
+            $baseProfile,
+            $incomingRefid !== '' ? ['refid' => $incomingRefid] : []
+        ); //1-NEW PROFILE, 2-PROFILE ALREADY EXISTS
+        $currentNpcData = $incomingRefid !== ''
+            ? $npcMaster->getByPromptIdentifier(NpcMaster::displayIdentifier($localName, $incomingRefid))
+            : $npcMaster->getByName($localName);
+    }
     audit_log("comm.php addnpc $localName");
 
     // If using sendAllNpcs from plugin, this is no loner valid
     if ($retVal == 1 && !$offline)
-        AddFirstTimeMet($localName, $momentum, $gameRequest[2], $gameRequest[1]);
+        AddFirstTimeMet($localName, $momentum, $gameRequest[2], $gameRequest[1], is_array($currentNpcData ?? null) ? $currentNpcData : null);
 
 
     // Update new data
 
-    if (isset($splitNameBase[4]) && $retVal == 1) {
+    if ($incomingRefid === '' && isset($splitNameBase[4]) && $retVal == 1) {
         $currentNpcDataAlt = $npcMaster->getByRefId($splitNameBase[4]);
         if ($currentNpcDataAlt && $currentNpcDataAlt["npc_name"] != $currentNpcData["npc_name"]) {
             // Seems an NPC has changed name.
@@ -1410,6 +1532,13 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         }
         if (sizeof($splitNameBase) > 1) {
 
+            if ($referenceSource) {
+                $meta['refid_source'] = $referenceSource;
+            }
+            // The row was selected or created by this dyn: key; a placed reference never carries one.
+            if ($dynamicActorKey !== null && trim((string)($meta['refid_source'] ?? '')) === '') {
+                $meta['actor_key'] = $dynamicActorKey;
+            }
             if ($incomingDisplayName !== "" && strcasecmp((string) $currentNpcData["npc_name"], $incomingDisplayName) !== 0) {
                 $meta["current_display_name"] = $incomingDisplayName;
                 if (!isset($meta["display_name_aliases"]) || !is_array($meta["display_name_aliases"])) {
@@ -1659,15 +1788,23 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
         $currentNpcData = $npcMaster->setExtendedData($currentNpcData, $extended);
 
+        // Persist the validated physical reference before linking known quest versions.
+        // Reload after linking so autofill and subsequent work use the kept profile and current binding.
+        if ($npcMaster->updateByArray($currentNpcData) === false) {
+            throw new RuntimeException('NPC registration changed; retry with current actor identity');
+        }
+        if (chimNpcAutoLinkProfile($currentNpcData)) {
+            $currentNpcData = $npcMaster->getById((int)$currentNpcData['id']);
+        }
+
         if (!empty($GLOBALS['AUTOFILL_CUSTOM_PROFILES'])) {
             require_once $GLOBALS["ENGINE_PATH"] . "ui" . DIRECTORY_SEPARATOR . "cmd" . DIRECTORY_SEPARATOR . "ai_profile_generation_service.php";
             if (!aiProfileHasMeaningfulAutofillData($currentNpcData)) {
                 $trigger = intval($GLOBALS['AUTOFILL_CUSTOM_PROFILES_TRIGGER'] ?? 20);
                 $currentNpcData = aiProfileMarkPendingAutofill($currentNpcData, $npcMaster, $trigger);
+                $npcMaster->updateByArray($currentNpcData);
             }
         }
-
-        $npcMaster->updateByArray($currentNpcData);
 
         $profile = new CoreProfile();
         $profData = json_decode($profile->getById($currentNpcData["profile_id"])["metadata"], true);
@@ -2088,10 +2225,11 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             continue;
         }
 
-        // Check if profile exists for this NPC
+        // Exact row per entry: an actor key or "Name [RefID: X]" selects that namesake; a bare name only when unique.
         $npcMaster = new NpcMaster();
-        $npcData = $npcMaster->getByName($npcName);
+        $npcData = $npcMaster->getByPromptIdentifier($npcName);
         if (!$npcData) {
+            Logger::info("updateprofiles_batch_async_manual: skipped unresolved or ambiguous entry");
             continue;
         }
 
@@ -2110,7 +2248,8 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
 
         if ($isDynamicEnabled) {
-            $enabledNPCs[] = $npcName;
+            // The scheduler selects by row id; never re-resolves this entry by name.
+            $enabledNPCs[] = (int)$npcData['id'];
         }
     }
 
@@ -2388,7 +2527,7 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
             'data' => isset($gameRequest[3]) ? $gameRequest[3] : '',
             'sess' => 'pending',
             'localts' => time(),
-            'people' => resolvePeopleForIncomingEvent($gameRequest[0], $gameRequest[3] ?? "")
+            ...chimIncomingEventColumns($gameRequest[0], $gameRequest[3] ?? "", $gameRequest[1])
         )
     );
 
@@ -2434,7 +2573,8 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
     @flush();
 
     try {
-        $success = generateFollowerDiary("The Narrator", $gameRequest, "manual_narrator");
+        require_once __DIR__ . "/../lib/core/npc_reference.php";
+        $success = generateFollowerDiary("The Narrator", $gameRequest, "manual_narrator", CHIM_ACTOR_KEY_NARRATOR);
         if (!$success) {
             echo "The Narrator|rolecommand|DebugNotification@The Narrator diary update failed." . PHP_EOL;
             Logger::warn("diary_narrator: Failed to generate narrator diary entry");

@@ -1,6 +1,34 @@
 <?php
 
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'npc_commitments.php');
+require_once(__DIR__ . DIRECTORY_SEPARATOR . 'npc_reference.php');
+if (!function_exists('chimNpcProfileBinding')) {
+    require_once(__DIR__ . DIRECTORY_SEPARATOR . 'npc_profile_sharing.php');
+}
+
+if (!function_exists('chimCommitmentJobOwnerRow')) {
+    // The exact physical owner captured at enqueue, read on the claiming connection (locked when $lock). Null when
+    // the job predates exact ownership, the row is gone, its key or sharing binding changed, or the playthrough
+    // timeline (switch generation / load epoch) moved: such a job is dropped, never re-attributed by name.
+    function chimCommitmentJobOwnerRow(array $job, bool $lock = false): ?array
+    {
+        $npcId = (int)($job['npc_id'] ?? 0);
+        if ($npcId <= 0 || !array_key_exists('actor_key', $job) || !isset($job['timeline'])) {
+            return null;
+        }
+        if ((string)$job['timeline'] !== chimCommitmentTimelineEpoch()) {
+            return null;
+        }
+        $row = $GLOBALS['db']->fetchOne("SELECT * FROM core_npc_master WHERE id = {$npcId}" . ($lock ? ' FOR UPDATE' : ''));
+        if (empty($row['id']) || chimNpcRowActorKey($row) !== $job['actor_key']) {
+            return null;
+        }
+        if (isset($job['binding']) && $job['binding'] !== null && chimNpcProfileBinding($row) !== (string)$job['binding']) {
+            return null;
+        }
+        return $row;
+    }
+}
 
 if (!function_exists('chimCommitmentExtractJsonObject')) {
     function chimCommitmentExtractJsonObject(string $text): ?array
@@ -46,6 +74,18 @@ if (!function_exists('chimCommitmentNotificationText')) {
         }
 
         return "Task created for {$actorName}: {$subject}";
+    }
+}
+
+if (!function_exists('chimCommitmentOwnerLabel')) {
+    // Notification label of the exact owner row: its current name, disambiguated by reference when namesakes exist.
+    function chimCommitmentOwnerLabel(array $row): string
+    {
+        $name = trim((string)($row['npc_name'] ?? ''));
+        $nameSql = $GLOBALS['db']->escape($name);
+        $namesakes = $GLOBALS['db']->fetchAll("SELECT id FROM core_npc_master WHERE lower(npc_name)=lower('{$nameSql}') LIMIT 2");
+        $refid = strtoupper(ltrim(preg_replace('/^0x/i', '', (string)($row['refid'] ?? '')), '0'));
+        return (is_array($namesakes) && count($namesakes) > 1 && $refid !== '') ? "{$name} ({$refid})" : $name;
     }
 }
 
@@ -143,8 +183,14 @@ if (!function_exists('chimCommitmentProcessQueue')) {
             foreach ($rows as $row) {
                 $result['jobs']++;
                 $job = json_decode((string)($row['value'] ?? ''), true);
-                if (!is_array($job) || empty($job['actor_name'])) {
-                    $db->delete('conf_opts', "id = '" . $db->escape((string)$row['id']) . "'");
+                $queueIdSql = $db->escape((string)$row['id']);
+                $queueValueSql = $db->escape((string)($row['value'] ?? ''));
+                // An unbound legacy job or a stale owner/timeline is dropped before the model: no namesake adoption.
+                if (!is_array($job) || empty($job['actor_name']) || chimCommitmentJobOwnerRow($job) === null) {
+                    if (is_array($job) && !empty($job['actor_name'])) {
+                        Logger::warn('[NPC TASKS] Dropping queued task without a current exact owner for ' . $job['actor_name']);
+                    }
+                    $db->delete('conf_opts', "id = '{$queueIdSql}' AND value = '{$queueValueSql}'");
                     $result['failed']++;
                     continue;
                 }
@@ -167,25 +213,38 @@ if (!function_exists('chimCommitmentProcessQueue')) {
                     $partial,
                     (string)($job['request_text'] ?? '')
                 );
+                // The model never supplies identity: keep only the enqueue-time explicit key, and only while the
+                // formatted counterparty is still the one the caller selected.
+                unset($payload['counterparty_key']);
+                $queuedCounterparty = trim((string)($job['payload']['counterparty'] ?? ''));
+                if (!empty($job['counterparty_key']) && $queuedCounterparty !== '' && trim((string)($payload['counterparty'] ?? '')) === $queuedCounterparty) {
+                    $payload['counterparty_key'] = (string)$job['counterparty_key'];
+                }
                 // Claim and persist together: a retry cannot create a second task.
                 $db->execQuery('BEGIN');
                 try {
-                    $queueIdSql = $db->escape((string)$row['id']);
-                    $claimed = $db->fetchOne("DELETE FROM conf_opts WHERE id = '{$queueIdSql}' RETURNING id");
+                    // CAS on the queued value: a replacement written under the same id is never consumed.
+                    $claimed = $db->fetchOne("DELETE FROM conf_opts WHERE id = '{$queueIdSql}' AND value = '{$queueValueSql}' RETURNING id");
                     if (empty($claimed['id'])) {
                         $db->execQuery('ROLLBACK');
+                        continue;
+                    }
+                    // Recheck the exact owner after the model, locked inside the write transaction.
+                    $ownerRow = chimCommitmentJobOwnerRow($job, true);
+                    if ($ownerRow === null) {
+                        if (!$db->execQuery('COMMIT')) throw new RuntimeException('Task claim commit failed');
+                        Logger::warn('[NPC TASKS] Dropped queued task: owner, binding or timeline changed for ' . $job['actor_name']);
+                        $result['failed']++;
                         continue;
                     }
                     $createResult = null;
                     if (trim((string)($payload['location'] ?? '')) !== '') {
                         require_once __DIR__ . '/npc_schedules.php';
-                        $actorSql = $db->escape((string)$job['actor_name']);
                         $locationSql = $db->escape(trim((string)$payload['location']));
-                        $npcs = $db->fetchAll("SELECT * FROM core_npc_master WHERE lower(npc_name)=lower('{$actorSql}') LIMIT 2");
                         $locations = $db->fetchAll("SELECT DISTINCT name,formid FROM locations WHERE lower(name)=lower('{$locationSql}') LIMIT 2");
-                        if (count($npcs) === 1 && count($locations) === 1) {
+                        if (count($locations) === 1) {
                             try {
-                                $scheduleId = chimScheduleSave($npcs[0], [
+                                $scheduleId = chimScheduleSave($ownerRow, [
                                     'subject'=>$payload['subject'], 'mode'=>'task',
                                     'location_id'=>$locations[0]['formid'],
                                     'due_gamets'=>(int)$job['current_gamets'] + chimCommitmentHoursToGamets($payload['due_in_hours']),
@@ -193,15 +252,15 @@ if (!function_exists('chimCommitmentProcessQueue')) {
                                 ], 0, true);
                                 $createResult = ['ok'=>true, 'id'=>$scheduleId, 'pending_validation'=>true];
                             } catch (InvalidArgumentException $e) { $payload['schedule_issue']=$e->getMessage(); }
-                        } else $payload['schedule_issue']='Clarify the exact NPC and recognised destination before scheduling travel.';
+                        } else $payload['schedule_issue']='Clarify the recognised destination before scheduling travel.';
                     }
                     if ($createResult === null) $createResult = chimCommitmentCreate(
-                        (string)$job['actor_name'], $payload, (int)($job['current_gamets'] ?? 0)
+                        $ownerRow, $payload, (int)($job['current_gamets'] ?? 0)
                     );
                     if (empty($createResult['ok'])) {
                         throw new RuntimeException($createResult['error'] ?? 'Task insert failed');
                     }
-                    if (empty($createResult['pending_validation']) && !chimCommitmentQueueCreatedNotification((string)$job['actor_name'], (string)$payload['subject'])) {
+                    if (empty($createResult['pending_validation']) && !chimCommitmentQueueCreatedNotification(chimCommitmentOwnerLabel($ownerRow), (string)$payload['subject'])) {
                         throw new RuntimeException('Task notification failed');
                     }
                     if (!$db->execQuery('COMMIT')) throw new RuntimeException('Task commit failed');

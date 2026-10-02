@@ -1098,7 +1098,10 @@ class openrouterjson
                 $parameter = $parameterArr;
                 $functionCodeName = getFunctionCodeName($this->_functionName);
                 $parameter = buildFunctionExecutionParameter($functionCodeName, $parameter);
-                $commandStr = "{$GLOBALS["HERIKA_NAME"]}|command|$functionCodeName@$parameter\r\n";
+                $commandStr = chimBuildCurrentCommandLine((string)$GLOBALS["HERIKA_NAME"], "command", "$functionCodeName@$parameter");
+                if ($commandStr === null) {
+                    return $this->_commandBuffer;
+                }
 
                 if (!isset($alreadysent[md5($commandStr)])) {
                     $this->_commandBuffer[] = $commandStr;

@@ -237,6 +237,11 @@ function chimBglCompleteNpcCreation(array $npcProfile, int $startingPoint, array
 {
     $npcMaster = new NpcMaster();
     $npc = $npcMaster->getByName($npcProfile['name']);
+    if (!$npc && $GLOBALS['db']->fetchOne("SELECT 1 AS taken FROM core_npc_master WHERE npc_name = '"
+        . $GLOBALS['db']->escape($npcProfile['name']) . "' LIMIT 1")) {
+        // Same-name actors: never resume or reserve against one of them.
+        return ['ok' => false, 'message' => "An NPC named '{$npcProfile['name']}' already exists."];
+    }
     $metadata = $npc ? $npcMaster->getMetadata($npc) : [];
     $creation = $metadata['background_life_creation'] ?? null;
     if ($npc && (!is_array($creation) || !in_array($creation['state'] ?? '', ['pending', 'complete'], true))) {
@@ -249,6 +254,7 @@ function chimBglCompleteNpcCreation(array $npcProfile, int $startingPoint, array
             'npc' => ['name' => $npc['npc_name'], 'refid' => $npc['refid']],
         ];
     }
+    $reservationId = (int)($npc['id'] ?? 0);
     if ($creation) {
         $npcProfile = $creation['profile'];
         $startingPoint = (int)$creation['starting_point'];
@@ -275,9 +281,11 @@ function chimBglCompleteNpcCreation(array $npcProfile, int $startingPoint, array
                 'occupation' => $npcProfile['class'],
                 'metadata' => json_encode(['background_life_creation' => $creation]),
             ]);
-            if (!$npcMaster->getByName($npcProfile['name'])) {
+            $reservation = $npcMaster->getByName($npcProfile['name']);
+            if (!$reservation) {
                 throw new RuntimeException('Could not save the NPC creation request.');
             }
+            $reservationId = (int)$reservation['id'];
 
             $GLOBALS['db']->insert('responselog', [
                 'localts' => time(),
@@ -311,50 +319,55 @@ function chimBglCompleteNpcCreation(array $npcProfile, int $startingPoint, array
         }
     }
 
-    $escapedName = $GLOBALS['db']->escape($npcProfile['name']);
-    $spawned = false;
-    $lastGamets = null;
-    $lastTs = null;
-    for ($attempt = 0; $attempt < 30; $attempt++) {
+    // Bind the creation to the RefID the game reported for this spawn, never to a same-name lookup.
+    $spawnRefids = [];
+    for ($attempt = 0; $attempt < 30 && !$spawnRefids; $attempt++) {
         sleep(1);
-        $spawnStatus = $GLOBALS['db']->fetchOne(
-            "SELECT gamets, ts
-             FROM eventlog
-             WHERE rowid > {$startRowId}
-               AND type = 'status_msg'
-               AND POSITION('spawned@{$escapedName}@' IN data) = 1
-             ORDER BY rowid ASC LIMIT 1"
-        );
-        if ($spawnStatus) {
-            $spawned = true;
-            $lastGamets = $spawnStatus['gamets'] ?? null;
-            $lastTs = $spawnStatus['ts'] ?? null;
-            break;
-        }
+        $spawnRefids = chimSpawnStatusRefids($GLOBALS['db'], $npcProfile['name'], $startRowId);
     }
-    if (!$spawned) {
+    if (!$spawnRefids) {
         return [
             'ok' => false,
             'message' => 'Creation is still pending. Your written profile is saved. Keep Skyrim unpaused, then submit the same name to check again; this will not spawn another NPC.',
         ];
     }
+    if (count($spawnRefids) > 1) {
+        return [
+            'ok' => false,
+            'message' => "Several actors named '{$npcProfile['name']}' spawned since this request, so CHIM cannot tell which one to set up. Your written profile is saved; nothing was attached to either actor.",
+        ];
+    }
+    $refid = $spawnRefids[0];
+    $spawnStatus = $GLOBALS['db']->fetchOne(
+        "SELECT gamets, ts FROM eventlog WHERE rowid > {$startRowId} AND type = 'status_msg'
+           AND POSITION('" . $GLOBALS['db']->escape("spawned@{$npcProfile['name']}@") . "' IN data) = 1
+         ORDER BY rowid ASC LIMIT 1"
+    );
+    $lastGamets = $spawnStatus['gamets'] ?? null;
+    $lastTs = $spawnStatus['ts'] ?? null;
 
-    $npc = null;
-    $refid = '';
+    $binding = ['state' => 'unregistered', 'row' => null];
     for ($attempt = 0; $attempt < 30; $attempt++) {
-        $npc = $npcMaster->getByName($npcProfile['name']);
-        $refid = trim((string)($npc['refid'] ?? ''));
-        if ($npc && $refid !== '') {
+        $binding = chimSpawnedActorRow($npcMaster, $refid, $npcProfile['name']);
+        if ($binding['state'] !== 'unregistered') {
             break;
         }
         sleep(1);
     }
-    if (!$npc || $refid === '') {
+    if ($binding['state'] === 'stale') {
+        return [
+            'ok' => false,
+            'message' => "The spawned actor's reference is now registered under another name or profile. Your written profile is saved; nothing was attached.",
+        ];
+    }
+    $npc = $binding['row'];
+    if (!$npc) {
         return [
             'ok' => false,
             'message' => 'The game confirmed the spawn, but the requested name has not registered. Your written profile is saved. Check for a naming-mod conflict before trying again with the same name.',
         ];
     }
+    $actorKey = chimNpcRowActorKey($npc);
 
     // Commit completion and follow-up commands together so a retry cannot grant
     // the starting inventory twice. Identity remains the exact requested name.
@@ -432,7 +445,16 @@ function chimBglCompleteNpcCreation(array $npcProfile, int $startingPoint, array
             'gamets' => $lastGamets,
             'localts' => time(),
             'original' => 'backgroundaction',
-        ]);
+        ] + ($actorKey !== null ? ['actor_key' => $actorKey] : []));
+
+        // A keyed registration creates its own row; drop the unbound reservation so the name stays unique.
+        if ($reservationId > 0 && $reservationId !== (int)$npc['id']) {
+            $GLOBALS['db']->execQuery("DELETE FROM core_npc_master WHERE id = {$reservationId}
+                AND COALESCE(BTRIM(refid), '') = '' AND COALESCE(metadata->>'refid_source', '') = ''
+                AND COALESCE(metadata->>'actor_key', '') = ''
+                AND metadata->'background_life_creation'->>'state' = 'pending'
+                AND NOT EXISTS (SELECT 1 FROM core_npc_master linked WHERE linked.profile_owner_npc_id = {$reservationId})");
+        }
 
         if (!chimInteractionAllowed() || !$GLOBALS['db']->fetchOne('SELECT 1 AS ready') || !$GLOBALS['db']->query('COMMIT')) {
             throw new RuntimeException('Could not finish NPC creation.');

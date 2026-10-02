@@ -78,8 +78,15 @@ $master = new NpcMaster();
 foreach ($scene['actions'] as $actionIndex => $action) {
     if ($action['after_line'] !== $after || ($approvedIndex !== null && $approvedIndex !== $actionIndex)) continue;
     try {
-        $npc = $action['speaker'] === 'The Narrator'
-            ? (new Narrator())->getNarratorData() : $master->getByName($action['speaker']);
+        $speakerIdentity = $action['speaker_identity'] ?? null;
+        if ($action['speaker'] === 'The Narrator') {
+            $npc = (new Narrator())->getNarratorData();
+        } elseif (is_array($speakerIdentity)) {
+            // The row selected at scene time; a moved or recycled reference no longer dispatches.
+            $npc = chimResponseEndpointStillCurrent($speakerIdentity) ? $master->getByActorKey($speakerIdentity['id']) : null;
+        } else {
+            $npc = preg_match('/\[RefID:/i', $action['speaker']) ? null : $master->getByName($action['speaker']);
+        }
         if (!$npc) continue;
         $actors = [$action['speaker'] => $npc];
         $catalog = chimDirectorActionCatalog($actors);
@@ -109,7 +116,9 @@ foreach ($scene['actions'] as $actionIndex => $action) {
             $dispatchDb->commands[] = ['actor' => $parts[0],
                 'channel' => $wasApproved && $parts[1] === 'command' ? 'approvedcommand' : $parts[1], 'text' => $parts[2]];
         }
+        // Owner key only for the identity selected at scene time; name-picked legacy speakers stay NULL.
         $dispatchDb->insert('actions_issued', ['action' => $action['command_name'], 'actorname' => $action['speaker'],
+            'actor_key' => is_array($speakerIdentity) ? chimNpcRowActorKey($npc) : null,
             'fullcall' => $action['speaker'] . '|command|' . $action['command_name'] . '@' . $execution['parameter_string'],
             'ts' => time(), 'gamets' => $GLOBALS['gameRequest'][2], 'localts' => time(), 'original' => '']);
     } catch (Throwable $error) {

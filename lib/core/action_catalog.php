@@ -1933,22 +1933,28 @@ function herikaActionCatalogGetLastActionsIssuedMap()
         return [];
     }
 
-    if ($cachedKey === $localActorName && is_array($cachedRows)) {
+    // A keyed speaker reads only its own rows plus broadcasts; name-matched legacy rows are not adopted.
+    $localActorKey = function_exists('chimResponseCurrentActorKey') ? chimResponseCurrentActorKey() : null;
+    $cacheId = $localActorKey ?? ('name:' . $localActorName);
+    if ($cachedKey === $cacheId && is_array($cachedRows)) {
         return $cachedRows;
     }
 
     $escapedActorName = $GLOBALS["db"]->escape($localActorName);
+    $ownerWhere = $localActorKey !== null
+        ? "(actor_key = '" . $GLOBALS["db"]->escape($localActorKey) . "' or actorname='*')"
+        : "(actorname = '$escapedActorName' or actorname like '%$escapedActorName,%' or actorname='*')";
     $rows = $GLOBALS["db"]->fetchAll(
         "SELECT * FROM (
             SELECT DISTINCT ON (action) *
             FROM actions_issued
-            WHERE (actorname = '$escapedActorName' or actorname like '%$escapedActorName,%' or actorname='*')
+            WHERE $ownerWhere
             ORDER BY action, gamets DESC, ts DESC
         ) AS sub
         ORDER BY gamets DESC, ts DESC"
     );
 
-    $cachedKey = $localActorName;
+    $cachedKey = $cacheId;
     $cachedRows = [];
     foreach ($rows as $row) {
         $actionCode = trim(strval($row['action'] ?? ''));
@@ -3572,7 +3578,8 @@ function herikaActionCatalogBuildScriptProxyContext($actionParts, $actionParts2)
     $npcMetadata = [];
     if (class_exists('NpcMaster')) {
         $npcMaster = new NpcMaster();
-        $npcData = $npcMaster->getByName($actionParts[0]) ?: [];
+        // Exact acting row from the response envelope when present; never a namesake by label.
+        $npcData = (function_exists('chimResponseActionActorRow') ? chimResponseActionActorRow($npcMaster, $actionParts) : $npcMaster->getByName($actionParts[0])) ?: [];
         $npcMetadata = is_array($npcData) ? ($npcMaster->getMetadata($npcData) ?: []) : [];
     }
 
@@ -3583,6 +3590,9 @@ function herikaActionCatalogBuildScriptProxyContext($actionParts, $actionParts2)
 
     return [
         'actor_name' => strval($actionParts[0] ?? ''),
+        'actor_npc_id' => (int)($npcData['id'] ?? 0),
+        // Envelope-bound owner key only; a legacy label lookup never grants ownership.
+        'actor_key' => function_exists('chimResponseActionActorKey') ? chimResponseActionActorKey($actionParts) : null,
         'actor_refid' => herikaActionCatalogNormalizeRefId($npcData['refid'] ?? ''),
         'actor_furniture' => strval($npcMetadata['furniture'] ?? ''),
         'action_name' => $actionCodeName,
@@ -3657,6 +3667,10 @@ function herikaActionCatalogExecuteScriptProxyDbInserts($dbInserts, $context)
         if (strcasecmp(strval($dbInsert['table']), 'actions_issued') === 0 && array_key_exists('original', $data)) {
             $data['original'] = herikaActionCatalogApplyFollowupChainToActionsIssuedOriginal($data['original']);
         }
+        if (strcasecmp(strval($dbInsert['table']), 'actions_issued') === 0) {
+            // The owner key comes from the resolved acting row, never from catalog template data.
+            $data['actor_key'] = $context['actor_key'] ?? null;
+        }
 
         $GLOBALS["db"]->insert($dbInsert['table'], $data);
         $executed = true;
@@ -3677,10 +3691,9 @@ function herikaActionCatalogExecuteScriptProxyNpcMetadataUpdates($npcMetadataUpd
     }
 
     require_once __DIR__ . DIRECTORY_SEPARATOR . 'activity_status.php';
-    return chimApplyNpcMetadataUpdatesByName(
-        trim(strval($context['actor_name'] ?? '')),
-        $resolvedUpdates
-    );
+    // Activity is physical runtime state of the exact acting row, never its shared profile keeper.
+    if ((int)($context['actor_npc_id'] ?? 0) <= 0) { return false; }
+    return chimApplyNpcMetadataUpdatesByName(['id' => (int)$context['actor_npc_id']], $resolvedUpdates);
 }
 
 function herikaActionCatalogBuildScriptProxyReturnArguments($context)

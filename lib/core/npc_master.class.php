@@ -3,6 +3,24 @@
 if (!function_exists('chimParseStableFormReference')) {
     require_once(__DIR__ . DIRECTORY_SEPARATOR . "game_plugins.php");
 }
+require_once __DIR__ . '/npc_reference.php';
+require_once __DIR__ . '/npc_profile_sharing.php';
+require_once __DIR__ . '/response_identity.php';
+
+if (!function_exists('chimGetPromptCharacterName')) {
+    // Shared with narrator.class.php so both conditional definitions agree.
+    function chimGetPromptCharacterName(): string
+    {
+        return chimResponsePromptCharacterName();
+    }
+}
+
+if (!function_exists('chimGetResponseActorIdentifier')) {
+    function chimGetResponseActorIdentifier(): string
+    {
+        return chimGetPromptCharacterName();
+    }
+}
 require_once(__DIR__ . DIRECTORY_SEPARATOR . "tts_filter_presets.php");
 
 if (!function_exists('herikaRolemasterStateToBool')) {
@@ -384,6 +402,53 @@ class NpcMaster
     private $table = "core_npc_master";
     private $db;
 
+    public static function normalizeRefId($refid)
+    {
+        $refid = preg_replace('/^0x/i', '', trim((string)$refid));
+        if ($refid === '' || !preg_match('/^[0-9a-f]{1,8}$/i', $refid)) {
+            return '';
+        }
+        return strtoupper(str_pad($refid, 8, '0', STR_PAD_LEFT));
+    }
+
+    // A readable command target; persistence uses the separate stable reference identity.
+    public static function displayIdentifier($npcName, $refid = '')
+    {
+        $name = trim((string)$npcName);
+        $normalizedRefid = self::normalizeRefId($refid);
+        return $normalizedRefid !== '' ? "{$name} [RefID: {$normalizedRefid}]" : $name;
+    }
+
+    // The stored profile selector follows the physical reference, never its display name or load slot.
+    public static function identityMd5($row, $npcName = null, $refid = null)
+    {
+        $metadata = is_array($row['metadata'] ?? null)
+            ? $row['metadata'] : (json_decode($row['metadata'] ?? '{}', true) ?: []);
+        $source = chimParseNpcReferenceSource($metadata['refid_source'] ?? '');
+        if ($source) {
+            return md5('ref:' . strtolower($source['plugin_name']) . '|' . $source['local_formid']);
+        }
+        // A dynamic actor is selected by md5 of its client-assigned dyn: key, never its FF slot or name.
+        $actorKey = chimNpcRowActorKey(['metadata' => $metadata]);
+        if ($actorKey !== null) { return md5($actorKey); }
+        $runtimeRef = self::normalizeRefId($refid ?? ($row['refid'] ?? ''));
+        if ($runtimeRef !== '') { return md5('runtime:' . $runtimeRef); }
+        // A row that released a recycled runtime slot keeps the selector it had (chimRegisterDynamicActorRow).
+        $detached = $metadata['detached_selector'] ?? null;
+        if (is_string($detached) && preg_match('/^[0-9a-f]{32}$/D', $detached)) { return $detached; }
+        return md5(trim((string)($npcName ?? ($row['npc_name'] ?? ''))));
+    }
+
+    // A recorded RefID distinguishes this profile from other actors with the same display name.
+    public static function isActorBound($row)
+    {
+        if (!is_array($row)) {
+            return false;
+        }
+        $metadata = is_array($row['metadata'] ?? null) ? $row['metadata'] : (json_decode($row['metadata'] ?? '{}', true) ?: []);
+        return self::normalizeRefId($row['refid'] ?? '') !== '' || chimParseNpcReferenceSource($metadata['refid_source'] ?? '') !== null;
+    }
+
     public static function profileExists($npcName, $checkLegacyFile = false)
     {
         // Access global DB instance
@@ -392,7 +457,7 @@ class NpcMaster
         $db = $GLOBALS["db"];
 
         $escaped = $db->escape($npcName);
-        $query   = "SELECT 1 FROM core_npc_master WHERE npc_name = '{$escaped}' LIMIT 1";
+        $query   = "SELECT 1 FROM core_npc_master WHERE npc_name = '{$escaped}' ORDER BY id ASC LIMIT 1";
         $result  = $db->fetchOne($query);
 
         if ($result) {
@@ -510,7 +575,8 @@ class NpcMaster
                 $data[$k] = null;
             }
         }
-        $data["md5"] = md5($data["npc_name"]);
+        $data["refid"] = self::normalizeRefId($data["refid"] ?? '');
+        $data["md5"] = self::identityMd5($data);
         $filtered    = array_intersect_key($data, array_flip($fields));
         return $this->db->insert($this->table, $filtered);
     }
@@ -518,22 +584,82 @@ class NpcMaster
     // Read NPC by ID
     public function getById($id)
     {
+        return chimNpcEffectiveProfile($this->getActorById($id));
+    }
+
+    // Physical storage row for registration bookkeeping, snapshots and structural writes.
+    public function getActorById($id)
+    {
         $id    = (int) $id;
         $query = "SELECT * FROM {$this->table} WHERE id = $id LIMIT 1";
         return $this->db->fetchOne($query);
     }
 
-    // Read NPC by unique name
+    // Preserve legacy name lookup, but never choose an arbitrary actor when a name is ambiguous.
     public function getByName($npcName)
     {
+        if (preg_match('/\[RefID:\s*(?:0x)?[0-9a-f]{1,8}\]\s*$/i', trim((string)$npcName))) {
+            return $this->getByPromptIdentifier($npcName);
+        }
         // The Narrator is now managed via core_narrator table, not core_npc_master
         if ($npcName === "The Narrator") {
             return null;
         }
 
         $escaped = $this->escape($npcName);
-        $query   = "SELECT * FROM {$this->table} WHERE npc_name = '{$escaped}' LIMIT 1";
-        return $this->db->fetchOne($query);
+        $rows = $this->db->fetchAll(
+            "SELECT * FROM {$this->table} WHERE npc_name = '{$escaped}' ORDER BY id ASC"
+        );
+
+        if (count((array)$rows) === 1) {
+            return chimNpcEffectiveProfile($rows[0]);
+        }
+
+        $legacyRows = array_values(array_filter((array)$rows, static function ($row) {
+            $metadata = json_decode($row['metadata'] ?? '{}', true) ?: [];
+            return self::normalizeRefId($row['refid'] ?? '') === '' && empty($metadata['refid_source']);
+        }));
+        if (count($legacyRows) === 1) {
+            return chimNpcEffectiveProfile($legacyRows[0]);
+        }
+        return null;
+    }
+
+    public function getByPromptIdentifier($identifier)
+    {
+        $identifier = trim((string)$identifier);
+        if (str_starts_with($identifier, 'dyn:') || str_starts_with($identifier, 'ref:')) {
+            return $this->getByActorKey($identifier);
+        }
+        if (!preg_match('/^(.*?)\s*\[RefID:\s*(?:0x)?([0-9a-f]{1,8})\]\s*$/i', $identifier, $matches)) {
+            return $this->getByName($identifier);
+        }
+
+        // The name is presentation only. A renamed actor is still the same physical reference.
+        return $this->getByRefId($matches[2]);
+    }
+
+    // Stable placed-reference lookup refuses duplicate legacy rows instead of picking a profile.
+    public function getByReferenceSource(string $source)
+    {
+        $parsed = chimParseNpcReferenceSource($source);
+        if (!$parsed) { return null; }
+        $key = $this->escape(strtolower($parsed['stable_key']));
+        $rows = $this->db->fetchAll("SELECT * FROM {$this->table}
+            WHERE lower(metadata->>'refid_source') = '{$key}' ORDER BY id");
+        if (count($rows) > 1) { throw new RuntimeException('Duplicate stable actor reference; reconcile profiles before registration'); }
+        return $rows ? chimNpcEffectiveProfile($rows[0]) : null;
+    }
+
+    // Exact physical key: a placed reference by its stable source, a dynamic actor by its stored dyn: key.
+    public function getByActorKey(string $key)
+    {
+        if (!chimIsActorKey($key) || !preg_match('/^(ref|dyn):/', $key)) { return null; }
+        if (str_starts_with($key, 'ref:')) { return $this->getByReferenceSource(substr($key, 4)); }
+        $rows = $this->db->fetchAll("SELECT * FROM {$this->table}
+            WHERE metadata->>'actor_key' = '" . $this->escape($key) . "' AND COALESCE(metadata->>'refid_source', '') = '' ORDER BY id");
+        if (count($rows) > 1) { throw new RuntimeException('Duplicate dynamic actor key; reconcile profiles before registration'); }
+        return $rows ? chimNpcEffectiveProfile($rows[0]) : null;
     }
 
     // Read NPC by md5
@@ -545,17 +671,27 @@ class NpcMaster
             return null;
         }
 
-        $escaped = $this->escape($md5Hash);
-        $query   = "SELECT * FROM {$this->table} WHERE md5 = '{$escaped}' LIMIT 1";
-        return $this->db->fetchOne($query);
+        if (!preg_match('/^[a-f0-9]{32}$/i', (string)$md5Hash)) { return null; }
+        $escaped = $this->escape(strtolower($md5Hash));
+        $rows = $this->db->fetchAll("SELECT * FROM {$this->table} WHERE md5 = '{$escaped}'");
+        if (!$rows) {
+            // Older clients hash the readable target. Compatibility never resolves an ambiguous name.
+            $rows = $this->db->fetchAll("SELECT * FROM {$this->table}
+                WHERE refid IS NOT NULL AND BTRIM(refid) <> ''
+                AND md5(BTRIM(npc_name) || ' [RefID: ' || upper(refid) || ']') = '{$escaped}'");
+        }
+        return count($rows) === 1 ? chimNpcEffectiveProfile($rows[0]) : null;
     }
 
-    // Read NPC by md5
-    public function getByRefId($npcName)
+    // Runtime IDs are current routing addresses, independent of the actor's visible name.
+    public function getByRefId($refid)
     {
-        $escaped = $this->escape($npcName);
-        $query   = "SELECT * FROM {$this->table} WHERE refid = '{$escaped}' order by 	gamets_last_updated	desc nulls last LIMIT 1";
-        return $this->db->fetchOne($query);
+        $refid = self::normalizeRefId($refid);
+        if ($refid === '') { return null; }
+        $escaped = $this->escape(strtolower($refid));
+        $rows = $this->db->fetchAll("SELECT * FROM {$this->table} WHERE lower(refid) = '{$escaped}'");
+        if (count($rows) > 1) { throw new RuntimeException('Duplicate runtime actor reference; reconcile profiles before registration'); }
+        return count($rows) === 1 ? chimNpcEffectiveProfile($rows[0]) : null;
     }
 
     // Read all NPCs (optional WHERE)
@@ -568,7 +704,30 @@ class NpcMaster
     // Update NPC by ID
     public function update($id, $data)
     {
+        $existing = $this->getActorById($id);
+        if (!$existing) { return false; }
+        $binding = chimNpcProfileBinding($existing);
+        // Immediate row-only controls (favorite/lock/live metadata) do not redirect character data.
+        $characterWrite = array_intersect_key($data, array_flip(array_merge(CHIM_SHARED_NPC_FIELDS, ['extended_data', 'npc_name'])));
+        if (!$characterWrite && !isset($data['_profile_binding'])) { $data['_profile_binding'] = $binding; }
+        if (($binding !== ':' || isset($data['_profile_binding'])) && ($data['_profile_binding'] ?? '') !== $binding) {
+            // UI saves and workers must carry the binding they read; never silently retarget stale work.
+            return false;
+        }
+        if ($binding !== ':' || isset($data['_expected_bindings']) || isset($data['_commit_guard']) || isset($data['_expected_keys'])) {
+            return chimNpcWriteSharedProfile($this, (int)$id, $data);
+        }
+        $data['_profile_binding'] = $binding;
+        return $this->updateActor($id, $data);
+    }
+
+    // Internal physical-row persistence; callers normally use update() for ownership routing.
+    public function updateActor($id, $data)
+    {
         $data = $this->normalizeNpcDataForPersistence($data);
+        if (array_key_exists('refid', $data)) {
+            $data['refid'] = self::normalizeRefId($data['refid']);
+        }
 
         $fields = [
             "npc_name",
@@ -603,11 +762,45 @@ class NpcMaster
         $where = "id = $id";
 
         // Prevent renaming The Narrator
-        $existing = $this->getById($id);
+        $existing = $this->getActorById($id);
+        if (isset($data['_profile_binding']) && $data['_profile_binding'] !== chimNpcProfileBinding($existing ?: [])) {
+            return false;
+        }
         if ($existing && isset($existing['npc_name']) && $existing['npc_name'] === 'The Narrator') {
             if (isset($data['npc_name']) && $data['npc_name'] !== $existing['npc_name']) {
                 unset($data['npc_name']);
             }
+        }
+
+        $referenceGuard = '';
+        if (is_array($existing)) {
+            $existingMetadata = $this->getMetadata($existing);
+            $incomingMetadata = array_key_exists('metadata', $data)
+                ? (is_array($data['metadata']) ? $data['metadata'] : $this->getMetadata($data)) : $existingMetadata;
+            // Imports, restores and arbitrary metadata cannot change sharing or its manual opt-out.
+            foreach (CHIM_NPC_PROFILE_METADATA_KEYS as $key) {
+                unset($incomingMetadata[$key]);
+                if (array_key_exists($key, $existingMetadata)) {
+                    $incomingMetadata[$key] = $existingMetadata[$key];
+                }
+            }
+            if (array_key_exists('metadata', $data)) {
+                $data['metadata'] = json_encode($incomingMetadata, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            }
+            $existingSource = chimParseNpcReferenceSource($existingMetadata['refid_source'] ?? '');
+            $source = $existingSource ?? chimParseNpcReferenceSource($incomingMetadata['refid_source'] ?? '');
+            if ($source) {
+                // Historical restores and stale worker snapshots must not restore an obsolete load-order prefix.
+                $incomingMetadata['refid_source'] = $source['stable_key'];
+                $data['metadata'] = json_encode($incomingMetadata, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                if ($existingSource) {
+                    $data['refid'] = $existing['refid'];
+                    $expectedRefid = $existing['refid'] === null ? 'NULL' : "'" . $this->escape($existing['refid']) . "'";
+                    // Fail closed if a manifest remap wins the race after getById().
+                    $referenceGuard = " AND refid IS NOT DISTINCT FROM {$expectedRefid}";
+                }
+            }
+            $data['md5'] = self::identityMd5(array_replace($existing, $data));
         }
 
         $data = $this->preserveRelationshipExtendedDataOnGenericUpdate($data, $existing);
@@ -620,9 +813,10 @@ class NpcMaster
         }
 
         $id       = intval($id);
-        $where    = "id = {$id}";
+        $epoch = $this->escape(chimNpcProfileJson($existing['metadata'] ?? null)['_chim_profile_epoch'] ?? '');
+        $where    = "id = {$id}" . $referenceGuard . " AND COALESCE(metadata->>'_chim_profile_epoch', '') = '{$epoch}'";
         $filtered = array_intersect_key($data, array_flip($fields));
-        return $GLOBALS["db"]->updateRow($this->table, $filtered, $where);
+        return $GLOBALS["db"]->updateRow($this->table, $filtered, $where, true);
 
     }
 
@@ -710,6 +904,7 @@ class NpcMaster
         if ($row && (intval($row['id']) === 1 || ($row['npc_name'] ?? '') === 'The Narrator')) {
             return false;
         }
+        if ($row && count(chimNpcProfileMembers($row)) > 1) { return false; }
         return $this->db->delete($this->table, $where);
     }
 
@@ -878,8 +1073,10 @@ class NpcMaster
         $codename        = $this->npcNameToCodename($npcname);
         $baseprofileName = $this->npcNameToCodename($baseprofile);
 
-        // Check if NPC already exists in DB
-        $existing = $this->getByName($npcname);
+        $refid = self::normalizeRefId($FORCE_PARMS['refid'] ?? '');
+        $existing = $refid !== ''
+            ? $this->getByPromptIdentifier(self::displayIdentifier($npcname, $refid))
+            : $this->getByName($npcname);
 
         if ($existing && ! $overwrite) {
             // Profile exists, and no overwrite requested
@@ -1111,7 +1308,7 @@ class NpcMaster
         }
 
         $currentNpcData['profile_id'] = $defaultProfileId;
-        $currentNpcData['md5']        = md5($currentNpcData["npc_name"]); // Default profile
+        $currentNpcData['md5'] = self::identityMd5($currentNpcData); // Default profile
 
         return $currentNpcData;
 
@@ -1239,7 +1436,7 @@ class NpcMaster
 
         // Apply extended_data overrides (highest precedence - NPC level)
         // Reserved keys are excluded (system fields managed by dedicated subsystems/toggles)
-        $reservedKeys = ['middle_term_memory', 'middle_term_enabled', 'individual_memory_enabled', 'background_life_goals', 'chim_core_migrated'];
+        $reservedKeys = ['middle_term_memory', 'middle_term_memory_provenance', 'middle_term_memory_dormant', 'middle_term_enabled', 'individual_memory_enabled', 'background_life_goals', 'chim_core_migrated'];
         $extendedData = json_decode($currentNpcData['extended_data'] ?? '{}', true);
         if (is_array($extendedData)) {
             foreach ($extendedData as $key => $value) {
@@ -1317,6 +1514,19 @@ class NpcMaster
         if ($npcName === '') {
             return false;
         }
+        $actor = $this->getByPromptIdentifier($npcName);
+        if (!$actor) { return false; }
+        return $this->updateMetadataKeysById((int)$actor['id'], $setValues, $unsetKeys);
+    }
+
+    // Physical runtime metadata (activity, ritual, transformation) of one exact row; never the shared owner.
+    // With $expectedRefid the write applies only while that row still holds the runtime ref (atomic guard).
+    public function updateMetadataKeysById(int $actorId, array $setValues = [], array $unsetKeys = [], ?string $expectedRefid = null): bool
+    {
+        if ($actorId <= 0) { return false; }
+        $protected = array_merge(CHIM_NPC_PROFILE_METADATA_KEYS, ['refid_source']);
+        $setValues = array_diff_key($setValues, array_flip($protected));
+        $unsetKeys = array_diff($unsetKeys, $protected);
 
         $normalizedSetValues = [];
         foreach ($setValues as $key => $value) {
@@ -1364,24 +1574,26 @@ class NpcMaster
             $metadataExpr = "jsonb_set({$metadataExpr}, '{\"{$escapedKey}\"}', '{$escapedValue}'::jsonb, true)";
         }
 
-        $escapedNpcName = $this->db->escape($npcName);
         $query = "
             UPDATE {$this->table}
             SET metadata = {$metadataExpr}
-            WHERE npc_name = '{$escapedNpcName}'
+            WHERE id = {$actorId}
         ";
 
+        if ($expectedRefid !== null) {
+            $ref = self::normalizeRefId($expectedRefid);
+            if ($ref === '') { return false; }
+            $rows = $this->db->fetchAll($query . " AND upper(lpad(regexp_replace(COALESCE(refid::text, ''), '^0x', '', 'i'), 8, '0')) = '{$ref}' RETURNING id");
+            return is_array($rows) && count($rows) === 1;
+        }
         return $this->db->execQuery($query) !== false;
     }
 
 
-    public function updateExtendedKeysByName(string $npcName, array $setValues = [], array $unsetKeys = []): bool
+    // Build the jsonb column expression shared by the by-name and by-id extended_data writers.
+    // Returns null when there is nothing to set or unset.
+    private function buildExtendedDataExpression(array $setValues, array $unsetKeys): ?string
     {
-        $npcName = trim($npcName);
-        if ($npcName === '') {
-            return false;
-        }
-
         $normalizedSetValues = [];
         foreach ($setValues as $key => $value) {
             $metadataKey = trim((string) $key);
@@ -1407,7 +1619,7 @@ class NpcMaster
         }
 
         if (count($normalizedSetValues) === 0 && count($normalizedUnsetKeys) === 0) {
-            return false;
+            return null;
         }
 
         $metadataExpr = "COALESCE(extended_data, '{}'::jsonb)";
@@ -1428,14 +1640,53 @@ class NpcMaster
             $metadataExpr = "jsonb_set({$metadataExpr}, '{\"{$escapedKey}\"}', '{$escapedValue}'::jsonb, true)";
         }
 
-        $escapedNpcName = $this->db->escape($npcName);
+        return $metadataExpr;
+    }
+
+    public function updateExtendedKeysByName(string $npcName, array $setValues = [], array $unsetKeys = []): bool
+    {
+        $actor = $this->getByPromptIdentifier($npcName);
+        if (!$actor) { return false; }
+        return $this->updateExtendedKeysById($actor['id'], $setValues, $unsetKeys, $actor['_profile_binding'] ?? ':');
+    }
+
+    // Same as updateExtendedKeysByName, scoped to one row. Same-named actors keep separate
+    // profiles, so anything chosen by row id in the UI must not fan out across the whole name.
+    public function updateExtendedKeysById($id, array $setValues = [], array $unsetKeys = [], ?string $expectedBinding = null): bool
+    {
+        $id = (int) $id;
+        if ($id <= 0) {
+            return false;
+        }
+        $actor = $this->getById($id);
+        if (!$actor) { return false; }
+        if ($expectedBinding !== null && $expectedBinding !== $actor['_profile_binding']) { return false; }
+        if (chimNpcProfileBinding($actor) !== ':') {
+            $extended = chimNpcProfileJson($actor['extended_data'] ?? null);
+            foreach ($setValues as $key => $value) {
+                if ($value === null) { unset($extended[$key]); } else { $extended[$key] = $value; }
+            }
+            foreach ($unsetKeys as $key) { unset($extended[$key]); }
+            return $this->update($id, [
+                'extended_data' => json_encode($extended),
+                '_profile_binding' => $expectedBinding ?? $actor['_profile_binding'],
+            ]);
+        }
+
+        $metadataExpr = $this->buildExtendedDataExpression($setValues, $unsetKeys);
+        if ($metadataExpr === null) {
+            return false;
+        }
+
         $query = "
             UPDATE {$this->table}
             SET extended_data = {$metadataExpr}
-            WHERE npc_name = '{$escapedNpcName}'
+            WHERE id = {$id}
+                AND profile_owner_npc_id IS NULL AND COALESCE(metadata->>'_chim_profile_epoch', '') = ''
+            RETURNING id
         ";
 
-        return $this->db->execQuery($query) !== false;
+        return (bool)$this->db->fetchOne($query);
     }
 
     public function backupNpcById($id, $source = 'manual')
@@ -1444,13 +1695,13 @@ class NpcMaster
         $source = in_array($source, ['manual', 'relationship'], true) ? $source : 'manual';
 
         // Retrieve the current NPC
-        $npc = $this->getById($id);
+        $npc = $this->getActorById($id);
         if (! $npc) {
             return false; // NPC not found
         }
         //error_log("[NPC BACKUP] Backup of {$npc["npc_name"]} ".print_r($npc,true));
         // Remove the original 'id' field, since the history table likely has its own auto-increment ID
-        unset($npc['id']);
+        unset($npc['id'], $npc['profile_owner_npc_id']);
 
         // Add a reference to the original NPC ID
         $npc['npc_id'] = $id;
@@ -1515,11 +1766,15 @@ class NpcMaster
             FILTER_VALIDATE_BOOLEAN
         );
         $preserveRelationshipDataSql = $neverClearRelationshipData ? 'TRUE' : 'FALSE';
+        chimNpcRestoreSharedProfiles($this, $timestamp, $neverClearRelationshipData);
         $startTime = time();
         $query     =
             "WITH deleted AS (
     DELETE FROM core_npc_master AS c
     WHERE c.npc_name<>'The Narrator' and COALESCE(c.lock_profile,0)=0
+    AND c.profile_owner_npc_id IS NULL
+    AND COALESCE(c.metadata->>'_chim_auto_link_disabled', '') <> 'true'
+    AND NOT EXISTS (SELECT 1 FROM core_npc_master child WHERE child.profile_owner_npc_id = c.id)
     and COALESCE(c.gamets_last_updated,0)>0
     and (
         NOT {$preserveRelationshipDataSql}
@@ -1530,7 +1785,8 @@ class NpcMaster
               AND (eligible_history.gamets_last_updated <= $timestamp OR eligible_history.gamets_last_updated IS NULL)
         )
     )
-    RETURNING c.id, c.extended_data AS current_extended_data
+    RETURNING c.id, c.extended_data AS current_extended_data, c.metadata AS current_metadata,
+        c.refid AS current_refid, c.md5 AS current_md5
 ),
 restore AS (
     SELECT
@@ -1549,10 +1805,14 @@ restore AS (
         h.speechstyle,
         h.goals,
         h.voiceid,
-        h.metadata,
+        CASE WHEN COALESCE(d.current_metadata->>'refid_source', '') <> '' THEN
+            COALESCE(h.metadata, '{}'::jsonb) || jsonb_build_object('refid_source', d.current_metadata->'refid_source')
+            || CASE WHEN d.current_metadata ? '_chim_profile_epoch' THEN
+                jsonb_build_object('_chim_profile_epoch', d.current_metadata->'_chim_profile_epoch') ELSE '{}'::jsonb END
+            ELSE h.metadata END AS metadata,
         h.gender,
         h.race,
-        h.refid,
+        CASE WHEN COALESCE(d.current_metadata->>'refid_source', '') <> '' THEN d.current_refid ELSE h.refid END AS refid,
         h.profile_id,
         h.dynamic_profile,
         h.plugin_extended_data,
@@ -1580,7 +1840,9 @@ restore AS (
             WHEN h.extended_data IS NULL THEN NULL
             ELSE h.extended_data - '_chim_history_source'
         END AS extended_data,
-        h.md5,
+        CASE WHEN COALESCE(d.current_metadata->>'refid_source', '') <> '' THEN d.current_md5
+            WHEN COALESCE(h.refid, '') <> '' THEN md5('runtime:' || upper(h.refid))
+            ELSE h.md5 END AS md5,
         h.gamets_last_updated,
         h.core,
         h.base,
@@ -1970,4 +2232,3 @@ WHERE rn = 1
 AND npc_name not in (select distinct npc_name from core_npc_master)");
     }
 }
-

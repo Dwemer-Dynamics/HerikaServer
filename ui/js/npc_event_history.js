@@ -170,7 +170,10 @@
                 row.appendChild(element(
                     'td',
                     'npc-event-history-audience',
-                    Array.isArray(event.recipients) ? event.recipients.join(', ') : ''
+                    Array.isArray(event.recipients) ? event.recipients.map(function (recipient) {
+                        // Format-2 recipients are {name, id}; only the name is shown.
+                        return typeof recipient === 'string' ? recipient : String((recipient && recipient.name) || '');
+                    }).join(', ') : ''
                 ));
                 row.appendChild(element('td', '', event.tamrielic_time || ''));
                 row.appendChild(element('td', '', event.local_time || ''));
@@ -195,7 +198,8 @@
                     }
                 });
                 const actions = document.createElement('td');
-                actions.appendChild(deleteButton);
+                // Unassigned legacy rows stay stored; the server refuses deleting them from an NPC history.
+                if (event.deletable !== false) actions.appendChild(deleteButton);
                 row.appendChild(actions);
                 tbody.appendChild(row);
             });

@@ -13,12 +13,16 @@ try {
     $input=$_SERVER['REQUEST_METHOD']==='POST' ? json_decode(file_get_contents('php://input'),true,32,JSON_THROW_ON_ERROR) : $_GET;
     $npcId=(int)($input['npc_id']??0); $npc=(new NpcMaster())->getById($npcId);
     if (!$npc) throw new InvalidArgumentException('NPC not found.');
+    // Schedules stay on the physical row; a client shown that row's key must still address the same actor.
+    // Reads check here; writes recheck on the locked row inside their transaction.
+    if (array_key_exists('expected_actor_key',$input) && (!is_string($input['expected_actor_key']) || chimNpcRowActorKey($npc)!==$input['expected_actor_key'])) throw new RuntimeException('This NPC changed since it was opened. Reopen it before continuing.');
+    $expectedActorKey=array_key_exists('expected_actor_key',$input) ? (string)$input['expected_actor_key'] : null;
     $operation=$input['operation']??'list'; $db=$GLOBALS['db']; $id=(int)($input['id']??0);
     if ($_SERVER['REQUEST_METHOD']==='POST') {
         if (($input['epoch'] ?? '') !== (chimScheduleClock()['epoch'] ?? null)) throw new InvalidArgumentException('The game timeline changed. Refresh this menu.');
         if ($operation==='save') chimScheduleSave($npc,$input,$id);
         else {
-            chimScheduleManage($npcId,$id,$operation,(string)($input['epoch']??''));
+            chimScheduleManage($npcId,$id,$operation,(string)($input['epoch']??''),$expectedActorKey);
         }
     }
     $rows=$db->fetchAll("SELECT t.*,r.phase,r.result,r.pending_op FROM npc_commitments t LEFT JOIN LATERAL (SELECT phase,result,pending_op FROM npc_schedule_runs WHERE task_id=t.id ORDER BY id DESC LIMIT 1) r ON true WHERE t.npc_id={$npcId} AND t.schedule IS NOT NULL ORDER BY t.due_gamets,t.id LIMIT 100");

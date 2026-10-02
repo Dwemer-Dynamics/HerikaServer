@@ -871,7 +871,14 @@ class SkyrimCommandBuilder
 
     public function send($cmd,$localts = null) {
 
-        $strJson=json_encode($cmd);
+        require_once __DIR__ . '/core/response_identity.php';
+        // Actor parameters are bound to their current key/RefID now; a command whose actor cannot be proven
+        // (or whose declared identity is invalid) is dropped and logged, never sent unbound.
+        $bound=chimScriptProxyAttachIdentity($cmd);
+        if ($bound===null) {
+            return false;
+        }
+        $strJson=chimScriptProxyWireJson($bound);
 
         $GLOBALS["db"]->insert(
             'responselog',
@@ -884,6 +891,7 @@ class SkyrimCommandBuilder
                 'tag'     => '',
             ]
         );
+        return true;
     }
 }
 

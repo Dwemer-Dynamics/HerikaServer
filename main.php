@@ -139,6 +139,8 @@ MAIN FLOW
 ***********************/
 
 $gameRequest = explode("|", $receivedData);
+require_once __DIR__ . "/lib/core/npc_reference.php";
+$gameRequest = chimJoinRegistrationRequestFields($gameRequest);
 $GLOBALS["gameRequest"] = &$gameRequest;
 if (chimInteractionIsTrigger($gameRequest[0])) chimInteractionRequire();
 unset($GLOBALS["CHIM_TURN_PEOPLE_SNAPSHOT"]);
@@ -146,6 +148,31 @@ unset($GLOBALS["CHIM_CHAT_SHORTCUT_ROUTED"]);
 $requestRoutingSnapshot = chimDecodePlayerRoutingSnapshotField($gameRequest[4] ?? "");
 if (($requestRoutingSnapshot["chat_shortcut_routed"] ?? false) === true) {
     $GLOBALS["CHIM_CHAT_SHORTCUT_ROUTED"] = true;
+}
+
+// Opt-in exact participants (docs/actor-identity.md). Validate before any eventlog write; an invalid
+// opted-in event is rejected whole and never downgraded to legacy name routing.
+require_once __DIR__ . "/lib/core/npc_reference.php";
+unset($GLOBALS["CHIM_EVENT_IDENTITY"]);
+try {
+    $GLOBALS["CHIM_EVENT_IDENTITY"] = chimDecodeRequestEventIdentity($gameRequest);
+    if ($GLOBALS["CHIM_EVENT_IDENTITY"] !== null) {
+        $GLOBALS["CHIM_EVENT_IDENTITY"]["type"] = strtolower((string)($gameRequest[0] ?? ""));
+        $GLOBALS["CHIM_EVENT_IDENTITY"]["ts"] = (string)($gameRequest[1] ?? "");
+    }
+} catch (ChimEventIdentityException $identityError) {
+    error_log("[IDENTITY] rejected " . strtolower((string)($gameRequest[0] ?? "")) . " event: " . $identityError->reason
+        . ($identityError->index === null ? "" : " at participant " . $identityError->index));
+    if (PHP_SAPI !== "cli" && !headers_sent()) {
+        http_response_code(422);
+    }
+    echo "ERROR: invalid event identity ({$identityError->reason})
+";
+    if (!getenv("PHPUNIT_TEST")) {
+        @ob_end_flush();
+        @flush();
+    }
+    exit;
 }
 
 
@@ -302,7 +329,7 @@ if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext
         // Profile isn't loaded yet at this point, so derive the NPC name from the DB using the profile MD5
         $npcTarget = '';
         if (isset($_GET["profile"]) && $_GET["profile"] !== '' && $_GET["profile"] !== md5('The Narrator')) {
-            $npcRow = $db->fetchOne("SELECT npc_name FROM core_npc_master WHERE md5='" . $db->escape($_GET["profile"]) . "' LIMIT 1");
+            $npcRow = (new NpcMaster())->getByMD5($_GET["profile"]);
             if ($npcRow && !empty($npcRow['npc_name'])) {
                 $npcTarget = $npcRow['npc_name'];
             }
@@ -365,6 +392,9 @@ if (!empty($GLOBALS['QUEST_COMMENT_SELECTED'])) {
     } else {
         $narrator = new Narrator();
         $narratorData = $narrator->getNarratorData();
+        // Typed by request type/profile selector, never by a name: memory reads use the Narrator principal.
+        require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "npc_reference.php");
+        $GLOBALS["CHIM_CONTEXT_ACTOR_PRINCIPAL"] = CHIM_ACTOR_KEY_NARRATOR;
         $profile = new CoreProfile();
         $currentProfileData = $profile->getById((int)($narratorData['profile_id'] ?? 0));
         if (!$currentProfileData) {
@@ -414,6 +444,9 @@ if (!empty($GLOBALS['QUEST_COMMENT_SELECTED'])) {
         require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
         $narrator = new Narrator();
         $narratorData = $narrator->getNarratorData();
+        // Typed by request type/profile selector, never by a name: memory reads use the Narrator principal.
+        require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "npc_reference.php");
+        $GLOBALS["CHIM_CONTEXT_ACTOR_PRINCIPAL"] = CHIM_ACTOR_KEY_NARRATOR;
         
         // Load narrator settings into GLOBALS (includes NARRATOR_DIARY_ENABLED, etc.)
         $narrator->loadIntoGlobals();
@@ -509,7 +542,7 @@ if (!empty($GLOBALS['QUEST_COMMENT_SELECTED'])) {
                 if (count($previewBundle["events"]) >= $trigger) {
                     $autoProfileResult = aiProfileGenerate([
                         'db' => $GLOBALS["db"],
-                        'name' => $currentNpcData["npc_name"],
+                        'name' => $currentNpcData["npc_name"], 'npc_id' => (int)$currentNpcData["id"],
                         'event_limit' => $trigger,
                         'selected_events' => $previewBundle["events"],
                         'source' => 'auto',
@@ -593,8 +626,7 @@ if (!empty($GLOBALS['QUEST_COMMENT_SELECTED'])) {
                 || ($fallbackNpcName !== null && strcasecmp($fallbackNpcName, "The Narrator") === 0);
 
             if ($fallbackNpcName !== null && strcasecmp($fallbackNpcName, "The Narrator") !== 0) {
-                $escapedNpcName = $db->escape($fallbackNpcName);
-                $fallbackNpcData = $db->fetchOne("SELECT * FROM core_npc_master WHERE lower(npc_name)=lower('{$escapedNpcName}') LIMIT 1");
+                $fallbackNpcData = $npcMaster->getByPromptIdentifier($fallbackNpcName);
                 if ($fallbackNpcData) {
                     $npcMaster->setOldGlobalsFromCurrentNpcData($fallbackNpcData);
                     $GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"] = $fallbackNpcData;
@@ -699,7 +731,7 @@ if (!empty($GLOBALS['QUEST_COMMENT_SELECTED'])) {
                     if (count($previewBundle["events"]) >= $trigger) {
                         $autoProfileResult = aiProfileGenerate([
                             'db' => $GLOBALS["db"],
-                            'name' => $currentNpcData["npc_name"],
+                            'name' => $currentNpcData["npc_name"], 'npc_id' => (int)$currentNpcData["id"],
                             'event_limit' => $trigger,
                             'selected_events' => $previewBundle["events"],
                             'source' => 'auto',
@@ -759,6 +791,9 @@ if (!empty($GLOBALS['QUEST_COMMENT_SELECTED'])) {
         require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
         $narrator = new Narrator();
         $narratorData = $narrator->getNarratorData();
+        // Typed by request type/profile selector, never by a name: memory reads use the Narrator principal.
+        require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "npc_reference.php");
+        $GLOBALS["CHIM_CONTEXT_ACTOR_PRINCIPAL"] = CHIM_ACTOR_KEY_NARRATOR;
 
         if ($narratorData && isset($narratorData["profile_id"])) {
             $profile = new CoreProfile();
@@ -871,6 +906,9 @@ if (($gameRequest[0]=="chatnf_book")&&($GLOBALS["BOOK_EVENT_ALWAYS_NARRATOR"])) 
         require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
     $narrator = new Narrator();
     $narratorData = $narrator->getNarratorData();
+    // Typed by request type/profile selector, never by a name: memory reads use the Narrator principal.
+    require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "npc_reference.php");
+    $GLOBALS["CHIM_CONTEXT_ACTOR_PRINCIPAL"] = CHIM_ACTOR_KEY_NARRATOR;
     error_log("[CHIM CORE] [BOOK OVERRIDE] USING CORE PROFILE {$narratorData["npc_name"]}");
 
     // Load narrator character data into GLOBALS
@@ -1191,6 +1229,11 @@ if (in_array($gameRequest[0],["rechat","narration"]) ) {
         $rechatPayload = chimParseServerSideRechatPayload($gameRequest[3] ?? "");
         $GLOBALS["RECHAT_PREVIOUS_SPEAKER"] = trim((string)($rechatPayload["speaker"] ?? ""));
         $resolvedRechatTarget = chimResolveServerSideRechatTarget($rechatPayload);
+        if (!empty($resolvedRechatTarget["identity"])) {
+            // Source provenance comes from the speaker_key row, never the client's presentation label.
+            $GLOBALS["RECHAT_PREVIOUS_SPEAKER"] = trim((string)($resolvedRechatTarget["speaker"] ?? ""));
+            $GLOBALS["RECHAT_PREVIOUS_SPEAKER_KEY"] = $resolvedRechatTarget["speaker_key"] ?? null;
+        }
         $GLOBALS["RECHAT_REQUEST_PAYLOAD"] = $rechatPayload;
         $GLOBALS["RECHAT_RESOLVED_TARGET"] = $resolvedRechatTarget;
 
@@ -1199,7 +1242,7 @@ if (in_array($gameRequest[0],["rechat","narration"]) ) {
             terminate();
         }
 
-        if (!chimSwitchActiveNpcProfile($resolvedRechatTarget["selected"])) {
+        if (!chimSwitchActiveNpcProfile($resolvedRechatTarget["selected"], intval($resolvedRechatTarget["selected_row_id"] ?? 0))) {
             Logger::warn("[RECHAT_SELECT] Failed to switch active NPC profile to " . $resolvedRechatTarget["selected"]);
             terminate();
         }
@@ -1335,6 +1378,9 @@ if (in_array($gameRequest[0],["rechat","narration"]) ) {
             require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
             $narrator = new Narrator();
             $narratorData = $narrator->getNarratorData();
+            // Typed by request type/profile selector, never by a name: memory reads use the Narrator principal.
+            require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "npc_reference.php");
+            $GLOBALS["CHIM_CONTEXT_ACTOR_PRINCIPAL"] = CHIM_ACTOR_KEY_NARRATOR;
             
             if ($narratorData && isset($narratorData["profile_id"])) {
                 // Store current profile data
@@ -1422,6 +1468,9 @@ if ($gameRequest[0] == "narrator_welcome") {
     require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
     $narrator = new Narrator();
     $narratorData = $narrator->getNarratorData();
+    // Typed by request type/profile selector, never by a name: memory reads use the Narrator principal.
+    require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "npc_reference.php");
+    $GLOBALS["CHIM_CONTEXT_ACTOR_PRINCIPAL"] = CHIM_ACTOR_KEY_NARRATOR;
     
     if ($narratorData && isset($narratorData["profile_id"])) {
         // Load Narrator profile - set connector and profile first, character data last
@@ -1572,6 +1621,9 @@ if ($isNarratorScopedRequest && (($GLOBALS["HERIKA_NAME"] ?? "") !== "The Narrat
 
     $narrator = new Narrator();
     $narratorData = $narrator->getNarratorData();
+    // Typed by request type/profile selector, never by a name: memory reads use the Narrator principal.
+    require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "npc_reference.php");
+    $GLOBALS["CHIM_CONTEXT_ACTOR_PRINCIPAL"] = CHIM_ACTOR_KEY_NARRATOR;
 
     if ($narratorData && isset($narratorData["profile_id"])) {
         $profile = new CoreProfile();
@@ -1733,9 +1785,12 @@ if (in_array(
 */
 Logger::info("Current STOPALL_MAGIC_WORD ".STOPALL_MAGIC_WORD);
 if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext_s","narrator_inputtext","instruction"]) && preg_match(STOPALL_MAGIC_WORD, $gameRequest[3]) === 1) {
-    echo "{$GLOBALS["HERIKA_NAME"]}|command|Halt@\r\n";
-    if (ob_get_level()) @ob_flush();
-    $alreadysent[md5("{$GLOBALS["HERIKA_NAME"]}|command|Halt@\r\n")] = "{$GLOBALS["HERIKA_NAME"]}|command|Halt@\r\n";
+    $haltLine = chimBuildCurrentResponseLine($GLOBALS["HERIKA_NAME"], "command", "Halt@");
+    if ($haltLine !== null) {
+        echo $haltLine;
+        if (ob_get_level()) @ob_flush();
+        $alreadysent[md5($haltLine)] = $haltLine;
+    }
     
 }
 
@@ -1933,6 +1988,13 @@ if ($gameRequest[0] != "diary" && $gameRequest[0] != "cheatmode") {
             'party'=>$GLOBALS["CACHE_PARTY"],
         );
 
+        // Opted-in requests store the captured audience and role keys, never the nearby name snapshot.
+        $capturedIdentity = chimCapturedEventIdentity('', $gameRequest[0], $gameRequest[1]);
+        if ($capturedIdentity !== null) {
+            $eventlogInsert['people'] = $capturedIdentity['people'];
+            $eventlogInsert = array_merge($eventlogInsert, chimEventRoleColumns($capturedIdentity));
+        }
+
         if ($gameRequest[0] === "chat") {
             $eventlogInsert["delivery_state"] = "spoken";
         }
@@ -2039,9 +2101,9 @@ if (($gameRequest[0] == "diary" || $gameRequest[0] == "diary_followers") && isse
 if (($GLOBALS["HERIKA_NAME"]=="The Narrator"))
     $contextDataHistoric = DataLastDataExpandedFor("", $lastNDataForContext * -1,$sqlfilter);
 else if (!$GLOBALS["IS_NPC"])
-    $contextDataHistoric = DataLastDataExpandedFor("{$GLOBALS["HERIKA_NAME"]}", $lastNDataForContext * -1,$sqlfilter);
+    $contextDataHistoric = DataLastDataExpandedFor("{$GLOBALS["HERIKA_NAME"]}", $lastNDataForContext * -1,$sqlfilter, $GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"] ?? null);
 else if ($GLOBALS["IS_NPC"]) {
-    $contextDataHistoric = DataLastDataExpandedFor("{$GLOBALS["HERIKA_NAME"]}", $lastNDataForContext * -1,$sqlfilter);
+    $contextDataHistoric = DataLastDataExpandedFor("{$GLOBALS["HERIKA_NAME"]}", $lastNDataForContext * -1,$sqlfilter, $GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"] ?? null);
     
 }
 
@@ -2388,17 +2450,15 @@ if (isset($GLOBALS["PROFILE_PROMPT"])) {
 
 
 // Middle term memory experiment
-// Skip middle-term memory for The Narrator (atmospheric narration shouldn't include individual NPC memories)
-if ($GLOBALS["HERIKA_NAME"] !== "The Narrator" && isset($_GET["profile"])) {
+// The typed Narrator principal has no physical digest. A physical NPC named "The Narrator" is that NPC.
+if (($GLOBALS['CHIM_CONTEXT_ACTOR_PRINCIPAL'] ?? null) !== CHIM_ACTOR_KEY_NARRATOR && isset($_GET["profile"])) {
     $npcMaster=new NpcMaster();
     $currentNpcData=$npcMaster->getByMD5($_GET["profile"]);
-    // Only process if we got valid NPC data (not The Narrator)
-    if ($currentNpcData && $currentNpcData["npc_name"] !== "The Narrator") {
-        $extended_data=$npcMaster->getExtendedData($currentNpcData);
-        if (isset($extended_data["middle_term_memory"])&&is_array($extended_data["middle_term_memory"])) {
-            $middle_term_memory = end($extended_data["middle_term_memory"]);
-            $dynamicBiography.="\n<middle_term_memory>\n#Past events\n{$middle_term_memory}\n</middle_term_memory>";
-        }
+    // Only a digest whose sources all belong to this actor's current profile group.
+    $middleTermDigest = $currentNpcData ? chimMiddleTermLatestDigest($currentNpcData) : null;
+    if ($middleTermDigest) {
+        $middle_term_memory = $middleTermDigest['text'];
+        $dynamicBiography.="\n<middle_term_memory>\n#Past events\n{$middle_term_memory}\n</middle_term_memory>";
     }
 }
 
@@ -2787,7 +2847,11 @@ if (isset($GLOBALS["AVOID_LLM_CALL"])&&($GLOBALS["AVOID_LLM_CALL"])) {
 if ($gameRequest[0] == "diary") {
     // TO-DO move this to its own processor file.
 
-    generateFollowerDiary($GLOBALS["HERIKA_NAME"],$gameRequest,"diary");
+    // Owner is this request's selected physical row, or the typed Narrator principal; never the name.
+    $diaryActorScope = is_array($GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"] ?? null)
+        && (string)($GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"]["npc_name"] ?? "") === (string)$GLOBALS["HERIKA_NAME"]
+        ? $GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"] : ($GLOBALS["CHIM_CONTEXT_ACTOR_PRINCIPAL"] ?? null);
+    generateFollowerDiary($GLOBALS["HERIKA_NAME"],$gameRequest,"diary",$diaryActorScope);
     Logger::info("Terminated after diary request");
     terminate();
 }
@@ -2805,6 +2869,10 @@ audit_log(__FILE__." [PRE LLM CALL]  ".__LINE__);
 
 // Set LLM processing status
 pipeline_status_set('llm', true);
+
+// Freeze the registered speaker/listener/target endpoints before the LLM delay; lines built afterwards are
+// dropped if a key/RefID binding changed meanwhile (lib/core/response_identity.php).
+chimResponseSnapshotRequestEndpoints();
 
 $outputWasValid = call_llm();
 chimRequestPerformanceMark('llm_complete');

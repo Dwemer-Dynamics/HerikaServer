@@ -55,25 +55,32 @@ final class DiaryMemoryRecallTest extends TestCase
         unset($GLOBALS['db'], $GLOBALS['NARRATOR_ONLY_DIARY_ACCESS']);
     }
 
-    public function testNarratorSearchesTheGlobalMemoryBankByDefault(): void
+    public function testTypedNarratorSearchesTheGlobalMemoryBankByDefault(): void
     {
-        $this->assertSame('TRUE', dataGetMemoryCompanionConditionSql(''));
+        $this->assertSame('TRUE', dataGetMemoryCompanionConditionSql('', 'companions', 'classifier', CHIM_ACTOR_KEY_NARRATOR));
     }
 
-    public function testNarratorCanBeRestrictedToItsOwnDiary(): void
+    public function testTypedNarratorCanBeRestrictedToItsOwnDiary(): void
     {
         $GLOBALS['NARRATOR_ONLY_DIARY_ACCESS'] = true;
 
         $this->assertSame(
             "(COALESCE(memory_summary.classifier, '') NOT IN ('diary','auto_diary','backgroundlife_diary')"
-                . " OR memory_summary.companions LIKE '%|The Narrator|%'"
-                . " OR memory_summary.companions='The Narrator')",
+                . " OR (memory_summary.audience_keys IS NOT NULL AND memory_summary.audience_keys && ARRAY['narrator']::text[]))",
             dataGetMemoryCompanionConditionSql(
                 '',
                 'memory_summary.companions',
-                'memory_summary.classifier'
+                'memory_summary.classifier',
+                CHIM_ACTOR_KEY_NARRATOR
             )
         );
+    }
+
+    public function testUntypedEmptyOrNarratorNameReadsNothing(): void
+    {
+        unset($GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'], $GLOBALS['CHIM_CONTEXT_ACTOR_PRINCIPAL']);
+        $this->assertSame('FALSE', dataGetMemoryCompanionConditionSql(''));
+        $this->assertSame('FALSE', dataGetMemoryCompanionConditionSql('The Narrator'));
     }
 
     public function testDiaryPackingWritesCanonicalOwnerFormat(): void
@@ -85,20 +92,11 @@ final class DiaryMemoryRecallTest extends TestCase
         $this->assertStringContainsString("event in ('diary','auto_diary','backgroundlife_diary')", $GLOBALS['db']->queries[0]);
     }
 
-    public function testNpcRecallMatchesCanonicalAndLegacyDiaryOwners(): void
+    public function testNpcNameWithoutSelectedPhysicalRowReadsNothing(): void
     {
-        $this->assertSame(
-            "(memory_summary.companions LIKE '%|Embry|%' OR memory_summary.companions='Embry')",
-            dataGetMemoryCompanionConditionSql('Embry', 'memory_summary.companions')
-        );
-    }
-
-    public function testNpcNameIsEscapedInRecallCondition(): void
-    {
-        $this->assertSame(
-            "(companions LIKE '%|M''aiq''s Friend|%' OR companions='M''aiq''s Friend')",
-            dataGetMemoryCompanionConditionSql("M'aiq's Friend")
-        );
+        unset($GLOBALS['CHIM_CORE_CURRENT_NPC_DATA']);
+        $this->assertSame('FALSE', dataGetMemoryCompanionConditionSql('Embry', 'memory_summary.companions'));
+        $this->assertSame('FALSE', dataGetMemoryCompanionConditionSql("M'aiq's Friend"));
     }
 
     private function profileWithLatestDiaryContext(bool $enabled): array

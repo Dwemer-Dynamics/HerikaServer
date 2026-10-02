@@ -28,6 +28,7 @@ require_once LIB_PATH . DIRECTORY_SEPARATOR . 'logger.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . "{$GLOBALS['DBDRIVER']}.class.php";
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'utils_game_timestamp.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'background_life_dashboard.php';
+require_once LIB_PATH . DIRECTORY_SEPARATOR . 'core' . DIRECTORY_SEPARATOR . 'npc_reference.php';
 
 $db = new sql();
 
@@ -53,13 +54,45 @@ try {
         $npcName = substr($npcName, 0, 160);
     }
     $npcLiteral = $db->escapeLiteral($npcName);
-    $peopleLiteral = $db->escapeLiteral('%' . $npcName . '%');
+    // Diary thoughts and sent letters belong to their exact author. A selected NPC row (npc_id) reads its
+    // physical author_key, guarded by expected_actor_key when given; legacy callers and unkeyed rows read
+    // only unassigned rows recorded under that exact name, never a substring of another people list.
+    $npcId = (int)($_GET['npc_id'] ?? 0);
+    $authorKey = null;
+    if ($npcId > 0) {
+        $npcRow = $db->fetchOne("SELECT * FROM core_npc_master WHERE id = {$npcId} LIMIT 1");
+        if (!is_array($npcRow) || !$npcRow) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'error' => 'NPC not found']);
+            exit;
+        }
+        $authorKey = chimNpcRowActorKey($npcRow);
+        $expectedKey = $_GET['expected_actor_key'] ?? null;
+        if ($expectedKey !== null && (string)$expectedKey !== (string)$authorKey) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'error' => 'This NPC changed. Reopen it before loading its history.']);
+            exit;
+        }
+    }
+    $diaryScope = $authorKey !== null
+        ? 'author_key = ' . $db->escapeLiteral($authorKey)
+        : "author_key IS NULL AND {$npcLiteral} = ANY (SELECT trim(x) FROM unnest(string_to_array(trim(people, '|'), '|')) x)";
+
+    // Background Life events are physical: a selected row reads its own actor_key rows, plus unkeyed rows under
+    // its name only while that name is unshared. Legacy callers read only unkeyed rows recorded under the name.
+    if (!chimBglHistoryHasActorKey($db)) {
+        $historyScope = "npc = {$npcLiteral}";
+    } elseif ($npcId > 0) {
+        $historyScope = chimBglHistoryOwnerClause($db, $npcRow);
+    } else {
+        $historyScope = "actor_key IS NULL AND npc = {$npcLiteral}";
+    }
 
     $categorySelect = chimBglHistoryCategorySelect($db);
     $eventRows = $db->fetchAll(
         "SELECT rowid, npc, gamets, ts, localts, data{$categorySelect}
          FROM bgl_history
-         WHERE npc = {$npcLiteral}
+         WHERE {$historyScope}
          ORDER BY gamets DESC, ts DESC, rowid DESC
          LIMIT 20"
     );
@@ -78,14 +111,14 @@ try {
     $letterRows = $db->fetchAll(
         "SELECT topic, content, tags, location, gamets
          FROM diarylog
-         WHERE people LIKE {$peopleLiteral} AND topic = 'Sent Letter'
+         WHERE {$diaryScope} AND topic = 'Sent Letter'
          ORDER BY gamets DESC, localts DESC
          LIMIT 20"
     );
     $thoughtRows = $db->fetchAll(
         "SELECT topic, content, tags, location, gamets
          FROM diarylog
-         WHERE people LIKE {$peopleLiteral} AND (topic <> 'Sent Letter' OR topic IS NULL)
+         WHERE {$diaryScope} AND (topic <> 'Sent Letter' OR topic IS NULL)
          ORDER BY gamets DESC, localts DESC
          LIMIT 20"
     );
@@ -94,6 +127,8 @@ try {
         'success' => true,
         'data' => [
             'npc' => $npcName,
+            'author_key' => $authorKey,
+            'legacy' => $authorKey === null,
             'events' => $events,
             'letters' => array_map('chimBglDetailDiaryEntry', $letterRows),
             'thoughts' => array_map('chimBglDetailDiaryEntry', $thoughtRows),
