@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . '/lib/speech_trace.php';
 
 /**
  * Cartesia TTS Implementation
@@ -1204,7 +1205,7 @@ $GLOBALS["TTS_IN_USE"] = function($textString, $mood, $stringforhash) {
         $cacheFile = dirname(__FILE__) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . 
                     "soundcache/" . md5(trim($stringforhash)) . ".wav";
         if (file_exists($cacheFile)) {
-            return $cacheFile;
+            return chimTraceCachedTts($cacheFile, 'cartesia');
         }
     }
     

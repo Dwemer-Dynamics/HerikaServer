@@ -7151,6 +7151,82 @@ if ($checkVersion("bgl_history") < 20260729001) {
 
 }
 
+if ($checkVersion("bgl_encounters") < 20260810001) {
+    Logger::debug("Applying bgl_encounters 20260810001 - create Background Life combat encounter tables");
+
+    $db->execQuery("BEGIN");
+    try {
+        $db->execQuery("
+            CREATE TABLE IF NOT EXISTS public.bgl_encounters (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                encounter_key varchar(64) NOT NULL UNIQUE,
+                initiator_npc_id bigint NOT NULL,
+                initiator_refid varchar(16) NOT NULL,
+                target_npc_id bigint NOT NULL,
+                target_refid varchar(16) NOT NULL,
+                gamets bigint NOT NULL,
+                ts bigint,
+                localts bigint NOT NULL,
+                state varchar(32) NOT NULL DEFAULT 'pending',
+                result varchar(32),
+                winning_side varchar(16),
+                reason text,
+                narrative text,
+                location text,
+                scene jsonb NOT NULL DEFAULT '{}'::jsonb,
+                resolution jsonb NOT NULL DEFAULT '{}'::jsonb,
+                loot_status varchar(32) NOT NULL DEFAULT 'locked',
+                completed_localts bigint
+            )
+        ");
+        $db->execQuery("
+            CREATE TABLE IF NOT EXISTS public.bgl_encounter_participants (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                encounter_id bigint NOT NULL REFERENCES public.bgl_encounters(id) ON DELETE CASCADE,
+                npc_id bigint NOT NULL,
+                npc_name varchar NOT NULL,
+                refid varchar(16) NOT NULL,
+                side varchar(16) NOT NULL,
+                initial_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+                intended_outcome varchar(32) NOT NULL,
+                applied_outcome varchar(32),
+                final_coords jsonb NOT NULL DEFAULT '{}'::jsonb,
+                application_status varchar(32) NOT NULL DEFAULT 'pending',
+                corpse_status varchar(32) NOT NULL DEFAULT 'not_applicable',
+                apply_attempts integer NOT NULL DEFAULT 0,
+                last_attempt_localts bigint,
+                UNIQUE (encounter_id, npc_id)
+            )
+        ");
+        $db->execQuery("
+            CREATE TABLE IF NOT EXISTS public.bgl_encounter_loot (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                encounter_id bigint NOT NULL REFERENCES public.bgl_encounters(id) ON DELETE CASCADE,
+                source_participant_id bigint NOT NULL REFERENCES public.bgl_encounter_participants(id) ON DELETE CASCADE,
+                recipient_participant_id bigint NOT NULL REFERENCES public.bgl_encounter_participants(id) ON DELETE CASCADE,
+                itemid varchar(16) NOT NULL,
+                item_name varchar,
+                requested_count integer NOT NULL,
+                applied_count integer NOT NULL DEFAULT 0,
+                status varchar(32) NOT NULL DEFAULT 'pending',
+                apply_attempts integer NOT NULL DEFAULT 0,
+                last_attempt_localts bigint,
+                UNIQUE (encounter_id, source_participant_id, recipient_participant_id, itemid)
+            )
+        ");
+        $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_encounters_gamets_idx ON public.bgl_encounters(gamets)");
+        $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_encounter_participants_npc_idx ON public.bgl_encounter_participants(npc_id, encounter_id)");
+        $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_encounter_loot_encounter_idx ON public.bgl_encounter_loot(encounter_id, status)");
+        $db->execQuery("COMMIT");
+    } catch (Throwable $e) {
+        $db->execQuery("ROLLBACK");
+        throw $e;
+    }
+
+    $updateVersion("bgl_encounters", 20260810001);
+    Logger::info("Applied patch bgl_encounters 20260810001");
+}
+
 if ($checkVersion("oghma") < 20260625001) {
     Logger::debug("Applying oghma 20260625001 - ensure topic has a unique constraint for upserts");
 
@@ -7996,6 +8072,129 @@ if ($checkVersion("playthrough_schema") < 20260723001) {
     }
 }
 
+// Persistent NPC tasks
+if ($checkVersion("npc_commitments") < 20260719002) {
+    Logger::debug("Applying npc_commitments 20260719002 - add persistent NPC task recurrence");
+
+    $schemaPath = __DIR__ . "/../lib/core/database_schema/npc_commitments.sql";
+    if ($db->execQuery(file_get_contents($schemaPath))) {
+        $updateVersion("npc_commitments", 20260719002);
+        Logger::info("Applied patch npc_commitments 20260719002");
+    } else {
+        Logger::error("Failed to apply patch npc_commitments 20260719002");
+    }
+}
+
+if ($checkVersion("npc_commitment_actions") < 20260719002) {
+    Logger::debug("Applying npc_commitment_actions 20260719002 - add persistent NPC task actions");
+
+    $db->execQuery("
+        DELETE FROM public.core_action_custom
+         WHERE code_name IN ('CreateCommitment', 'ResolveCommitment', 'CancelCommitment')
+    ");
+    $db->execQuery("
+        DELETE FROM public.core_action
+         WHERE code_name IN ('CreateCommitment', 'ResolveCommitment', 'CancelCommitment')
+    ");
+
+    if ($db->execQuery("
+        INSERT INTO public.core_action (
+            code_name,
+            action_name,
+            description,
+            return_message,
+            available_to_npc,
+            available_to_followers,
+            available_to_narrator,
+            is_activated,
+            parameters_json,
+            metadata,
+            game_function,
+            import_version,
+            script_proxy_program
+        ) VALUES
+        (
+            'CreateTasks',
+            'Create_Tasks',
+            'Create a persistent task that #HERIKA_NAME# intends to complete later. Set repeat_every_hours to make it repeat on an in-game interval, or omit it for a one-time task.',
+            '#HERIKA_NAME# records a persistent task.',
+            TRUE,
+            TRUE,
+            FALSE,
+            TRUE,
+            '{\"type\":\"object\",\"required\":[\"type\",\"subject\",\"due_in_hours\"],\"properties\":{\"type\":{\"type\":\"string\",\"enum\":[\"meeting\",\"message_delivery\",\"fetch\",\"escort\",\"errand\",\"other\"],\"description\":\"Kind of task being created.\"},\"subject\":{\"type\":\"string\",\"description\":\"Short concrete description of what must happen.\"},\"counterparty\":{\"type\":\"string\",\"description\":\"Other person involved, if any.\"},\"location\":{\"type\":\"string\",\"description\":\"Place where the task should be completed, if any.\"},\"due_in_hours\":{\"type\":\"number\",\"description\":\"In-game hours until this task is first due. Minimum 0.25, maximum 8760.\"},\"repeat_every_hours\":{\"type\":\"number\",\"description\":\"Optional in-game repeat interval. Omit or use 0 for a one-time task; otherwise minimum 0.25 and maximum 8760.\"}}}'::jsonb,
+            '{\"source\":\"functions.php\",\"status\":\"active\",\"builtin\":true,\"dispatch\":\"server_action\"}'::jsonb,
+            FALSE,
+            0,
+            NULL
+        ),
+        (
+            'ResolveTask',
+            'Resolve_Task',
+            'Mark one of #HERIKA_NAME#''s active tasks as completed or failed after the outcome has happened. Repeating tasks automatically advance to their next scheduled occurrence.',
+            '#HERIKA_NAME# resolves a persistent task.',
+            TRUE,
+            TRUE,
+            FALSE,
+            TRUE,
+            '{\"type\":\"object\",\"required\":[\"task_id\",\"status\",\"outcome\"],\"properties\":{\"task_id\":{\"type\":\"integer\",\"description\":\"Task number shown in the active tasks context.\"},\"status\":{\"type\":\"string\",\"enum\":[\"completed\",\"failed\"],\"description\":\"Final outcome.\"},\"outcome\":{\"type\":\"string\",\"description\":\"Brief factual description of what happened.\"}}}'::jsonb,
+            '{\"source\":\"functions.php\",\"status\":\"active\",\"builtin\":true,\"dispatch\":\"server_action\"}'::jsonb,
+            FALSE,
+            0,
+            NULL
+        ),
+        (
+            'CancelTask',
+            'Cancel_Task',
+            'Cancel one of #HERIKA_NAME#''s active tasks. Cancelling permanently stops a repeating task.',
+            '#HERIKA_NAME# cancels a persistent task.',
+            TRUE,
+            TRUE,
+            FALSE,
+            TRUE,
+            '{\"type\":\"object\",\"required\":[\"task_id\",\"reason\"],\"properties\":{\"task_id\":{\"type\":\"integer\",\"description\":\"Task number shown in the active tasks context.\"},\"reason\":{\"type\":\"string\",\"description\":\"Brief reason the task is being cancelled.\"}}}'::jsonb,
+            '{\"source\":\"functions.php\",\"status\":\"active\",\"builtin\":true,\"dispatch\":\"server_action\"}'::jsonb,
+            FALSE,
+            0,
+            NULL
+        )
+        ON CONFLICT (code_name) DO UPDATE SET
+            action_name = EXCLUDED.action_name,
+            description = EXCLUDED.description,
+            return_message = EXCLUDED.return_message,
+            available_to_npc = EXCLUDED.available_to_npc,
+            available_to_followers = EXCLUDED.available_to_followers,
+            available_to_narrator = EXCLUDED.available_to_narrator,
+            is_activated = EXCLUDED.is_activated,
+            parameters_json = EXCLUDED.parameters_json,
+            metadata = EXCLUDED.metadata,
+            game_function = EXCLUDED.game_function,
+            import_version = EXCLUDED.import_version,
+            script_proxy_program = EXCLUDED.script_proxy_program,
+            updated_at = NOW()
+    ")) {
+        $updateVersion("npc_commitment_actions", 20260719002);
+    } else {
+        throw new RuntimeException("NPC task action migration failed");
+    }
+    Logger::info("Applied patch npc_commitment_actions 20260719002");
+}
+
+if ($checkVersion("npc_commitment_actions") < 20260719003) {
+    Logger::debug("Applying npc_commitment_actions 20260719003 - strengthen persistent task prompting");
+    $description = $db->escape("Create a persistent task whenever #HERIKA_NAME# accepts, promises, remembers, or schedules a future duty. Use this instead of Talk when a commitment is made. Include any task details already known; the server will structure and save the task in the background.");
+    if ($db->execQuery("
+        UPDATE public.core_action
+           SET description = '{$description}', updated_at = NOW()
+         WHERE code_name = 'CreateTasks'
+    ")) {
+        $updateVersion("npc_commitment_actions", 20260719003);
+        Logger::info("Applied patch npc_commitment_actions 20260719003");
+    } else {
+        Logger::error("Failed to apply patch npc_commitment_actions 20260719003");
+    }
+}
+
 // master Packages update 
 if ($checkVersion("master_packages")<20260716002) {
     if ($db->execQuery(file_get_contents(__DIR__."/../data/master_packages_202607.sql"))) {
@@ -8297,6 +8496,42 @@ if ($checkVersion('npc_plugin_extended_data') < 20260919001) {
     $updateVersion('npc_plugin_extended_data', 20260919001);
 }
 
+// Two-way courier letters between the player and Background Life NPCs (lib/bgl_letters.php).
+if ($checkVersion("bgl_letters") < 20260924001) {
+    Logger::debug("Applying bgl_letters 20260924001 - create player/NPC letter correspondence table");
+
+    $db->execQuery("
+        CREATE TABLE IF NOT EXISTS public.bgl_letters (
+            id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            npc_name varchar NOT NULL,
+            npc_refid varchar,
+            direction varchar(16) NOT NULL,
+            title varchar NOT NULL,
+            body text NOT NULL,
+            in_reply_to bigint,
+            status varchar(32) NOT NULL,
+            courier_state varchar(32),
+            courier_name varchar,
+            courier_event_rowid bigint,
+            courier_attempts integer DEFAULT 0,
+            delivery_attempts integer DEFAULT 0,
+            fee integer DEFAULT 0,
+            sent_gamets bigint,
+            deliver_gamets bigint,
+            read_gamets bigint,
+            discussed_gamets bigint,
+            localts bigint,
+            state_changed_localts bigint
+        )
+    ");
+    $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_letters_npc_idx ON public.bgl_letters (lower(npc_name))");
+    $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_letters_status_idx ON public.bgl_letters (status, courier_state)");
+    $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_letters_reply_idx ON public.bgl_letters (in_reply_to)");
+
+    $updateVersion("bgl_letters", 20260924001);
+    Logger::info("Applied patch bgl_letters 20260924001");
+}
+
 // Install durable event accounting before refreshing the snapshot schema.
 if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_profile_scheduler.sql')) === false) {
     throw new RuntimeException('Dynamic profile migration failed.');
@@ -8319,6 +8554,47 @@ if ($checkVersion('private_npc_thoughts_prompt') < 20260926001) {
         throw new RuntimeException('Private NPC thoughts prompt migration failed.');
     }
     $updateVersion('private_npc_thoughts_prompt', 20260926001);
+}
+
+// Scheduled NPC travel and correlated game acknowledgements.
+if ($checkVersion('npc_schedules') < 20260927001) {
+    if (!$db->execQuery(file_get_contents(__DIR__ . '/../lib/core/database_schema/npc_schedules.sql'))) throw new RuntimeException('Schedule migration failed.');
+    $updateVersion('npc_schedules', 20260927001);
+}
+
+// Skyrim date SQL functions use the Global Settings start date, which PHP sets once per
+// connection. Recreated functions still containing the old fixed date are patched again.
+$hardcodedSkyrimStartFunctions = $db->fetchAll("SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname LIKE 'convert_gamets2skyrim%' AND p.prosrc LIKE '%0201.08.17 00:00:00%'");
+if ($checkVersion('skyrim_start_date') < 20260930001 || !empty($hardcodedSkyrimStartFunctions)) {
+    $skyrimStartSql = <<<'SQL'
+CREATE OR REPLACE FUNCTION public.chim_skyrim_start_timestamp() RETURNS timestamp with time zone
+    LANGUAGE sql STABLE
+    AS $fn$
+        SELECT to_timestamp(COALESCE(NULLIF(current_setting('chim.skyrim_start_date', true), ''), '0201-08-17 00:00:00'), 'YYYY-MM-DD HH24:MI:SS')
+    $fn$;
+DO $$
+DECLARE item record;
+BEGIN
+    FOR item IN SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname LIKE 'convert_gamets2skyrim%' AND p.prosrc LIKE '%0201.08.17 00:00:00%'
+    LOOP
+        EXECUTE replace(pg_get_functiondef(item.oid),
+            'to_timestamp(''0201.08.17 00:00:00'',''YYYY.MM.DD HH24:MI:SS'')', 'public.chim_skyrim_start_timestamp()');
+    END LOOP;
+    IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname LIKE 'convert_gamets2skyrim%' AND p.prosrc LIKE '%0201.08.17 00:00:00%') THEN
+        RAISE EXCEPTION 'Some Skyrim date functions still use a fixed start date';
+    END IF;
+END;
+$$;
+SQL;
+    if ($db->execQuery($skyrimStartSql) !== false) {
+        $updateVersion('skyrim_start_date', 20260930001);
+        Logger::info("Applied patch skyrim_start_date 20260930001");
+    } else {
+        Logger::error("Skyrim start date SQL function patch failed; SQL dates keep the default start date.");
+    }
 }
 
 // Keep the installed snapshot functions and pgAdmin comments aligned with the current table policy.

@@ -34,6 +34,7 @@ ob_start();
 include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl" . DIRECTORY_SEPARATOR . "head.html");
 
 $saveSuccess = isset($_GET['_saved']) && $_GET['_saved'] === '1';
+$saveError = '';
 $clearReanimationResult = null;
 $promptContextSectionTitle = 'Context Selections';
 $gsSections = chimPrismaGlobalSettingsSections();
@@ -50,7 +51,7 @@ $tabControlPanels = [
 $connectorAvailabilityToggles = chimGlobalLlmConnectorAvailabilityMap();
 
 // Paired toggles stay beside their connector instead of appearing twice. OGHMA_EXTRACTOR_FALLBACK
-// gates the Oghma extractor connector, so it renders next to it rather than as its own card.
+// controls native fallback; multilingual routing can independently use the same connector.
 $pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_EXTRACTOR_FALLBACK']);
 foreach ($gsSections as $sectionName => $fields) {
     $gsSections[$sectionName] = array_values(array_filter($fields, static function (array $field) use ($pairedConnectorToggles): bool {
@@ -100,7 +101,7 @@ function pretty_label(string $flatName): string
         'CORE_CONNECTOR_QUEST_CREATION' => 'Quest Creation Connector',
         'CORE_CONNECTOR_QUEST_ENGINE' => 'Quest Engine Connector',
         'CORE_CONNECTOR_BGL' => 'Background Life',
-        'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Extractor Fallback',
+        'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Connector',
         'RELLLM_CONNECTOR' => 'Relationship Management',
         'RELATIONSHIP_UPDATE_CHANCE' => 'Relationship Update Chance',
         'NEVER_CLEAR_RELATIONSHIP_DATA' => 'Never Clear Relationship Data',
@@ -112,6 +113,7 @@ function pretty_label(string $flatName): string
         'OGHMA_AMOUNT' => 'Oghma Topic Count',
         'OGHMA_RESULT_LIMIT' => 'Oghma Result Limit',
         'OGHMA_EXTRACTOR_TIMEOUT_MS' => 'Extractor Timeout (ms)',
+        'OGHMA_MULTILINGUAL_ROUTING' => 'Multilingual Oghma Routing',
         'RACIAL_OGHMA' => 'Force Racial Oghma',
         'LOCATION_OGHMA' => 'Force Location Oghma',
         'ENFORCE_STRICT_RECHAT_RESPONSE' => 'Strict Rechat Targeting',
@@ -155,6 +157,7 @@ function icon_for_field(string $flatName): string
         'AUTOFILL_CUSTOM_PROFILES' => '✨',
         'AUTOFILL_CUSTOM_PROFILES_TRIGGER' => '🎯',
         'BGL_TRIGGER_HOURS' => '🌍',
+        'SKYRIM_START_DATE' => '📅',
         'END_CONVERSATION_COOLDOWN' => '⏳',
         'CHIM_AI_QUEST_PROGRESSION' => '🗺️',
         'CHIM_PLAYER_ONLY_QUEST_ADVANCEMENT' => '🧍',
@@ -393,6 +396,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
             } else {
                 $value = normalize_posted_value($type, $_POST[$name] ?? '');
             }
+            if (($field['format'] ?? '') === 'skyrim_datetime') {
+                try {
+                    $value = chimRequireSkyrimStartDate(is_array($value) ? false : $value);
+                } catch (InvalidArgumentException $e) {
+                    // Keep the saved date; the other settings still save.
+                    $saveError = strval($field['label'] ?? pretty_label($name)) . ' was not changed. ' . $e->getMessage();
+                    continue;
+                }
+            }
 
             $description = current_description($name, $generalSettingRowMap);
             if (!chimSetGeneralSetting($name, $value, $description)) {
@@ -424,7 +436,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
         $didSave = false;
     }
 
-    if ($didSave) {
+    if ($didSave && $saveError !== '') {
+        chimLoadGeneralSettingsIntoGlobals();
+        Logger::warn("Global settings saved by UI with a rejected value: " . $saveError);
+    } elseif ($didSave) {
         chimLoadGeneralSettingsIntoGlobals();
         Logger::info("Global settings saved to general_settings by UI");
         while (ob_get_level() > 0) {
@@ -433,9 +448,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
         $redirectUrl = strtok($_SERVER['REQUEST_URI'], '?') . '?_saved=1&_ts=' . time();
         header("Location: " . $redirectUrl);
         exit;
+    } else {
+        Logger::error("Failed writing general_settings from Global Settings UI");
     }
-
-    Logger::error("Failed writing general_settings from Global Settings UI");
 }
 
 ?>
@@ -1633,6 +1648,9 @@ body .settings-tabs .settings-tab.is-active {
     <?php if ($saveSuccess): ?>
         <div class="result-ok" style="margin-bottom: 16px;">Global settings saved to the database.</div>
     <?php endif; ?>
+    <?php if ($saveError !== ''): ?>
+        <div class="result-error" style="margin-bottom: 16px;">Other settings were saved. <?php echo htmlspecialchars($saveError); ?></div>
+    <?php endif; ?>
 
     <div class="settings-tabs" role="tablist" aria-label="Global settings categories">
         <?php foreach ($settingsTabs as $tabId => $tabLabel): ?>
@@ -1786,7 +1804,7 @@ body .settings-tabs .settings-tab.is-active {
                                         <?php if ($fieldType === 'boolean'): ?>
                                             <div class="provider-toggle">
                                                 <input type="hidden" name="<?php echo htmlspecialchars($fieldName); ?>" value="false">
-                                                <input type="checkbox" name="<?php echo htmlspecialchars($fieldName); ?>" value="true" <?php echo ($current ? 'checked' : ''); ?> <?php echo $isReadonly ? 'disabled' : ''; ?>>
+                                                <input type="checkbox" name="<?php echo htmlspecialchars($fieldName); ?>" aria-label="<?php echo htmlspecialchars($label); ?>" value="true" <?php echo ($current ? 'checked' : ''); ?> <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             </div>
                                         <?php endif; ?>
                                         <?php if (isset($connectorAvailabilityToggles[$fieldName])): ?>
@@ -1795,7 +1813,7 @@ body .settings-tabs .settings-tab.is-active {
                                         <?php if ($fieldName === 'CORE_CONNECTOR_OGHMA_CUSTOM'): ?>
                                             <div class="provider-toggle">
                                                 <input type="hidden" name="OGHMA_EXTRACTOR_FALLBACK" value="false">
-                                                <input type="checkbox" name="OGHMA_EXTRACTOR_FALLBACK" value="true" <?php echo (current_value('OGHMA_EXTRACTOR_FALLBACK') ? 'checked' : ''); ?> title="Allow one bounded connector fallback after deterministic Oghma abstains">
+                                                <label><input type="checkbox" name="OGHMA_EXTRACTOR_FALLBACK" value="true" <?php echo (current_value('OGHMA_EXTRACTOR_FALLBACK') ? 'checked' : ''); ?> title="Used when Multilingual Oghma Routing is off"> Extractor Fallback</label>
                                             </div>
                                         <?php endif; ?>
                                     </div>
@@ -1862,7 +1880,7 @@ body .settings-tabs .settings-tab.is-active {
                                             <?php endforeach; ?>
                                         </select>
                                     <?php else: ?>
-                                        <input type="text" name="<?php echo htmlspecialchars($fieldName); ?>" value="<?php echo htmlspecialchars(strval($current)); ?>" <?php echo $readonlyAttr; ?>>
+                                        <input type="text" name="<?php echo htmlspecialchars($fieldName); ?>" value="<?php echo htmlspecialchars(strval($current)); ?>"<?php echo isset($field['placeholder']) ? ' placeholder="' . htmlspecialchars(strval($field['placeholder'])) . '"' : ''; ?> <?php echo $readonlyAttr; ?>>
                                     <?php endif; ?>
                                 </div>
                                 <?php if ($help !== ''): ?>
@@ -2142,6 +2160,9 @@ document.addEventListener('DOMContentLoaded', function () {
         if (details.url) chunks.push('url: ' + details.url);
         if (Number(result.elapsed_ms || 0) > 0) chunks.push(String(result.elapsed_ms) + 'ms');
         if (details.response_preview) chunks.push('response: ' + details.response_preview);
+                if (details.checks) Object.entries(details.checks).forEach(([name, check]) => chunks.push(name + ': ' + check.status + ' — ' + check.message));
+                if (details.timings && details.timings.ttft_ms != null) chunks.push('first token: ' + details.timings.ttft_ms + 'ms');
+                if (details.errors && details.errors.length) chunks.push('warnings: ' + details.errors.map(error => error.message).join('; '));
         return chunks.join(' | ');
     }
 

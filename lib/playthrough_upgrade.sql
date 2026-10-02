@@ -46,6 +46,12 @@ BEGIN
         IF NOT (table_name=ANY(source_names)) THEN
             SELECT v.version_key, v.version INTO version_key, required_version FROM (VALUES
                 ('bgl_history','bgl_history',20260623001::bigint),
+                ('bgl_letters','bgl_letters',20260924001::bigint),
+                ('bgl_encounters','bgl_encounters',20260810001::bigint),
+                ('bgl_encounter_participants','bgl_encounters',20260810001::bigint),
+                ('bgl_encounter_loot','bgl_encounters',20260810001::bigint),
+                ('npc_commitments','npc_commitments',20260719002::bigint),
+                ('npc_schedule_runs','npc_schedules',20260927001::bigint),
                 ('market_cache','market_cache',20260805001::bigint),
                 ('core_tts_fallback','core_tts_fallback',20260727001::bigint),
                 ('core_tts_pronunciation','core_tts_pronunciation',20260829003::bigint),
@@ -57,9 +63,9 @@ BEGIN
                 ('oghma_catalog_events','oghma_catalog',20260827001::bigint),
                 ('oghma_factory_overrides','oghma_catalog',20260827001::bigint)
             ) v(name,version_key,version) WHERE v.name=table_name;
-            -- Policy 2 kept these tables global, so its saves contain no copy.
+            -- Policies 1-3 omitted encounters, 1-4 omitted tasks; policy 2 kept the listed libraries global.
             -- Initialize only that known omission; never borrow another game's live data.
-            IF source_policy=2 AND table_name=ANY(ARRAY['oghma','oghma_audit','oghma_catalog_entries','oghma_catalog_events','oghma_catalogs','oghma_context_rule','oghma_factory_overrides','quest_asset_group_members','quest_asset_groups','quest_asset_imports','quest_asset_packs','quest_assets','quest_item_types','quest_npc_own_templates','quest_npc_templates','quest_outfits','skyrim_quest_definitions']) OR source_policy=1 AND table_name='oghma_context_rule' THEN
+            IF source_policy<=5 AND table_name='npc_schedule_runs' OR source_policy<=3 AND table_name=ANY(ARRAY['bgl_encounters','bgl_encounter_participants','bgl_encounter_loot']) OR source_policy<=4 AND table_name='npc_commitments' OR source_policy=2 AND table_name=ANY(ARRAY['oghma','oghma_audit','oghma_catalog_entries','oghma_catalog_events','oghma_catalogs','oghma_context_rule','oghma_factory_overrides','quest_asset_group_members','quest_asset_groups','quest_asset_imports','quest_asset_packs','quest_assets','quest_item_types','quest_npc_own_templates','quest_npc_templates','quest_outfits','skyrim_quest_definitions']) OR source_policy=1 AND table_name='oghma_context_rule' THEN
                 empty_tables := array_append(empty_tables,table_name);
             ELSE
                 IF required_version IS NULL THEN
@@ -76,6 +82,10 @@ BEGIN
                 END IF;
                 IF saved_version >= required_version THEN
                     RAISE EXCEPTION 'Snapshot is missing table %, which already existed when it was saved',table_name;
+                END IF;
+                -- Either feature may be installed first. Missing pre-install state starts empty.
+                IF table_name=ANY(ARRAY['bgl_encounters','bgl_encounter_participants','bgl_encounter_loot','npc_commitments','npc_schedule_runs','bgl_letters']) THEN
+                    empty_tables := array_append(empty_tables,table_name);
                 END IF;
             END IF;
             EXECUTE format('CREATE TABLE %I.%I (LIKE public.%I INCLUDING ALL)',stage_schema,table_name,table_name);
@@ -173,7 +183,7 @@ BEGIN
     ) THEN RAISE EXCEPTION 'Snapshot sequence defaults still reference another schema'; END IF;
 
     EXECUTE format('COMMENT ON SCHEMA %I IS %L',stage_schema,
-        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',3,
+        jsonb_build_object('format','chim_selected_tables_v2','table_policy_version',8,
             'tables',live_names,'missing_tables',missing_tables,'empty_tables',empty_tables,'source_schema',source_schema,
             'upgrade_version',2)::text);
     RETURN stage_schema;
@@ -213,4 +223,4 @@ END;
 $$ LANGUAGE plpgsql SET lock_timeout = '10s';
 
 CREATE OR REPLACE FUNCTION chim_meta.playthrough_api_version()
-RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 7';
+RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 11';

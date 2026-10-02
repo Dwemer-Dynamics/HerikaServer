@@ -343,6 +343,8 @@ function chimSettingsPresetNormalizeSetting($value, array $field)
             throw new InvalidArgumentException('Expected a number.');
         }
         $value = (float)$value;
+    } elseif (($field['format'] ?? '') === 'skyrim_datetime') {
+        return chimRequireSkyrimStartDate(is_array($value) ? false : $value);
     } else {
         $value = (string)$value;
     }

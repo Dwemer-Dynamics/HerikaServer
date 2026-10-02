@@ -19,7 +19,6 @@ date_default_timezone_set('Europe/Madrid');
 $GLOBALS["AVOID_TTS_CACHE"]=true;
 $GLOBALS["CHIM_NO_EXAMPLES"]=true; // When no assistant entry in history, will try to provide a bogus example.
 $GLOBALS["MEMORY_THRESHOLD_MODIFIER"]=0;    // POST MEMORY
-$GLOBALS["skyrim_start_date"] = '0201-08-17 00:00:00'; // default Skyrim start date. Alternate start mods could change this. Candidate for global settings.
 $GLOBALS["SEMAPHORES_TIMEOUT"] = 300; 
 $GLOBALS["TTS_INJECT_NONVERBAL_VOCALIZATION"] = true; // Spice the TTS with non-verbal vocalization when expressing strong emotion. 
 $GLOBALS['use_emotions_expression'] = true; 
@@ -235,7 +234,7 @@ if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext
 $fast_commands = ["addnpc","addbgnpc","updateprofile","updateprofile_narrator","diary","diary_narrator","diary_player","_quest","setconf","request","_speech","infoloc","infonpc","infonpc_close",
     "infoaction","status_msg","delete_event","itemfound","_questdata","_uquest","location","_questreset","chat","bleedout","waitstart","waitstop",
     "util_location_name","util_faction_name","spellcast","npcspellcast","updateprofiles_batch_async","core_profile_assign","switchrace","combatbark",
-    "util_location_npc","enable_bg","region","named_cell","snqe","named_cell_static","player_menu_tts_prefetch","player_menu_tts_play",
+    "util_npc_schedule","util_location_npc","enable_bg","region","named_cell","snqe","named_cell_static","player_menu_tts_prefetch","player_menu_tts_play",
     "physics_raw"]; // raw VR contact/gaze telemetry from client plugins: log-only unless an extension opts in by renaming it in preprocessing
 
 if (isset($GLOBALS["external_fast_commands"])) {
@@ -322,6 +321,10 @@ if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext
 // Narrator inititalization
 // Note: We should check if we need to load Narrator profile in all type of requests. 
 require(__DIR__."/processor/narrator_init.php");
+// Quest routing must precede profile loading; one update produces at most one speaker.
+if (($gameRequest[0] ?? '') === 'quest') {
+    require(__DIR__ . '/processor/quest_comment.php');
+}
 
 // maybeQueueNpcVoiceRefresh function moved to misc.php. 
 // If function is called only in one place,and seems has no other uses elsewhere, then there is no point of having a function, write the code in place.
@@ -350,7 +353,40 @@ if (($gameRequest[0] ?? '') === 'bored') {
     }
 }
 
-if (isset($_GET["profile"])) {
+if (!empty($GLOBALS['QUEST_COMMENT_SELECTED'])) {
+    if ($gameRequest[0] === 'quest') {
+        if (!chimSwitchActiveNpcProfile($GLOBALS['QUEST_COMMENT_SPEAKER'])) {
+            Logger::warn('[QUEST_COMMENT] NPC profile/connector unavailable; cooldown unchanged');
+            terminate();
+        }
+        $currentNpcData = $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'];
+        $currentProfileData = $GLOBALS['CHIM_CORE_CURRENT_PROFILE_DATA'];
+        $currentConnectorData = $GLOBALS['CHIM_CORE_CURRENT_CONNECTOR_DATA'];
+    } else {
+        $narrator = new Narrator();
+        $narratorData = $narrator->getNarratorData();
+        $profile = new CoreProfile();
+        $currentProfileData = $profile->getById((int)($narratorData['profile_id'] ?? 0));
+        if (!$currentProfileData) {
+            Logger::warn('[QUEST_COMMENT] Narrator profile unavailable; cooldown unchanged');
+            terminate();
+        }
+        $connector = new LLMConnector();
+        $connectorSlot = LLMRandomizer::getConnectorSlot($currentProfileData, $narratorData, new NpcMaster());
+        $currentConnectorData = $connector->getById(LLMRandomizer::getConnectorIdForSlot($currentProfileData, $connectorSlot));
+        if (!$currentConnectorData) {
+            Logger::warn('[QUEST_COMMENT] Narrator connector unavailable; cooldown unchanged');
+            terminate();
+        }
+        $narrator->loadIntoGlobals();
+        $connector->setOldGlobals($currentConnectorData);
+        $profile->setOldGlobals($currentProfileData);
+        $narrator->loadCharacterIntoGlobals();
+        $GLOBALS['CHIM_CORE_CURRENT_PROFILE_DATA'] = $currentProfileData;
+        $GLOBALS['CHIM_CORE_CURRENT_CONNECTOR_DATA'] = $currentConnectorData;
+    }
+    $GLOBALS['CURRENT_CONNECTOR'] = $currentConnectorData['driver'];
+} elseif (isset($_GET["profile"])) {
     
     // Initialize OVERRIDES array for all profile types
     $OVERRIDES["BOOK_EVENT_ALWAYS_NARRATOR"] = isset($GLOBALS["BOOK_EVENT_ALWAYS_NARRATOR"]) ? $GLOBALS["BOOK_EVENT_ALWAYS_NARRATOR"] : false;
@@ -1462,68 +1498,13 @@ if ($gameRequest[0] == "narrator_welcome") {
     }
 }
 
-// Handle narrator_quest_comment events (must be AFTER comm.php which converts quest to narrator_quest_comment)
-if ($gameRequest[0] == "narrator_quest_comment") {
-    // Load narrator profile with full connector configuration
-    require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "narrator.class.php");
-    $narrator = new Narrator();
-    $narratorData = $narrator->getNarratorData();
-    
-    if ($narratorData && isset($narratorData["profile_id"])) {
-        // Load Narrator profile - set connector and profile first, character data last
-        $profile = new CoreProfile();
-        $currentProfileData = $profile->getById($narratorData["profile_id"]);
-        
-        if (!$currentProfileData) {
-            Logger::error("[NARRATOR_QUEST_COMMENT] Profile ID {$narratorData['profile_id']} not found in core_profiles table");
-            Logger::error("[NARRATOR_QUEST_COMMENT] Please ensure The Narrator has a valid profile assigned");
-            terminate();
-        }
-        
-        $GLOBALS["CHIM_CORE_CURRENT_PROFILE_DATA"] = $currentProfileData;
-        
-        $connector = new LLMConnector();
-        
-        $npcMaster = new NpcMaster();
-        $connectorSlot = LLMRandomizer::getConnectorSlot($currentProfileData, $narratorData, $npcMaster);
-        
-        $connectorId = LLMRandomizer::getConnectorIdForSlot($currentProfileData, $connectorSlot);
-        
-        $slotName = LLMRandomizer::getSlotName($connectorSlot);
-        
-        if (!$connectorId) {
-            Logger::error("[NARRATOR_QUEST_COMMENT] No connector assigned to {$slotName} slot (slot {$connectorSlot}) for profile '{$currentProfileData['label']}'");
-            Logger::error("[NARRATOR_QUEST_COMMENT] Please configure connectors for The Narrator's profile:");
-            Logger::error("[NARRATOR_QUEST_COMMENT]   - Go to Profile Management > Edit The Narrator's profile");
-            Logger::error("[NARRATOR_QUEST_COMMENT]   - Assign connectors to: Standard (slot 1), Fast (slot 2), Powerful (slot 3), Experimental (slot 4)");
-            Logger::error("[NARRATOR_QUEST_COMMENT]   - The system uses the ingame mode setting to pick which connector to use");
-            terminate();
-        }
-        
-        $currentConnectorData = $connector->getById($connectorId);
-        
-        if (!$currentConnectorData) {
-            Logger::error("[NARRATOR_QUEST_COMMENT] Connector ID {$connectorId} not found in core_connectors table");
-            terminate();
-        }
-        
-        $connector->setOldGlobals($currentConnectorData);
-        $profile->setOldGlobals($currentProfileData);
-        
-        // Load narrator character data into GLOBALS
-        $narrator->loadCharacterIntoGlobals();
-        
-        $GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"] = $currentConnectorData;
-        
-        // Set CURRENT_CONNECTOR for compatibility with old code paths
-        $GLOBALS["CURRENT_CONNECTOR"] = $currentConnectorData['driver'];
-    } else {
-        Logger::error("[NARRATOR_QUEST_COMMENT] Narrator profile_id not found in core_narrator table");
-        Logger::error("[NARRATOR_QUEST_COMMENT] Please configure The Narrator in Narrator Management");
-        terminate();
-    }
+// A selected quest speaker must have a usable profile and connector. Failed
+// setup does not consume the shared cooldown.
+if (!empty($GLOBALS['QUEST_COMMENT_SELECTED'])
+    && (empty($GLOBALS['CHIM_CORE_CURRENT_PROFILE_DATA']) || empty($GLOBALS['CHIM_CORE_CURRENT_CONNECTOR_DATA']))) {
+    Logger::warn('[QUEST_COMMENT] Selected speaker has no usable profile or connector');
+    $MUST_END = true;
 }
-
 if ($MUST_END) {  // Shorthand for non LLM processing
     echo 'X-CUSTOM-CLOSE'.PHP_EOL;
     if (!getenv("PHPUNIT_TEST")) {
@@ -2436,11 +2417,11 @@ if ($currentHold) {
     $rumorHoldClauses = ["hold='Skyrim'"];
     foreach (getCanonicalHoldAliases($currentHold) as $holdAlias) {
         $holdAliasEsc = $db->escape($holdAlias);
-        $rumorHoldClauses[] = "hold ILIKE '{$holdAliasEsc}'";
+        $rumorHoldClauses[] = "hold ILIKE '%{$holdAliasEsc}%'";
 
         if ($currentLoc !== "") {
             $currentLocEsc = $db->escape($currentLoc);
-            $rumorLocationHoldClauses[] = "hold ILIKE '{$currentLocEsc}%{$holdAliasEsc}%'";
+            $rumorLocationHoldClauses[] = "hold ILIKE '%{$currentLocEsc}%{$holdAliasEsc}%'";
         }
     }
 
@@ -2577,6 +2558,20 @@ $latestDiaryContext = function_exists('chimBuildLatestDiaryContextBlock')
             : []
     )
     : "";
+
+// Letters exchanged by courier that this NPC has not yet talked through with the player in person.
+$letterCorrespondence = "";
+try {
+    require_once(__DIR__ . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "bgl_letters.php");
+    $letterCorrespondence = chimLetterBuildCorrespondenceBlock(
+        strval($GLOBALS["HERIKA_NAME"] ?? ''),
+        in_array($gameRequest[0], ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s"], true)
+    );
+} catch (Throwable $e) {
+    Logger::warn("[BGL_LETTERS] Could not build letter context: " . $e->getMessage());
+    $letterCorrespondence = "";
+}
+
 $promptBottomInjections = function_exists('chimRenderPromptInjections')
     ? chimRenderPromptInjections("prompt_bottom", $promptInjectionContext)
     : "";
@@ -2596,7 +2591,7 @@ if (!empty($GLOBALS["OGHMA_HINT"])) {
 
 $systemPromptRaw = "<roleplay_instructions>\n" . $GLOBALS["PROMPT_HEAD"] .
     "\n</roleplay_instructions>" . $worldPrompt .
-    "\n\n<character>\n" . $GLOBALS["HERIKA_PERS"] . $dynamicBiography . $latestDiaryContext . $characterBottomInjections .
+    "\n\n<character>\n" . $GLOBALS["HERIKA_PERS"] . $dynamicBiography . $latestDiaryContext . $letterCorrespondence . $characterBottomInjections .
     "\n</character>" . $knowledgeSection .
     "\n\n<general_instructions>\n" . $GLOBALS["COMMAND_PROMPT"] .
     "\n</general_instructions>" . $actionsList . $nearbySections . $promptBottomInjections . $paralinguisticTagsPrompt .
@@ -2606,7 +2601,7 @@ $systemPromptRaw = "<roleplay_instructions>\n" . $GLOBALS["PROMPT_HEAD"] .
 $promptCompositionSections = [
     'roleplay_instructions' => $GLOBALS["PROMPT_HEAD"] ?? '',
     'world' => $worldPrompt ?? '',
-    'character' => ($GLOBALS["HERIKA_PERS"] ?? '') . ($dynamicBiography ?? '') . ($latestDiaryContext ?? '') . ($characterBottomInjections ?? ''),
+    'character' => ($GLOBALS["HERIKA_PERS"] ?? '') . ($dynamicBiography ?? '') . ($latestDiaryContext ?? '') . ($letterCorrespondence ?? '') . ($characterBottomInjections ?? ''),
     'knowledge' => $knowledgeSection ?? '',
     'general_instructions' => $GLOBALS["COMMAND_PROMPT"] ?? '',
     'actions' => $actionsList ?? '',
@@ -2821,7 +2816,7 @@ pipeline_status_set('llm', false);
 
 if (!$outputWasValid) {
     Logger::warn("LLM returned invalid output.");
-    if (isset($GLOBALS["LLM_RETRY_FNCT"])) {
+    if (isset($GLOBALS["LLM_RETRY_FNCT"]) && empty($GLOBALS['CHIM_PROVIDER_RECOVERY_HANDLED'])) {
         $GLOBALS["LLM_RETRY_FNCT"]();
     }
 }
@@ -2933,6 +2928,13 @@ if (php_sapi_name()=="cli" && !getenv('PHPUNIT_TEST')) {
 
 }
 
+
+// MAIN still serializes quest requests here. Only generated dialogue consumes
+// the cooldown; rejected events and failed/empty generations remain retryable.
+if (!empty($GLOBALS['QUEST_COMMENT_SELECTED']) && !empty($talkedSoFar) && !$ERROR_TRIGGERED) {
+    $db->upsertRowOnConflict('conf_opts', ['id' => 'QUEST_COMMENT_LAST_TIMESTAMP', 'value' => time()], 'id');
+    Logger::info('[QUEST_COMMENT] Dialogue generated; shared cooldown started');
+}
 
 // POST PROCESS TASKS
 SemaphoreManager::release("MAIN");
