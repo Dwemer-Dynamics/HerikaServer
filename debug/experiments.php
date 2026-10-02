@@ -905,7 +905,7 @@ if ($argv[1] == '17') {
 
     $npcMaster = new NpcMaster();
     $npc = $npcMaster->getByName($argv[2]);
-    
+
     $GLOBALS["db"]->insert(
         'responselog',
         [
@@ -1690,3 +1690,8 @@ if ($argv[1] == '55') {
     $skyrimCmd->send(cmd: $json);
 }
 
+if ($argv[1] == '56') {
+    $sqlfilter = " and type<>'backgroundaction' ";
+    $contextDataHistoric = DataLastDataExpandedFor("", -15, $sqlfilter);
+    print_r($contextDataHistoric);
+}
