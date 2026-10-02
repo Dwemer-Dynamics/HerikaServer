@@ -100,7 +100,8 @@ if (! isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"])) {
 
     error_log("Using {$GLOBALS["CURRENT_CONNECTOR"]} <{$argv[1]}>");
 
-    $contextDataHistoric = DataLastDataExpandedFor("", -15);
+    $sqlfilter=" and type<>'backgroundaction' ";
+    $contextDataHistoric = DataLastDataExpandedFor("", -15,$sqlfilter);
     $contextDataHistoric = array_merge([["role" => "user", "content" => "# HISTORIC DIALOGUE AND EVENTS IN CHRONOLOGICAL ORDER"]], $contextDataHistoric);
 
     $contextDataWorld = DataLastInfoFor("", -2, $addNPCDescriptions = true, $excludeBusy = true);

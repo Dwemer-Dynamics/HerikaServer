@@ -1031,7 +1031,7 @@ if (sizeof($actionIdleRows) > 2) {
         $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} has been working too much for the last 48h. This may affect health and well-being.\n";
     }
     if ($summaryIdleActions['Guard'] == 0) {
-        $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} hasn't been guarding for the last 48h. This may affect security well-being.\n";
+        $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} hasn't been guarding for the last 48h.\n";
     }
     if ($summaryIdleActions['Socialize'] == 0) {
         $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} hasn't been properly socializing for the last 48h. This may affect health and well-being. Should make an effort to interact with others at a inn or tavern by staying with intent 'Socialize'.\n";
