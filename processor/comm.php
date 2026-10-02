@@ -1181,8 +1181,8 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
     if (!empty($GLOBALS['pgr_skip_rollback'])) { $MUST_END = true; return; }
     $lastSaveHistory = $db->fetchAll("select gamets from eventlog where type='infosave' order by ts desc limit 1 offset 0");
-    if (isset($lastSaveHistory[0]["ts"])) {
-        $lastSave = $lastSaveHistory[0]["ts"];
+    if (isset($lastSaveHistory[0]["gamets"])) {
+        $lastSave = $lastSaveHistory[0]["gamets"];
 
         $db->delete("eventlog", "gamets>$lastSave ");
 

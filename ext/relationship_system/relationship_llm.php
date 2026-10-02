@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__, 2) . '/lib/npc_private_thoughts.php';
 /**
  * RELATIONSHIP MANAGEMENT LLM
  *
@@ -940,6 +941,9 @@ PROMPT;
 
         // NPC's response to the Player
         $contextStr .= "[{$npcName} replied]: " . $npcResponse . "\n";
+        $eventId = (int)($context['dialogue_event_id'] ?? 0);
+        if ($eventId) $contextStr .= '<private_thought event="' . $eventId . '"></private_thought>';
+        $contextStr = chimRefreshPrivateThoughtAnnotations($contextStr, $npcName, (int)$npcId);
 
         // Recent dialogue history (for additional context, but clearly labeled)
         if (!empty($context['dialogue'])) {
@@ -1137,6 +1141,8 @@ PROMPT;
             $contextStr .= "Recent Events:\n" . implode("\n", array_slice($context['events'], -5)) . "\n\n";
         }
         $contextStr .= "What was said: " . $dialogue . "\n";
+        $eventId = (int)($context['dialogue_event_id'] ?? 0);
+        if ($eventId) $contextStr .= '<private_thought event="' . $eventId . '"></private_thought>';
 
         // Current relationship states
         $speakerRelWithListener = $speakerRels[$listenerName] ?? ['aff' => 0, 'type' => 'neutral'];
@@ -1164,29 +1170,23 @@ Evaluate:
 Return JSON using exactly "speaker" and "listener" as keys:
 PROMPT;
 
-        $contextData = [
-            ['role' => 'system', 'content' => $systemPrompt],
-            ['role' => 'user', 'content' => $userPrompt]
-        ];
-
-        Logger::info("[REL-LLM] Evaluating NPC-to-NPC: {$speakerName} <-> {$listenerName}");
-
-        // Make LLM request with scoped global swapping
-        $response = $this->makeSafeRequest(
-            $contextData,
-            ["MAX_TOKENS" => 512],
-            "relationship_npc_to_npc"
-        );
-
-        // Log to audit
-        $this->logToAudit($contextData, $response, "npc2npc_{$speakerName}_{$listenerName}");
-
-        // Parse bidirectional response (pass names so it can handle NPC-name-as-key format)
-        $parsed = $this->parseNpcToNpcResponse($response, $speakerName, $listenerName);
-
-        // Debug: Log parsed response
-        Logger::debug("[REL-LLM] NPC-to-NPC raw response: " . substr($response, 0, 500));
-        Logger::debug("[REL-LLM] NPC-to-NPC parsed: speaker=" . json_encode($parsed['speaker']) . " listener=" . json_encode($parsed['listener']));
+        // Never expose one side's private impressions to the other side's evaluation.
+        $speakerPrompt = chimRefreshPrivateThoughtAnnotations($userPrompt, $speakerName, (int)$speakerNpcId);
+        $listenerPrompt = chimRefreshPrivateThoughtAnnotations($userPrompt, $listenerName, (int)$listenerNpcId);
+        $prompts = $speakerPrompt === $listenerPrompt ? ['both'=>$speakerPrompt] : ['speaker'=>$speakerPrompt,'listener'=>$listenerPrompt];
+        $parsed = ['speaker'=>[], 'listener'=>[]];
+        foreach ($prompts as $side=>$prompt) {
+            $contextData = [
+                ['role'=>'system', 'content'=>$systemPrompt],
+                ['role'=>'user', 'content'=>$prompt . ($side === 'both' ? '' : "\nEvaluate only the {$side} perspective; return an empty object for the other side.")]
+            ];
+            $response = $this->makeSafeRequest($contextData, ["MAX_TOKENS"=>512], "relationship_npc_to_npc");
+            $this->logToAudit($contextData, $response, "npc2npc_{$speakerName}_{$listenerName}_{$side}");
+            $direction = $this->parseNpcToNpcResponse($response, $speakerName, $listenerName);
+            foreach (['speaker','listener'] as $key) {
+                if ($side === 'both' || $side === $key) $parsed[$key] = $direction[$key] ?? [];
+            }
+        }
 
         $results = [
             'ok' => true,

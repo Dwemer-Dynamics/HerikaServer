@@ -1,4 +1,5 @@
 <?php
+    require_once dirname(__DIR__) . "/lib/npc_private_thoughts.php";
     require_once(__DIR__.DIRECTORY_SEPARATOR."..".DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."emote_moods.php");
 
     global $FUNC_LIST;
@@ -83,6 +84,7 @@
             }
 
             chimApplyJsonTemplateHooks();
+            chimAddPrivateThoughtResponseFields();
         }
     }
 
@@ -513,6 +515,17 @@
         }
     }
     
+    // Append private output after all spoken and action fields.
+    function chimAddPrivateThoughtResponseFields() {
+        if (!chimPrivateThoughtResponseEnabled()) return;
+        $description = chimPrivateThoughtInstructions();
+        $GLOBALS['responseTemplate']['internal_thought'] = $description;
+        $GLOBALS['structuredOutputTemplate']['json_schema']['schema']['properties']['internal_thought'] = [
+            'type' => 'string', 'description' => $description,
+        ];
+        $GLOBALS['structuredOutputTemplate']['json_schema']['schema']['required'][] = 'internal_thought';
+    }
+
     // for use with openai and openrouter providers that support structured outputs to enforce a json schema
     Function setStructuredOutputTemplate() {
         $promptCharacterName = function_exists('chimGetPromptCharacterName')

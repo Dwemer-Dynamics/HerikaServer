@@ -167,6 +167,9 @@ function chimPrismaGlobalSettingsSectionTabs(): array
 function chimPrismaProfileMetadataCatalog(): array
 {
     return [
+        'Private Thoughts' => [
+            ['name' => 'PRIVATE_NPC_THOUGHTS_ENABLED', 'type' => 'boolean', 'default' => false, 'description' => 'Generate private NPC reflections and show them after their dialogue in the NPC\'s own history. Off preserves stored thoughts.'],
+        ],
         'Profiles & Memories' => [
             ['name' => 'DYNAMIC_PROFILE_ENABLED', 'type' => 'boolean', 'web_only' => true],
             ['name' => 'DYNAMIC_PROFILE_FIELDS', 'type' => 'multiselect', 'schema' => 'DYNAMIC_PROFILE_FIELDS', 'web_only' => true],

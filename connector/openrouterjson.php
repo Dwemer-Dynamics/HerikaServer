@@ -919,6 +919,13 @@ class openrouterjson
     }
     
 
+    private $privateThoughtFinishReason = null;
+
+    public function hasCompletedPrivateThoughtResponse(): bool
+    {
+        return $this->privateThoughtFinishReason === 'stop';
+    }
+
     public function process()
     {
         global $alreadysent;
@@ -944,6 +951,9 @@ class openrouterjson
         }
         
         $data=json_decode(substr($line, 6), true);
+        if (isset($data['choices'][0]['finish_reason'])) {
+            $this->privateThoughtFinishReason = $data['choices'][0]['finish_reason'];
+        }
 
         if ($this->_is_reasoning)
             $buffer_preamble=4096; // some reasoning models output CoT part before JSON

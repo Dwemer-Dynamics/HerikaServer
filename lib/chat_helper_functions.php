@@ -2123,7 +2123,13 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                 'utterance_id' => $GLOBALS["SCRIPTLINE_UTTERANCE_ID"] ?? chimGenerateUtteranceId(),
                 'delivery_state' => 'emitted'
             ];
-            logEvent($originalRequest, $dialogueEventPeople);
+            $thoughtTurn = $GLOBALS['CHIM_PRIVATE_THOUGHT_TURN'] ?? null;
+            $captureThoughtEvent = $thoughtTurn && strcasecmp($outBuffer['actor'] ?? '', $thoughtTurn['npc_name']) === 0;
+            $dialogueEventId = logEvent($originalRequest, $dialogueEventPeople, (bool)$captureThoughtEvent);
+            if ($captureThoughtEvent) {
+                // Keep only the final chunk's exact event ID; never infer the latest row.
+                $GLOBALS['CHIM_PRIVATE_THOUGHT_TURN']['event_id'] = (int)$dialogueEventId;
+            }
         }
         
     }
@@ -5545,7 +5551,7 @@ function chimGenerateUtteranceId()
     }
 }
 
-function logEvent($dataArray,$forcePeople='')
+function logEvent($dataArray,$forcePeople='', $returnEventId = false)
 {
     if (!empty($GLOBALS['chim_interaction_generated']) && !chimInteractionAllowed()) return;
     $GLOBALS['chim_interaction_observed'] = true;
@@ -5653,6 +5659,7 @@ function logEvent($dataArray,$forcePeople='')
             $insertData = array_merge($insertData, $extraColumns);
         }
 
+        if ($returnEventId) return $db->insertReturningId('eventlog', $insertData, 'rowid');
         $insertResult = $db->insert('eventlog', $insertData);
     }
 }

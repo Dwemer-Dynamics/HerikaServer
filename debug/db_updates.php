@@ -8537,6 +8537,25 @@ if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_pro
     throw new RuntimeException('Dynamic profile migration failed.');
 }
 
+if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/core/database_schema/eventlog_private_thought.sql')) === false) {
+    throw new RuntimeException('Private NPC thoughts migration failed.');
+}
+
+$updateVersion('eventlog_private_thought', 20260926002);
+
+if ($checkVersion('private_npc_thoughts_prompt') < 20260926001) {
+    require_once dirname(__DIR__) . '/lib/npc_private_thoughts.php';
+    $privateThoughtPrompt = $db->escape(CHIM_PRIVATE_THOUGHT_DEFAULT_PROMPT);
+    if ($db->query("INSERT INTO public.prompts (prompt_key, default_prompt, description)
+        VALUES ('private_npc_thoughts', '{$privateThoughtPrompt}',
+            'Private NPC Thoughts: instructions for the internal_thought response field. Used when enabled on the NPC profile. Thoughts are unspoken and limited to 600 characters.')
+        ON CONFLICT (prompt_key) DO UPDATE SET default_prompt = EXCLUDED.default_prompt,
+            description = EXCLUDED.description, updated_at = CURRENT_TIMESTAMP") === false) {
+        throw new RuntimeException('Private NPC thoughts prompt migration failed.');
+    }
+    $updateVersion('private_npc_thoughts_prompt', 20260926001);
+}
+
 // Scheduled NPC travel and correlated game acknowledgements.
 if ($checkVersion('npc_schedules') < 20260927001) {
     if (!$db->execQuery(file_get_contents(__DIR__ . '/../lib/core/database_schema/npc_schedules.sql'))) throw new RuntimeException('Schedule migration failed.');

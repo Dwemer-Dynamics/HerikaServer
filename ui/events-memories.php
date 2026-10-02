@@ -608,6 +608,7 @@ require_once(LIB_PATH .DIRECTORY_SEPARATOR."{$GLOBALS["DBDRIVER"]}.class.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."misc_ui_functions.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."chat_helper_functions.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."eventlog_helper.php");
+require_once(LIB_PATH .DIRECTORY_SEPARATOR."npc_private_thoughts.php");
 
 // Include game timestamp utilities
 require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."utils_game_timestamp.php");
@@ -923,7 +924,7 @@ function getTimeColor($time) {
             $offset = ($page - 1) * $limit;
             
             $results = $db->fetchAll(
-                "SELECT type, data, people, gamets, localts, ts, rowid
+                "SELECT type, data, people, gamets, localts, ts, rowid, delivery_state, private_thought
                  FROM eventlog a
                  WHERE $eventLogVisibleWhereClause
                  ORDER BY gamets DESC, ts DESC, localts DESC, rowid DESC
@@ -943,6 +944,7 @@ function getTimeColor($time) {
                 $mappedRow['☑'] = '<input type="checkbox" class="event-checkbox" data-rowid="' . htmlspecialchars($row['rowid'] ?? '') . '" style="cursor: pointer; width: 18px; height: 18px;">';
                 
                 foreach ($row as $key => $value) {
+                    if ($key === 'private_thought' || $key === 'delivery_state') continue;
                     if ($key === 'data' && function_exists('chimRenderNarratorRoleplayText')) {
                         $value = chimRenderNarratorRoleplayText($value);
                     }
@@ -964,7 +966,7 @@ function getTimeColor($time) {
                     
                     if ($key === 'data') {
                         // Assign Events value
-                        $mappedRow[$columnHeaders[$key] ?? $key] = $value;
+                        $mappedRow[$columnHeaders[$key] ?? $key] = $value . chimPrivateThoughtDisplayHtml($row);
                         // Derive People Present from JSON in original data if available
                         $peoplePresent = trim((string)($row['people'] ?? ''));
                         $raw = $row['data'] ?? '';

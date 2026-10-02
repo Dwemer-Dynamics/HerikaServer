@@ -1404,8 +1404,8 @@ if (in_array($gameRequest[0],["rechat","narration"]) ) {
     }
 
     $visibleChatStateSql = chimBuildChatDeliveryStateSql('delivery_state');
-    $sqlfilter=" and (type in ('prechat','inputtext','ginputtext','infonpc','infonpc_close','logaction','infoaction','death','itemfound','innerchat') or (type='chat' and {$visibleChatStateSql} and data like '(Context%') )";  // Use prechat
-    // chat entries starting by "(Context%" are standard skyrim dialogue
+    $sqlfilter=" and (type in ('inputtext','ginputtext','infonpc','infonpc_close','logaction','infoaction','death','itemfound','innerchat') or (type='chat' and {$visibleChatStateSql}) )";
+    // Delivered chat covers AI dialogue and "(Context%" ambient Skyrim dialogue; prechat duplicates are excluded.
 
     $FUNCTIONS_ARE_ENABLED=false;       // Enabling this can be funny => CHAOS MODE
 
@@ -2039,9 +2039,9 @@ if (($gameRequest[0] == "diary" || $gameRequest[0] == "diary_followers") && isse
 if (($GLOBALS["HERIKA_NAME"]=="The Narrator"))
     $contextDataHistoric = DataLastDataExpandedFor("", $lastNDataForContext * -1,$sqlfilter);
 else if (!$GLOBALS["IS_NPC"])
-    $contextDataHistoric = DataLastDataExpandedFor("{$GLOBALS["HERIKA_NAME"]}", $lastNDataForContext * -1,$sqlfilter);
+    $contextDataHistoric = DataLastDataExpandedFor("{$GLOBALS["HERIKA_NAME"]}", $lastNDataForContext * -1,$sqlfilter, (int)($GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"]["id"] ?? 0));
 else if ($GLOBALS["IS_NPC"]) {
-    $contextDataHistoric = DataLastDataExpandedFor("{$GLOBALS["HERIKA_NAME"]}", $lastNDataForContext * -1,$sqlfilter);
+    $contextDataHistoric = DataLastDataExpandedFor("{$GLOBALS["HERIKA_NAME"]}", $lastNDataForContext * -1,$sqlfilter, (int)($GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"]["id"] ?? 0));
     
 }
 
@@ -2361,6 +2361,8 @@ if (($gameRequest[0]=="chatnf_book")&&($GLOBALS["BOOK_EVENT_FULL"])) {
 
 
 // Use centralized function from data_functions.php
+require_once __DIR__ . '/lib/npc_private_thoughts.php';
+chimBeginPrivateThoughts();
 $dynamicBiography = buildDynamicBiography($GLOBALS);
 $worldPrompt = buildWorldPrompt($gameRequest[2] ?? 0);
 
