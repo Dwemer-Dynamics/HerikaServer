@@ -85,6 +85,20 @@ if (!function_exists('chimBuildEventLogActorKeysWhereClause')) {
     }
 }
 
+if (!function_exists('chimBuildKeyedOrUnsharedLegacyWhereClause')) {
+    // Format-2 rows by exact key; legacy (non-JSON) rows through $legacyClause only while no other profile
+    // shares $name, so an ambiguous name-only row is never attributed to one physical actor.
+    function chimBuildKeyedOrUnsharedLegacyWhereClause($db, array $actorKeys, $name, $legacyClause, $peopleColumn = 'people')
+    {
+        $keyClause = chimBuildEventLogActorKeysWhereClause($db, $actorKeys, $peopleColumn);
+        if (!chimNpcNameIsUnshared($db, (string)$name)) {
+            return $keyClause;
+        }
+        $peopleColumn = chimEventLogPeopleColumn($peopleColumn);
+        return "({$keyClause} OR (COALESCE(left({$peopleColumn}, 1), '') <> '[' AND ({$legacyClause})))";
+    }
+}
+
 if (!function_exists('chimResolveContextActorKeys')) {
     // Physical keys for an actor-specific automated context from a typed scope, never from a name:
     // - a selected physical core_npc_master row (has an id): its own key plus the keys of explicitly

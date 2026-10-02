@@ -78,11 +78,21 @@ try {
         ? 'author_key = ' . $db->escapeLiteral($authorKey)
         : "author_key IS NULL AND {$npcLiteral} = ANY (SELECT trim(x) FROM unnest(string_to_array(trim(people, '|'), '|')) x)";
 
+    // Background Life events are physical: a selected row reads its own actor_key rows, plus unkeyed rows under
+    // its name only while that name is unshared. Legacy callers read only unkeyed rows recorded under the name.
+    if (!chimBglHistoryHasActorKey($db)) {
+        $historyScope = "npc = {$npcLiteral}";
+    } elseif ($npcId > 0) {
+        $historyScope = chimBglHistoryOwnerClause($db, $npcRow);
+    } else {
+        $historyScope = "actor_key IS NULL AND npc = {$npcLiteral}";
+    }
+
     $categorySelect = chimBglHistoryCategorySelect($db);
     $eventRows = $db->fetchAll(
         "SELECT rowid, npc, gamets, ts, localts, data{$categorySelect}
          FROM bgl_history
-         WHERE npc = {$npcLiteral}
+         WHERE {$historyScope}
          ORDER BY gamets DESC, ts DESC, rowid DESC
          LIMIT 20"
     );

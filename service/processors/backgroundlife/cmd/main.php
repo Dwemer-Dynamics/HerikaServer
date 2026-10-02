@@ -135,8 +135,9 @@ $workerNpcId = (int)$currentNpcData['id'];
 $workerProfileBinding = $currentNpcData['_profile_binding'];
 $npcName = $currentNpcData['npc_name'];
 $GLOBALS['CHIM_CORE_CURRENT_NPC_DATA'] = $currentNpcData;
-// Issued-action reads for this worker: the exact row's key when keyed (NULL legacy rows not adopted), else the name.
-$GLOBALS['CHIM_BGL_ISSUED_OWNER'] = chimIssuedOwnerClause($GLOBALS['db'], chimNpcRowActorKey($currentNpcData), (string)$currentNpcData['npc_name']);
+// Issued-action reads for this worker: the exact row's key when keyed (NULL legacy rows not adopted), else its
+// unkeyed name rows only while the name is unshared, so a namesake's history is never read as its own.
+$GLOBALS['CHIM_BGL_ISSUED_OWNER'] = chimIssuedPhysicalOwnerClause($GLOBALS['db'], $currentNpcData);
 $currentConnectorData = $connector->getById($GLOBALS['CORE_CONNECTOR_BGL']);
 
 $profile = new CoreProfile();
@@ -270,11 +271,17 @@ if (empty($lastInteractionRow['gamets'])) {
 $lastItGamets = (int) $lastInteractionRow['gamets'];
 
 $npcNameEscDb = $db->escape($GLOBALS['HERIKA_NAME']);
+// Journal/letter context: this profile group's keyed authors; an unkeyed worker reads its unassigned rows only
+// while no other profile shares its name.
+require_once $enginePath . 'lib/core/physical_npc_diaries.php';
+$bglDiaryOwnerSql = chimNpcRowActorKey($currentNpcData) !== null
+    ? chimDiaryAuthorKeysWhereClause(chimDiaryReadKeys($npcName, $currentNpcData))
+    : (chimNpcNameIsUnshared($db, $npcName) ? "(author_key IS NULL AND people='$npcNameEscDb')" : 'FALSE');
 
 // Check if there are more than 10 journal notes since last interaction, and if so, update lastItGamets to the gamets of the last diary entry
 $diaryEntryRowsCheck = $db->fetchAll(
     "SELECT content, gamets, topic FROM diarylog
-     WHERE people='$npcNameEscDb'
+     WHERE $bglDiaryOwnerSql
        AND gamets > $lastItGamets
        AND topic IN ('Journal Note')
      ORDER BY gamets DESC, ts DESC
@@ -519,7 +526,8 @@ if ($GUARD_TRAVELTO) {
             );
 
             if ($sameTargetNpc) {
-                $targetNpcData = $npcMaster->getByName($targetNpcName);
+                // A shared destination name is ambiguous; never pick one namesake to teleport to.
+                $targetNpcData = chimNpcNameIsUnshared($db, (string)$targetNpcName) ? $npcMaster->getByName($targetNpcName) : null;
 
                 if ($targetNpcData && isset($targetNpcData['refid'])) {
                     $skyrimCmd = new SkyrimCommandBuilder();
@@ -666,7 +674,7 @@ $lastLocRow = $db->fetchOne(
 $npcNameEscDb = $db->escape($GLOBALS['HERIKA_NAME']);
 $diaryEntryRows = $db->fetchAll(
     "SELECT content, gamets, topic FROM diarylog
-     WHERE people='$npcNameEscDb'
+     WHERE $bglDiaryOwnerSql
        AND gamets > $lastItGamets
        AND topic IN ('Sent Letter','Journal Note')
      ORDER BY gamets DESC, ts DESC
@@ -692,9 +700,12 @@ foreach (array_reverse($diaryEntryRows) as $row) {
 // ─── Remote dialogues  ──────────────────────────────────────
 
 $npcNameEscDb = $db->escape($GLOBALS['HERIKA_NAME']);
+// Keyed rows of this profile group; legacy name-only rows only while no other profile shares the name.
+$innerChatOwnerSql = chimBuildKeyedOrUnsharedLegacyWhereClause($db, chimResolveContextActorKeys($db, $currentNpcData),
+    $GLOBALS['HERIKA_NAME'], "people like '%|$npcNameEscDb|%' or people='$npcNameEscDb'");
 $innerChatEntryRows = $db->fetchAll(
     "SELECT data, gamets,ts,people FROM eventlog
-     WHERE (people like '%|$npcNameEscDb|%' or people='$npcNameEscDb')
+     WHERE $innerChatOwnerSql
        AND gamets > $lastItGamets
        AND type IN ('innerchat')
      ORDER BY gamets DESC, ts DESC
@@ -853,7 +864,8 @@ if (isset($metadata['low_process_actors'])) {
             if (is_array($actor)) {
 
                 $npcMaster = new NpcMaster();
-                $actorRow = $npcMaster->getByName($actor[1]);
+                // No exact key in this legacy shape: describe only an unshared name, never guess a namesake.
+                $actorRow = chimNpcNameIsUnshared($db, (string)$actor[1]) ? $npcMaster->getByName($actor[1]) : null;
                 if ($actorRow && isset($actorRow['oghma_knowledge_tags']) && !empty($actorRow['oghma_knowledge_tags'])) {
                     $actorListExpanded[] = "$key;$actor;{$actorRow['oghma_knowledge_tags']}";
                 } else if ($actorRow && isset($actorRow['race']) && !empty($actorRow['race'])) {
@@ -876,7 +888,8 @@ if (isset($metadata['low_process_actors'])) {
                         $actorRow = null;
                     }
                 } else {
-                    $actorRow = $npcMaster->getByName($actor);
+                    // Unkeyed entry: the runtime refid is not a physical key, so describe only an unshared name.
+                    $actorRow = chimNpcNameIsUnshared($db, (string)$actor) ? $npcMaster->getByName($actor) : null;
                 }
                 if ($actorRow && isset($actorRow['oghma_knowledge_tags']) && !empty($actorRow['oghma_knowledge_tags'])) {
                     $actorListExpanded[] = "$key;$actor;{$actorRow['oghma_knowledge_tags']}";
@@ -1066,11 +1079,10 @@ $profileMetadata = json_decode($currentProfileData['metadata'], true) ?? [];
 // 1) If NPC was on a relaxing scenario (inn..home..), ask if we consumed any item in inventory (food, drink, potion, etc)
 // 2) If NPC was on a working (scenario), ask if we produced any good. (iron ore, leather, etc). Subsection production at <goals> specifies what is produced and how much per hour. We must check if we have produced any good.
 
-$npcNameEscBg = $db->escape($GLOBALS['HERIKA_NAME']);
 $lastBackgroundAction = $db->fetchOne(
     "SELECT action, fullcall, gamets
      FROM actions_issued
-     WHERE actorname='$npcNameEscBg' AND original='backgroundaction'
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} AND original='backgroundaction'
      AND gamets is not null
      ORDER BY gamets DESC, localts DESC
      LIMIT 1"
@@ -1157,11 +1169,10 @@ if ($isIdleAction && $idleHours > 1) { // If last Idle was Socialize, there a ch
 // ─── Last iteration was speak ───────────────────────────────────────────────────────
 
 
-$npcNameEscBg = $db->escape($GLOBALS['HERIKA_NAME']);
 $lastBackgroundAction = $db->fetchOne(
     "SELECT action, fullcall, gamets
      FROM actions_issued
-     WHERE actorname='$npcNameEscBg' AND original='backgroundaction'
+     WHERE {$GLOBALS['CHIM_BGL_ISSUED_OWNER']} AND original='backgroundaction'
      and gamets is not null
      ORDER BY gamets DESC, localts DESC
      LIMIT 1"
@@ -1572,14 +1583,15 @@ if ($innerThoughtBuffer && $recordInnerThoughts) {
         'location' => $lastEventParsed['location'] ?? null,
         'party' => '',
     ]);
-    // Throttle against this physical author's own notes; legacy unassigned rows only for unkeyed workers.
+    // Throttle against the same journal scope this worker reads: its profile group's keyed authors; an unkeyed
+    // worker its unassigned rows only while no other profile shares its name. A namesake's notes never count.
     $journalAuthorKey = chimNpcRowActorKey($currentNpcData);
     $cnName = $db->escape($GLOBALS['HERIKA_NAME']);
     $journalOwner = $journalAuthorKey !== null
-        ? "author_key='" . $db->escape($journalAuthorKey) . "'"
-        : "author_key IS NULL AND people='$cnName'";
+        ? chimDiaryAuthorKeysWhereClause(chimDiaryReadKeys($npcName, $currentNpcData))
+        : (chimNpcNameIsUnshared($db, $npcName) ? "(author_key IS NULL AND people='$cnName')" : 'FALSE');
     $checkLatestDiaryEntry = $db->fetchOne("SELECT * FROM diarylog WHERE topic='Journal Note' AND $journalOwner ORDER BY gamets DESC, ts DESC LIMIT 1");
-    $latestDiaryGamets = (float) $checkLatestDiaryEntry['gamets'];
+    $latestDiaryGamets = (float) ($checkLatestDiaryEntry['gamets'] ?? 0);
     if ($last_gamets - $latestDiaryGamets < (1 / GAMETS_TO_HOURS) * 4) {
         // If the last diary entry was less than 4 hours ago, we skip adding a new diary entry to avoid cluttering the diary with too many entries in a short time.
         $recordDiaryEntry = false;

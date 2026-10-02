@@ -641,6 +641,17 @@ function chimIssuedOwnerClause($db, ?string $actorKey, string $name, string $nam
     return "$nameColumn = '" . $db->escape($name) . "'";
 }
 
+// Owner filter for a reader holding its exact physical row (Background Life worker): the row's own key; for an
+// unkeyed legacy row, its unkeyed name rows only while no other profile shares the name (otherwise FALSE).
+function chimIssuedPhysicalOwnerClause($db, array $row, string $nameColumn = 'actorname'): string
+{
+    $key = chimNpcRowActorKey($row);
+    if ($key !== null) { return chimIssuedOwnerClause($db, $key, '', $nameColumn); }
+    $name = (string)($row['npc_name'] ?? '');
+    return chimNpcNameIsUnshared($db, $name)
+        ? "(actor_key IS NULL AND $nameColumn = '" . $db->escape($name) . "')" : 'FALSE';
+}
+
 // Listener names for ScriptQueue rotation rendered as exact identifiers: each bare name with captured physical
 // keys on this request becomes one "Name [RefID: XXXXXXXX]" entry per captured row (namesakes all stay in the
 // rotation), excluding the current speaker's own row. Decorated, player and uncaptured names are unchanged.

@@ -190,10 +190,12 @@ function chimLetterUniqueTitle(string $base): string
     return $base . ' ' . substr(md5((string)microtime(true)), 0, 6);
 }
 
-function chimLetterHistory(string $npcName, string $category, string $data): void
+// $actorKey is the recipient's physical key, passed only when its row was selected by an exact RefID binding.
+function chimLetterHistory(string $npcName, string $category, string $data, ?string $actorKey = null): void
 {
     $GLOBALS['db']->insert('bgl_history', [
         'npc' => $npcName,
+        'actor_key' => $actorKey,
         'ts' => chimLetterNowTs(),
         'gamets' => chimLetterNowGamets(),
         'localts' => time(),
@@ -273,7 +275,11 @@ function chimLetterSendFromPlayer(NpcMaster $npcMaster, string $refid, string $n
         throw new RuntimeException('Could not save the letter.');
     }
 
-    chimLetterHistory($npcName, 'letter_out', "{$player} writes a letter to {$npcName}");
+    // Keyed only when the RefID selected this row; a name-resolved recipient stays unkeyed.
+    $boundByRefid = chimBglNormalizeRefId($refid) !== ''
+        && chimBglNormalizeRefId((string)($npc['refid'] ?? '')) === chimBglNormalizeRefId($refid);
+    chimLetterHistory($npcName, 'letter_out', "{$player} writes a letter to {$npcName}",
+        $boundByRefid ? chimNpcRowActorKey($npc) : null);
     chimLetterNotify("Your letter to {$npcName} is sealed. A courier is on the way.");
 
     return chimLetterGetById((int)$id);
@@ -386,7 +392,9 @@ function chimLetterDeliver(NpcMaster $npcMaster, array $letter, bool $placeNote 
         logMemory($player, $npcName, "{$player} sent {$npcName} a letter by courier: {$body}", time(), $gamets, 'letter_received', $ts);
     }
 
-    chimLetterHistory($npcName, 'letter_in', "{$npcName} receives a letter from {$player}");
+    // Keyed only for the same-name holder of the stored RefID; the unique-name fallback stays unkeyed.
+    chimLetterHistory($npcName, 'letter_in', "{$npcName} receives a letter from {$player}",
+        $slotHolder && $npc === $slotHolder ? chimNpcRowActorKey($npc) : null);
 
     chimLetterUpdate((int)$letter['id'], ['status' => 'delivered', 'deliver_gamets' => $gamets]);
 

@@ -80,7 +80,6 @@ try {
 
 
 require_once $enginePath . "lib" . DIRECTORY_SEPARATOR . "lazy_xml.php";
-require_once $enginePath . "debug" . DIRECTORY_SEPARATOR . "background_action_handler.php";
 
 /**
  * Load a background life style prompt from database
@@ -254,8 +253,13 @@ error_log($query);
 // Diary entries after last iteration
 
 $cn = $db->escape($GLOBALS["HERIKA_NAME"]);
+// This profile group's keyed authors; an unkeyed worker reads its unassigned rows only while its name is unshared.
+require_once $enginePath . 'lib/core/physical_npc_diaries.php';
+$bglDiaryOwnerSql = chimNpcRowActorKey($currentNpcData) !== null
+    ? chimDiaryAuthorKeysWhereClause(chimDiaryReadKeys($GLOBALS["HERIKA_NAME"], $currentNpcData))
+    : (chimNpcNameIsUnshared($db, $GLOBALS["HERIKA_NAME"]) ? "(author_key IS NULL AND people='$cn')" : 'FALSE');
 $query2 = "SELECT content,gamets,topic FROM diarylog
- where people='$cn' and gamets>{$lastIt["gamets"]} and (topic='Sent Letter' or topic='Journal Note')
+ where $bglDiaryOwnerSql and gamets>{$lastIt["gamets"]} and (topic='Sent Letter' or topic='Journal Note')
  order by gamets desc ,ts desc limit 16 offset 0";
 error_log($query2);
 $diaryEntry = [];
@@ -699,6 +703,7 @@ if (is_array($parsed)) {
             'bgl_history',
             [
                 'npc' => $GLOBALS["HERIKA_NAME"],
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets+1,
                 'localts' => time(),
@@ -715,6 +720,7 @@ if (is_array($parsed)) {
                 'content' => $parsed["notification"],
                 'tags' => "backgroundlife",
                 'people' => $GLOBALS["HERIKA_NAME"],
+                'author_key' => chimNpcRowActorKey($currentNpcData),
                 'location' => $LAST_REPORTED_LOCATION ?? null,
                 'sess' => $momentum,
                 'localts' => time(),

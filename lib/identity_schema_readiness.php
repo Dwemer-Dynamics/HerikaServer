@@ -62,6 +62,10 @@ if (!function_exists('chimIdentitySchemaObjects')) {
                 'col:npc_commitments.actor_key' => 'text',
                 'col:npc_commitments.counterparty_key' => 'text',
             ],
+            'bgl_history' => [
+                'idx:idx_bgl_history_actor_key' => '',
+                'col:bgl_history.actor_key' => 'text',
+            ],
             'bgl_letters' => [
                 'col:bgl_letters.courier_refid' => 'character varying',
             ],

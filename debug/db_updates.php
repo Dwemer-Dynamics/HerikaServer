@@ -8532,6 +8532,21 @@ if ($identityRepairNeeded('action_mood_actor_identity') || $checkVersion('action
     }
 }
 
+// Physical owner key on Background Life history (the table exists since bgl_history 20260623001 above).
+// Nullable and idempotent: legacy name-only rows stay NULL and unassigned; reruns when an object is missing.
+// Playthrough upgrades add the column to older saves as NULL; restores keep the live index.
+if ($identityRepairNeeded('bgl_history') || $checkVersion('bgl_history') < 20260930001) {
+    if ($db->execQuery("
+        ALTER TABLE public.bgl_history ADD COLUMN IF NOT EXISTS actor_key text;
+        CREATE INDEX IF NOT EXISTS idx_bgl_history_actor_key ON public.bgl_history (actor_key, gamets DESC, ts DESC) WHERE actor_key IS NOT NULL;
+    ") !== false) {
+        $updateVersion('bgl_history', 20260930001);
+        Logger::info('Applied patch bgl_history 20260930001');
+    } else {
+        Logger::error('Failed to apply bgl_history 20260930001');
+    }
+}
+
 // Exact diary/book authorship and author-keyed physical diary tracking (docs/actor-identity.md).
 // Idempotent; reruns when any object is missing (fresh installs and restores). Legacy rows stay NULL.
 if ($identityRepairNeeded('diary_actor_identity') || $checkVersion('diary_actor_identity') < 20260930001) {

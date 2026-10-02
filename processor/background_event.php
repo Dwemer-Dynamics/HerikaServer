@@ -156,6 +156,8 @@ if (is_array($bgevent)) {
                             $category="other";
                         }
 
+                        // The event names its actor only, so the row stays unkeyed (actor_key NULL): it is read back
+                        // only while that name is unshared, never attributed to one of several namesakes.
                         $GLOBALS["db"]->insert(
                             'bgl_history',
                             [

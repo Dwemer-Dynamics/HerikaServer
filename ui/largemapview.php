@@ -38,6 +38,7 @@ require_once $enginePath . 'service/processors/backgroundlife/cmd/background_act
 
 require_once $enginePath . "lib/scriptproxy_papyrus.php";
 require_once $enginePath . "lib/core/activity_status.php";
+require_once $enginePath . 'lib/background_life_dashboard.php';
 
 // ─── Database ─────────────────────────────────────────────────────────────────
 
@@ -895,6 +896,9 @@ $showAllCoords = isset($_GET['show_all_coords']) && $_GET['show_all_coords'] ===
 $whereClause = $showAllCoords
     ? "metadata->>'last_coords' IS NOT NULL"
     : "extended_data->>'background_life_enabled' = 'true'";
+// Each physical row's own history; ambiguous legacy name-only rows stay unassigned.
+$ownerRelation = chimBglHistoryOwnerRelation($db, $whereClause);
+$ownerCondition = chimBglHistoryOwnerCondition($db);
 
 $query = "
     select A.*,B.content,C.category as last_action_cat FROM 
@@ -921,19 +925,14 @@ $query = "
         ) t
         WHERE rn = 1
     ) B ON (B.people=A.npc_name)
-    LEFT JOIN  (
-    SELECT category,npc
-        FROM (
-            SELECT
-                category,npc,
-                ROW_NUMBER() OVER (
-                    PARTITION BY npc
-                    ORDER BY gamets DESC
-                ) AS rn
-            FROM public.bgl_history
-        ) t
-        WHERE rn = 1
-    ) C ON (C.npc=A.npc_name)
+    LEFT JOIN {$ownerRelation} ON bgl_owner.id = A.id
+    LEFT JOIN LATERAL (
+        SELECT history.category
+        FROM public.bgl_history history
+        WHERE {$ownerCondition}
+        ORDER BY history.gamets DESC, history.ts DESC, history.rowid DESC
+        LIMIT 1
+    ) C ON TRUE
     order by A.npc_name asc
 ";
 //error_log($query);

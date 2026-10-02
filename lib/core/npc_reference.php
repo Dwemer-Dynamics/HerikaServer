@@ -197,6 +197,35 @@ function chimNpcRowActorKey(array $row): ?string
     $dynamic = $metadata['actor_key'] ?? null;
     return is_string($dynamic) && str_starts_with($dynamic, 'dyn:') && chimIsActorKey($dynamic) ? $dynamic : null;
 }
+
+// True when exactly one profile row carries this name (case-insensitive). Only then can a legacy name-only
+// row describe a single actor; namesakes, keyed or not, leave such rows unassigned.
+function chimNpcNameIsUnshared($db, string $name): bool
+{
+    $name = trim($name);
+    if ($name === '') { return false; }
+    $row = $db->fetchOne("SELECT count(*) AS n FROM core_npc_master WHERE lower(btrim(npc_name)) = lower('"
+        . $db->escape($name) . "')");
+    return (int)($row['n'] ?? 0) === 1;
+}
+
+// Background Life history (bgl_history) of one physical row: rows stamped with its own actor_key, plus unkeyed
+// legacy rows recorded under its name while no other profile shares that name. BgL intent is physical, so
+// explicitly linked references do not share it; ambiguous legacy rows stay unassigned.
+function chimBglHistoryOwnerClause($db, array $row, string $alias = ''): string
+{
+    $prefix = $alias !== '' ? "$alias." : '';
+    $clauses = [];
+    $key = chimNpcRowActorKey($row);
+    if ($key !== null) {
+        $clauses[] = "{$prefix}actor_key = '" . $db->escape($key) . "'";
+    }
+    $name = (string)($row['npc_name'] ?? '');
+    if (chimNpcNameIsUnshared($db, $name)) {
+        $clauses[] = "({$prefix}actor_key IS NULL AND {$prefix}npc = '" . $db->escape($name) . "')";
+    }
+    return $clauses ? '(' . implode(' OR ', $clauses) . ')' : 'FALSE';
+}
 // Thrown by the strict v2 boundaries: client ingress and format-2 serialization. Callers must fail the
 // event explicitly; nothing is downgraded to legacy routing or accepted partially.
 final class ChimEventIdentityException extends InvalidArgumentException

@@ -479,6 +479,15 @@ function chimBglHandleAttackNpcAction(string $actionArg, array $currentNpcData, 
     }
 }
 
+// Physical key of an encounter participant's own profile row, selected by npc_id and never by name; null for
+// legacy rows, whose history then stays unkeyed.
+function chimBglParticipantActorKey($db, array $participant): ?string
+{
+    $npcId = (int)($participant['npc_id'] ?? 0);
+    $row = $npcId > 0 ? $db->fetchOne("SELECT metadata FROM core_npc_master WHERE id = {$npcId}") : null;
+    return is_array($row) ? chimNpcRowActorKey($row) : null;
+}
+
 function chimBglEncounterPeople(array $participants): string
 {
     $names = [];
@@ -538,6 +547,7 @@ function chimBglFinalizeCombatEncounter($db, int $encounterId): void
     foreach ($participants as $participant) {
         $db->insert('bgl_history', [
             'npc' => $participant['npc_name'],
+            'actor_key' => chimBglParticipantActorKey($db, $participant),
             'ts' => (int)$encounter['ts'],
             'gamets' => (float)$encounter['gamets'],
             'localts' => time(),
@@ -797,6 +807,7 @@ function chimBglFinalizeLootEncounter($db, int $encounterId): void
         foreach ($participants as $participant) {
             $db->insert('bgl_history', [
                 'npc' => $participant['npc_name'],
+                'actor_key' => chimBglParticipantActorKey($db, $participant),
                 'ts' => (int)$encounter['ts'] + 1,
                 'gamets' => (float)$encounter['gamets'] + 1,
                 'localts' => time(),

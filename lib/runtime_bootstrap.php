@@ -92,6 +92,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             'action_mood_actor_identity' => 20260930001,
             'skyrim_start_date' => 20260930001,
             'diary_actor_identity' => 20260930001,
+            'bgl_history' => 20260930001,
             'bgl_letters' => 20260930001,
         ];
 
@@ -99,7 +100,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             $versionRows = $db->fetchAll(
                 "SELECT tablename, version
                  FROM public.database_versioning
-                 WHERE tablename IN ('npc_schedules','npc_commitments','responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog','skyrim_start_date','npc_actor_identity','npc_profile_sharing','npc_stable_identity','eventlog_actor_identity','memory_actor_identity','action_mood_actor_identity','diary_actor_identity','bgl_letters')"
+                 WHERE tablename IN ('npc_schedules','npc_commitments','responselog_interaction','general_settings','core_stt_connector','core_itt_connector','descriptions_defaults','prompts','skyrim_quest_definitions','core_tts_connector_omnivoice','core_tts_pronunciation','oghma_catalog','skyrim_start_date','npc_actor_identity','npc_profile_sharing','npc_stable_identity','eventlog_actor_identity','memory_actor_identity','action_mood_actor_identity','diary_actor_identity','bgl_history','bgl_letters')"
             );
         } catch (\Throwable $e) {
             $decision = true;

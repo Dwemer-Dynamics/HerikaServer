@@ -29,6 +29,7 @@ require_once LIB_PATH . DIRECTORY_SEPARATOR . 'logger.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . "{$GLOBALS['DBDRIVER']}.class.php";
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'core' . DIRECTORY_SEPARATOR . 'npc_master.class.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'background_life_requests.php';
+require_once LIB_PATH . DIRECTORY_SEPARATOR . 'background_life_dashboard.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'utils_game_timestamp.php';
 
 $GLOBALS['db'] = new sql();
@@ -37,6 +38,10 @@ $npcMaster = new NpcMaster();
 try {
     $operation = trim((string)($_REQUEST['operation'] ?? ''));
     if ($_SERVER['REQUEST_METHOD'] === 'GET' && $operation === 'list') {
+        $listWhere = "COALESCE(master.extended_data->>'background_life_enabled', 'false') = 'true'";
+        // Each physical row's own history; ambiguous legacy name-only rows stay unassigned.
+        $ownerRelation = chimBglHistoryOwnerRelation($GLOBALS['db'], $listWhere);
+        $ownerCondition = chimBglHistoryOwnerCondition($GLOBALS['db']);
         $rows = $GLOBALS['db']->fetchAll(
             "SELECT master.id,
                     master.npc_name,
@@ -44,14 +49,15 @@ try {
                     latest.data AS latest_activity,
                     latest.gamets AS latest_gamets
              FROM core_npc_master master
+             LEFT JOIN {$ownerRelation} ON bgl_owner.id = master.id
              LEFT JOIN LATERAL (
                  SELECT history.data, history.gamets
                  FROM bgl_history history
-                 WHERE history.npc = master.npc_name
+                 WHERE {$ownerCondition}
                  ORDER BY history.gamets DESC, history.ts DESC, history.rowid DESC
                  LIMIT 1
              ) latest ON TRUE
-             WHERE COALESCE(master.extended_data->>'background_life_enabled', 'false') = 'true'
+             WHERE {$listWhere}
              ORDER BY LOWER(master.npc_name) ASC"
         );
 

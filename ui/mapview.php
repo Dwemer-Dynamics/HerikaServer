@@ -714,6 +714,9 @@ if ($bglBulkResult && ($bglBulkRow = pg_fetch_assoc($bglBulkResult))) {
     $latestCategorySelect = $categorySelect === ''
         ? 'NULL::text AS category'
         : 'history.category AS category';
+    // Each physical row's own history; ambiguous legacy name-only rows stay unassigned.
+    $ownerRelation = chimBglHistoryOwnerRelation($db, $whereClause);
+    $ownerCondition = chimBglHistoryOwnerCondition($db);
 
     $query = "
     select A.*,B.content,C.data as last_activity,C.gamets as last_activity_gamets,C.category as last_action_cat FROM
@@ -740,10 +743,11 @@ if ($bglBulkResult && ($bglBulkRow = pg_fetch_assoc($bglBulkResult))) {
         ) t
         WHERE rn = 1
     ) B ON (B.people=A.npc_name)
+    LEFT JOIN {$ownerRelation} ON bgl_owner.id = A.id
     LEFT JOIN LATERAL (
         SELECT history.data, history.gamets, {$latestCategorySelect}
         FROM public.bgl_history history
-        WHERE history.npc = A.npc_name
+        WHERE {$ownerCondition}
         ORDER BY history.gamets DESC, history.ts DESC, history.rowid DESC
         LIMIT 1
     ) C ON TRUE

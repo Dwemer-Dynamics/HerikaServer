@@ -162,6 +162,7 @@ function handleTravelToAction($location, $currentNpcData, $npcName, $last_ts, $l
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -239,6 +240,7 @@ function handleTravelToAction($location, $currentNpcData, $npcName, $last_ts, $l
         'bgl_history',
         [
             'npc' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),
@@ -271,7 +273,9 @@ function handleStayAtPlaceAction($location, $currentNpcData, $npcName, $last_ts,
     $intent = trim((string) $intent);
     $intentSuffix = $intent !== '' ? ":$intent" : '';
     $intentText = $intent !== '' ? " with intent '$intent'" : '';
-    $previousIntent = $db->fetchOne("SELECT category FROM bgl_history WHERE npc='$npcName' ORDER BY gamets DESC LIMIT 1");
+    // This physical row's own last intent; a namesake's or an ambiguous legacy row is never adopted.
+    $bglHistoryOwnerSql = chimBglHistoryOwnerClause($db, $currentNpcData);
+    $previousIntent = $db->fetchOne("SELECT category FROM bgl_history WHERE $bglHistoryOwnerSql ORDER BY gamets DESC LIMIT 1");
     if (strcasecmp($requestedLocation, 'random') === 0) {
         error_log("[handleStayAtPlaceAction] random picked: " . print_r($locId, true));
     }
@@ -308,6 +312,7 @@ function handleStayAtPlaceAction($location, $currentNpcData, $npcName, $last_ts,
         'bgl_history',
         [
             'npc' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),
@@ -344,7 +349,7 @@ function handleStayAtPlaceAction($location, $currentNpcData, $npcName, $last_ts,
 
     if (strtolower($intent) === 'socialize') {
         // If last intent was not socialize, we will trigger an update to the NPC to make it more dynamic and social.
-        if (strtolower($previousIntent['category']) !== 'socialize') {
+        if (strtolower((string)($previousIntent['category'] ?? '')) !== 'socialize') {
             if (rand(0, 4) == 0) {
                 triggerNpcUpdate($npcName);
             }
@@ -498,6 +503,7 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
         'bgl_history',
         [
             'npc' => $GLOBALS["HERIKA_NAME"],
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets + 1,
             'localts' => time(),
@@ -527,6 +533,7 @@ function handleSendLetter($letterContent, $currentNpcData, $npcName, $last_ts, $
             'content' => $dialogueBuffer,
             'tags' => "backgroundlife",
             'people' => $GLOBALS["HERIKA_NAME"],
+            'author_key' => chimNpcRowActorKey($currentNpcData),
             'location' => $lastLocation,
             'sess' => $momentum,
             'localts' => time(),
@@ -611,6 +618,7 @@ function handleReturnHome($location, $currentNpcData, $npcName, $last_ts, $last_
         'bgl_history',
         [
             'npc' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),
@@ -793,6 +801,7 @@ function handleMoveToAction($targetNpcName, $currentNpcData, $npcName, $last_ts,
                 'bgl_history',
                 [
                     'npc' => $npcName,
+                    'actor_key' => chimNpcRowActorKey($currentNpcData),
                     'ts' => $last_ts,
                     'gamets' => $last_gamets,
                     'localts' => time(),
@@ -818,6 +827,7 @@ function handleMoveToAction($targetNpcName, $currentNpcData, $npcName, $last_ts,
                 'bgl_history',
                 [
                     'npc' => $npcName,
+                    'actor_key' => chimNpcRowActorKey($currentNpcData),
                     'ts' => $last_ts,
                     'gamets' => $last_gamets,
                     'localts' => time(),
@@ -871,6 +881,7 @@ function handleMoveToAction($targetNpcName, $currentNpcData, $npcName, $last_ts,
         'bgl_history',
         [
             'npc' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),
@@ -945,6 +956,7 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
                 'bgl_history',
                 [
                     'npc' => $npcName,
+                    'actor_key' => chimNpcRowActorKey($currentNpcData),
                     'ts' => $last_ts,
                     'gamets' => $last_gamets,
                     'localts' => time(),
@@ -970,6 +982,7 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -1044,6 +1057,7 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         'bgl_history',
         [
             'npc' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets,
             'localts' => time(),
@@ -1126,6 +1140,7 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -1153,6 +1168,7 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -1181,6 +1197,7 @@ function handleFindNPCAction($targetNpcName, $currentNpcData, $npcName, $last_ts
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => time(),
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -1447,6 +1464,7 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
                 'bgl_history',
                 [
                     'npc' => $npcName,
+                    'actor_key' => chimNpcRowActorKey($currentNpcData),
                     'ts' => $last_ts,
                     'gamets' => $last_gamets + 20,
                     'localts' => time(),
@@ -1459,6 +1477,7 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
                 'bgl_history',
                 [
                     'npc' => $npcName,
+                    'actor_key' => chimNpcRowActorKey($currentNpcData),
                     'ts' => $last_ts,
                     'gamets' => $last_gamets + 20,
                     'localts' => time(),
@@ -1598,6 +1617,7 @@ function handleSpreadRumorsAction($rumorDescription, $currentNpcData, $npcName, 
         'bgl_history',
         [
             'npc' => $npcName,
+            'actor_key' => chimNpcRowActorKey($currentNpcData),
             'ts' => $last_ts,
             'gamets' => $last_gamets + 1,
             'localts' => time(),
@@ -1696,6 +1716,7 @@ function handleGiveGoldToAction($actionArgument, $currentNpcData, $npcName, $las
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -1727,6 +1748,7 @@ function handleGiveGoldToAction($actionArgument, $currentNpcData, $npcName, $las
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -1856,6 +1878,7 @@ function handleSellServiceAction($actionArgument, $currentNpcData, $npcName, $la
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -1887,6 +1910,7 @@ function handleSellServiceAction($actionArgument, $currentNpcData, $npcName, $la
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -1992,6 +2016,7 @@ function handleTradeItemsAction($tradeType, $actionArgument, $currentNpcData, $n
                 'bgl_history',
                 [
                     'npc' => $npcName,
+                    'actor_key' => chimNpcRowActorKey($currentNpcData),
                     'ts' => $last_ts,
                     'gamets' => $last_gamets,
                     'localts' => time(),
@@ -2010,6 +2035,7 @@ function handleTradeItemsAction($tradeType, $actionArgument, $currentNpcData, $n
                 'bgl_history',
                 [
                     'npc' => $npcName,
+                    'actor_key' => chimNpcRowActorKey($currentNpcData),
                     'ts' => $last_ts,
                     'gamets' => $last_gamets,
                     'localts' => time(),
@@ -2094,6 +2120,7 @@ function handleTradeItemsAction($tradeType, $actionArgument, $currentNpcData, $n
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -2123,6 +2150,7 @@ function handleTradeItemsAction($tradeType, $actionArgument, $currentNpcData, $n
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
@@ -2148,6 +2176,7 @@ function handleTradeItemsAction($tradeType, $actionArgument, $currentNpcData, $n
             'bgl_history',
             [
                 'npc' => $npcName,
+                'actor_key' => chimNpcRowActorKey($currentNpcData),
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),

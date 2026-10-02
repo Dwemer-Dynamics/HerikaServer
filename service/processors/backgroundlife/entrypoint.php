@@ -28,6 +28,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
     require_once $enginePath . "lib/core/core_profiles.class.php";
     require_once $enginePath . "lib/core/llm_connector.class.php";
     require_once $enginePath . 'lib/scriptproxy_papyrus.php';
+    require_once $enginePath . 'lib/eventlog_helper.php';
 
     error_log("[BGL] Starting Background Life processing");
 
@@ -124,8 +125,11 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
             $actorIdentifier = NpcMaster::displayIdentifier($npc["npc_name"], $npc["refid"]);
             $actorArgument = escapeshellarg($actorIdentifier);
 
+            // Presence of this physical row only: its own key in captured people, or legacy text for an unshared name.
+            $npcPresenceSql = chimBuildKeyedOrUnsharedLegacyWhereClause($GLOBALS["db"], array_filter([chimNpcRowActorKey($npc)]), $npc["npc_name"],
+                "data like '%" . ($GLOBALS["db"]->escape($npc["npc_name"])) . "%'");
             $npcIsNearToPlayer = $GLOBALS["db"]->fetchOne("SELECT count(*) as n from eventlog where 
-            type='infonpc' and data like '%" . ($GLOBALS["db"]->escape($npc["npc_name"])) . "%' and gamets > $oneHourAgoGamets");
+            type='infonpc' and $npcPresenceSql and gamets > $oneHourAgoGamets");
 
 
             if (isset($npcIsNearToPlayer) && $npcIsNearToPlayer["n"] > 0) {
@@ -189,25 +193,27 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
             $metadata = json_decode($npc["metadata"], true);
             $mustInstructBypassBgl = false;
             $actorEscaped = $GLOBALS["db"]->escape($npc["npc_name"]);
-            $npcIsNearToPlayer = $GLOBALS["db"]->fetchOne("SELECT max(gamets) as n from eventlog where 
-            type='infonpc_close' and 
-            (
+            // Presence of this physical row only: its own key in captured people, or legacy names for an unshared name.
+            $npcPresenceSql = chimBuildKeyedOrUnsharedLegacyWhereClause($GLOBALS["db"], array_filter([chimNpcRowActorKey($npc)]), $npc["npc_name"], "
                 people like '%|$actorEscaped|%'
                 or people like '$actorEscaped'
                 or people like '%|$actorEscaped (busy)|%'
                 or people like '%|$actorEscaped (hostile)|%'
                 or people like '%|$actorEscaped (in combat)|%'
                 or people like '%|$actorEscaped (far away)|%'
-            )
+            ");
+            $npcIsNearToPlayer = $GLOBALS["db"]->fetchOne("SELECT max(gamets) as n from eventlog where
+            type='infonpc_close' and $npcPresenceSql
             and gamets > $oneHourAgoGamets");
 
             // TravelTo stuck NPCs
             // Check NPC is not near to player, last action issued was TravelTo or MoveTo,  We must check coords history on metadata,
             // and if no movement in the last hour notify
-            $npcNameEscDb = $GLOBALS["db"]->escape($npc["npc_name"]);
+            // This physical row's own issued actions; ambiguous legacy name-only rows are not adopted.
+            $npcIssuedOwnerSql = chimIssuedPhysicalOwnerClause($GLOBALS["db"], $npc);
             $actionsRows = $GLOBALS["db"]->fetchAll(
                 "SELECT action,actorname,gamets,fullcall FROM actions_issued
-     WHERE actorname='$npcNameEscDb' 
+     WHERE $npcIssuedOwnerSql
        AND gamets > ({$mwdata["background_life_last_updated"]}-($oneHourAgoGamets*4)) 
      ORDER BY gamets DESC, ts DESC
      LIMIT 1 OFFSET 0"
@@ -265,6 +271,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                     'action' => 'TeleportTo',
                                     'fullcall' => "TeleportTo:{$candidateLocation['name']}:Teleporting to resolve stuck NPC",
                                     'actorname' => $npc["npc_name"],
+                                    'actor_key' => chimNpcRowActorKey($npc),
                                     'ts' => $last_ts,
                                     'gamets' => $last_gamets,
                                     'localts' => time(),
@@ -291,7 +298,9 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                             } else {
                                 error_log("[BGL RUN] STUCK {$candidateLocation["sim"]} >" . _LOCATION_RESOLVE_SIM_THRESHOLD . " && {$candidateLocation["refs"]}");
                                 $npcTargetmaster = new NpcMaster();
-                                $npcTarget = $npcTargetmaster->getByName($row['destination']);
+                                // A shared destination name is ambiguous; never pick one namesake to teleport to.
+                                $npcTarget = chimNpcNameIsUnshared($GLOBALS["db"], (string)$row['destination'])
+                                    ? $npcTargetmaster->getByName($row['destination']) : null;
                                 if ($npcTarget) {
 
                                     $skyrimCmd = new SkyrimCommandBuilder();
@@ -313,6 +322,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                         'action' => 'TeleportTo',
                                         'fullcall' => "TeleportTo:{$row['destination']}:Teleporting to resolve stuck NPC",
                                         'actorname' => $npc["npc_name"],
+                                        'actor_key' => chimNpcRowActorKey($npc),
                                         'ts' => $last_ts,
                                         'gamets' => $last_gamets,
                                         'localts' => time(),
