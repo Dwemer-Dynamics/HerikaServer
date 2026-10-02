@@ -1191,6 +1191,8 @@ if (sizeof($tradingGuard) > 3) {
 
 // Modifier: Socialize chain
 $wasSocializeIntentAction = false;
+$innerThoughtBufferForced="";
+
 if (
     !empty($lastBackgroundAction)
     && (
@@ -1300,7 +1302,9 @@ $innerThoughtBuffer = requestForInnerThought(
     $connector,
     $currentConnectorData,
     $recordInnerThoughts,
-    $recordDiaryEntry
+    $recordDiaryEntry,
+    $last_gamets,
+    $fortyEightHoursAgo,
 );
 
 Logger::debug(__LINE__ . ' ' . (microtime(true) - $startTime));

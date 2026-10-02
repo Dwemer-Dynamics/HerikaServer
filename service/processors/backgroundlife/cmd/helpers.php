@@ -204,6 +204,22 @@ Rules:
 
     if ($action) {
         $actionTextDescription = [];
+        $npcMetadata = json_decode($currentNpcData['metadata'] ?? '{}', true);
+        if (!is_array($npcMetadata)) {
+            $npcMetadata = [];
+        }
+        $inventoryCounts = [];
+        $npcInventory = $npcMetadata['inventory'] ?? [];
+        if (!is_array($npcInventory)) {
+            $npcInventory = [];
+        }
+        foreach ($npcInventory as $inventoryItem) {
+            $inventoryItemId = strtolower(preg_replace('/^0x/i', '', trim((string) ($inventoryItem['baseid'] ?? ''))));
+            if ($inventoryItemId !== '') {
+                $inventoryCounts[$inventoryItemId] = ($inventoryCounts[$inventoryItemId] ?? 0) + max(0, (int) ($inventoryItem['count'] ?? 0));
+            }
+        }
+
         foreach ($action as $singleAction) {
             if ($singleAction === 'DoNothing') {
                 continue;
@@ -224,6 +240,11 @@ Rules:
                     error_log("[BGL RUN] $npcNameEsc — Ignoring malformed Consume action: $singleAction");
                     continue;
                 }
+                if (($inventoryCounts[$itemId] ?? 0) < $count) {
+                    error_log("[BGL RUN] $npcNameEsc — Skipping Consume action; inventory has " . ($inventoryCounts[$itemId] ?? 0) . " of $itemId, requested $count");
+                    continue;
+                }
+                $inventoryCounts[$itemId] -= $count;
                 $json = $skyrimCmd->ObjectReference->RemoveItem($sourceRefHexString, "0x$itemId", $count, true);
                 $skyrimCmd->send(cmd: $json);
             } elseif ($actionType === 'Produced') {
@@ -241,6 +262,11 @@ Rules:
                     error_log("[BGL RUN] $npcNameEsc — Ignoring malformed Manufactured action: $singleAction");
                     continue;
                 }
+                if (($inventoryCounts[$itemId] ?? 0) < $count) {
+                    error_log("[BGL RUN] $npcNameEsc — Skipping Manufactured action; inventory has " . ($inventoryCounts[$itemId] ?? 0) . " of $itemId, requested $count");
+                    continue;
+                }
+                $inventoryCounts[$itemId] -= $count;
 
                 $json = $skyrimCmd->ObjectReference->RemoveItem($sourceRefHexString, "0x$itemId", $count, true);
                 $skyrimCmd->send(cmd: $json);
@@ -266,6 +292,10 @@ Rules:
 
             $actionText[] = $singleAction;
             $actionTextDescription[] = $itemNameResolved;
+        }
+
+        if (empty($actionText)) {
+            return "";
         }
 
         $actionTextFinal = implode(', ', $actionText);
@@ -343,6 +373,8 @@ function requestForInnerThought(
     $currentConnectorData,
     &$recordInnerThoughts,
     &$recordDiaryEntry,
+    $last_gamets,
+    $startGamets,
 ): string {
 
     $systemPrompts = [
@@ -387,10 +419,22 @@ in first person.
 
 PROMPT_EN,
     ];
+    
+    $npcNameEsc=$GLOBALS["db"]->escape($GLOBALS['HERIKA_NAME']);
 
+    $lastActions = $GLOBALS["db"]->fetchAll("SELECT fullcall,gamets FROM actions_issued where actorname='$npcNameEsc' and gamets>$startGamets and original='backgroundaction' order by gamets desc limit 20");
+    $lastActionsSummary = [];
+    foreach ($lastActions as $action) {
+        $actionParts = explode(':', $action['fullcall']);
+        $hoursAgo = number_format(($last_gamets - $action['gamets']) * GAMETS_TO_HOURS, 2);
+        $lastActionsSummary[$action['gamets']] = "$actionParts[0] $actionParts[1] ($hoursAgo hours ago)";
+    }
+    
+    $last_actions_reminder = "<last_actions_history>\nLast actions issued:\n" . implode("\n", array_reverse($lastActionsSummary)) . "\n</last_actions_history>\n\n";
+  
     $step1Prompt = array_merge($systemPrompts[$lang], [
         ['role' => 'user', 'content' => "<character_sheet>\n{$GLOBALS['HERIKA_NAME']}:\n$dynamicBiography\n</character_sheet>", "cache_control" => ["type" => "ephemeral"]],
-        ['role' => 'user', 'content' => "<context_history>\nContext History (chronological order)\n$history\n</context_history>{$postHistory}\n{$lastMinuteNotes}", "cache_control" => ["type" => "ephemeral"]],
+        ['role' => 'user', 'content' => "<context_history>\nContext History (chronological order)\n$history\n</context_history>{$postHistory}\n{$last_actions_reminder}\n{$lastMinuteNotes}", "cache_control" => ["type" => "ephemeral"]],
         ['role' => 'user', 'content' => $userPrompts[$lang], "cache_control" => ["type" => "ephemeral"]],
     ]);
 
