@@ -6990,6 +6990,26 @@ SQL
     }
 }
 
+if ($checkVersion("core_action") < 20261002001) {
+    Logger::debug("Applying core_action 20261002001 - enable Wait_Here by default");
+
+    // Base row only; core_action_custom rows keep the user's explicit choice.
+    $migrationOk = $db->execQuery("
+        UPDATE public.core_action
+           SET is_activated = TRUE,
+               updated_at = NOW()
+         WHERE code_name = 'WaitHere'
+           AND is_activated = FALSE
+    ") !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20261002001);
+        Logger::info("Applied patch core_action 20261002001");
+    } else {
+        Logger::error("Failed to apply patch core_action 20261002001");
+    }
+}
+
 //----------------------------------------------------
 
 // Relationship Evaluation and Initialization Queues
