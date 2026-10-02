@@ -1,5 +1,7 @@
 <?php
 
+require_once(__DIR__ . DIRECTORY_SEPARATOR . "utils_game_timestamp.php");
+
 if (!function_exists('chimSettingsDb')) {
     function chimSettingsDb()
     {
@@ -229,6 +231,7 @@ if (!function_exists('chimGetManagedGeneralSettingIds')) {
             'BGL_TRIGGER_HOURS',
             'VISUAL_CONTEXT_SCENE_TTL_MINUTES',
             'VISUAL_CONTEXT_PROMPT_MAX_CHARS',
+            'SKYRIM_START_DATE',
             'END_CONVERSATION_COOLDOWN',
             'BOOK_READ_LINES_PER_BATCH',
             'BOOK_READING_VOICE',
@@ -1172,6 +1175,24 @@ if (!function_exists('chimLoadGeneralSettingsIntoGlobals')) {
 
         if (!empty($rows)) {
             chimGeneralSettingsToLegacyGlobals($rows);
+        }
+        chimSyncSkyrimStartDateToDb();
+    }
+}
+
+if (!function_exists('chimSyncSkyrimStartDateToDb')) {
+    // SQL date functions read this connection setting instead of querying general_settings per row.
+    function chimSyncSkyrimStartDateToDb(): void
+    {
+        $db = chimSettingsDb();
+        if (!$db || ($GLOBALS["DBDRIVER"] ?? '') === 'sqlite3') {
+            return;
+        }
+
+        try {
+            $db->fetchOne("SELECT set_config('chim.skyrim_start_date', " . $db->escapeLiteral(chimSkyrimStartDate()) . ", false)");
+        } catch (\Throwable $e) {
+            error_log("[Settings] Could not apply the Skyrim start date to SQL date functions: " . $e->getMessage());
         }
     }
 }

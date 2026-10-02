@@ -34,6 +34,7 @@ ob_start();
 include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl" . DIRECTORY_SEPARATOR . "head.html");
 
 $saveSuccess = isset($_GET['_saved']) && $_GET['_saved'] === '1';
+$saveError = '';
 $clearReanimationResult = null;
 $promptContextSectionTitle = 'Context Selections';
 $gsSections = chimPrismaGlobalSettingsSections();
@@ -156,6 +157,7 @@ function icon_for_field(string $flatName): string
         'AUTOFILL_CUSTOM_PROFILES' => '✨',
         'AUTOFILL_CUSTOM_PROFILES_TRIGGER' => '🎯',
         'BGL_TRIGGER_HOURS' => '🌍',
+        'SKYRIM_START_DATE' => '📅',
         'END_CONVERSATION_COOLDOWN' => '⏳',
         'CHIM_AI_QUEST_PROGRESSION' => '🗺️',
         'CHIM_PLAYER_ONLY_QUEST_ADVANCEMENT' => '🧍',
@@ -394,6 +396,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
             } else {
                 $value = normalize_posted_value($type, $_POST[$name] ?? '');
             }
+            if (($field['format'] ?? '') === 'skyrim_datetime') {
+                try {
+                    $value = chimRequireSkyrimStartDate(is_array($value) ? false : $value);
+                } catch (InvalidArgumentException $e) {
+                    // Keep the saved date; the other settings still save.
+                    $saveError = strval($field['label'] ?? pretty_label($name)) . ' was not changed. ' . $e->getMessage();
+                    continue;
+                }
+            }
 
             $description = current_description($name, $generalSettingRowMap);
             if (!chimSetGeneralSetting($name, $value, $description)) {
@@ -425,7 +436,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
         $didSave = false;
     }
 
-    if ($didSave) {
+    if ($didSave && $saveError !== '') {
+        chimLoadGeneralSettingsIntoGlobals();
+        Logger::warn("Global settings saved by UI with a rejected value: " . $saveError);
+    } elseif ($didSave) {
         chimLoadGeneralSettingsIntoGlobals();
         Logger::info("Global settings saved to general_settings by UI");
         while (ob_get_level() > 0) {
@@ -434,9 +448,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
         $redirectUrl = strtok($_SERVER['REQUEST_URI'], '?') . '?_saved=1&_ts=' . time();
         header("Location: " . $redirectUrl);
         exit;
+    } else {
+        Logger::error("Failed writing general_settings from Global Settings UI");
     }
-
-    Logger::error("Failed writing general_settings from Global Settings UI");
 }
 
 ?>
@@ -1634,6 +1648,9 @@ body .settings-tabs .settings-tab.is-active {
     <?php if ($saveSuccess): ?>
         <div class="result-ok" style="margin-bottom: 16px;">Global settings saved to the database.</div>
     <?php endif; ?>
+    <?php if ($saveError !== ''): ?>
+        <div class="result-error" style="margin-bottom: 16px;">Other settings were saved. <?php echo htmlspecialchars($saveError); ?></div>
+    <?php endif; ?>
 
     <div class="settings-tabs" role="tablist" aria-label="Global settings categories">
         <?php foreach ($settingsTabs as $tabId => $tabLabel): ?>
@@ -1863,7 +1880,7 @@ body .settings-tabs .settings-tab.is-active {
                                             <?php endforeach; ?>
                                         </select>
                                     <?php else: ?>
-                                        <input type="text" name="<?php echo htmlspecialchars($fieldName); ?>" value="<?php echo htmlspecialchars(strval($current)); ?>" <?php echo $readonlyAttr; ?>>
+                                        <input type="text" name="<?php echo htmlspecialchars($fieldName); ?>" value="<?php echo htmlspecialchars(strval($current)); ?>"<?php echo isset($field['placeholder']) ? ' placeholder="' . htmlspecialchars(strval($field['placeholder'])) . '"' : ''; ?> <?php echo $readonlyAttr; ?>>
                                     <?php endif; ?>
                                 </div>
                                 <?php if ($help !== ''): ?>
