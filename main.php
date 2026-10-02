@@ -1404,8 +1404,8 @@ if (in_array($gameRequest[0],["rechat","narration"]) ) {
     }
 
     $visibleChatStateSql = chimBuildChatDeliveryStateSql('delivery_state');
-    $sqlfilter=" and (type in ('prechat','inputtext','ginputtext','infonpc','infonpc_close','logaction','infoaction','death','itemfound','innerchat') or (type='chat' and {$visibleChatStateSql} and data like '(Context%') )";  // Use prechat
-    // chat entries starting by "(Context%" are standard skyrim dialogue
+    $sqlfilter=" and (type in ('inputtext','ginputtext','infonpc','infonpc_close','logaction','infoaction','death','itemfound','innerchat') or (type='chat' and {$visibleChatStateSql}) )";
+    // Delivered chat covers AI dialogue and "(Context%" ambient Skyrim dialogue; prechat duplicates are excluded.
 
     $FUNCTIONS_ARE_ENABLED=false;       // Enabling this can be funny => CHAOS MODE
 
