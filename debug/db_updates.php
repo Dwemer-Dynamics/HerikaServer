@@ -6990,6 +6990,26 @@ SQL
     }
 }
 
+if ($checkVersion("core_action") < 20261002001) {
+    Logger::debug("Applying core_action 20261002001 - enable Wait_Here by default");
+
+    // Base row only; core_action_custom rows keep the user's explicit choice.
+    $migrationOk = $db->execQuery("
+        UPDATE public.core_action
+           SET is_activated = TRUE,
+               updated_at = NOW()
+         WHERE code_name = 'WaitHere'
+           AND is_activated = FALSE
+    ") !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20261002001);
+        Logger::info("Applied patch core_action 20261002001");
+    } else {
+        Logger::error("Failed to apply patch core_action 20261002001");
+    }
+}
+
 //----------------------------------------------------
 
 // Relationship Evaluation and Initialization Queues
@@ -8612,6 +8632,39 @@ if ($playthroughPolicyConn) {
     } finally { pg_close($playthroughPolicyConn); }
 } else {
     Logger::error('Cannot connect to update the Playthrough Save table policy.');
+}
+
+
+// Retire Relax from existing catalogs as well as fresh seeds.
+if ($checkVersion('core_action_retire_relax') < 20260927001) {
+    $db->execQuery('BEGIN');
+    try {
+        if ($db->execQuery("DELETE FROM public.core_action_custom WHERE code_name='Relax'") === false
+            || $db->execQuery("DELETE FROM public.core_action WHERE code_name='Relax'") === false) {
+            throw new RuntimeException('Could not retire Relax');
+        }
+        $updateVersion('core_action_retire_relax', 20260927001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Relax retirement failed: ' . $e->getMessage());
+    }
+}
+
+// Retire Drink from existing catalogs as well as fresh seeds.
+if ($checkVersion('core_action_retire_drink') < 20260927001) {
+    $db->execQuery('BEGIN');
+    try {
+        if ($db->execQuery("DELETE FROM public.core_action_custom WHERE code_name='Drink'") === false
+            || $db->execQuery("DELETE FROM public.core_action WHERE code_name='Drink'") === false) {
+            throw new RuntimeException('Could not retire Drink');
+        }
+        $updateVersion('core_action_retire_drink', 20260927001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Drink retirement failed: ' . $e->getMessage());
+    }
 }
 
 ?>

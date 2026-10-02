@@ -3,10 +3,13 @@ require_once __DIR__ . '/../chim_interaction.php';
 
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'game_plugins.php');
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'npc_master.class.php');
+require_once(__DIR__ . DIRECTORY_SEPARATOR . 'action_groups.php');
 
 function herikaGetRetiredActionCodes()
 {
     return [
+        'Relax',
+        'Drink',
         'AttackHunt',
         'LookAt',
         'GetDateTime',
@@ -2751,6 +2754,7 @@ function herikaActionCatalogBuildFunctionEntryFromRow($row)
 
 function herikaActionCatalogRowIsAvailableInCurrentMode($row)
 {
+    if (in_array($row['code_name'] ?? '', herikaGetRetiredActionCodes(), true)) return false;
     if (herikaActionCatalogIsNarratorMode()) {
         return !empty($row['available_to_narrator']);
     }
@@ -2903,6 +2907,7 @@ function herikaActionCatalogApplyRowsToRuntimeFunctions()
     }
 
     foreach ($rowsByCode as $codeName => $row) {
+        if (in_array($codeName, herikaGetRetiredActionCodes(), true)) continue;
         $runtimeActionName = function_exists('herikaFormatActionPromptTemplate')
             ? herikaFormatActionPromptTemplate(strval($row['action_name'] ?? ''), [], $row)
             : strval($row['action_name'] ?? '');

@@ -1612,6 +1612,7 @@ if ($isNarratorScopedRequest && (($GLOBALS["HERIKA_NAME"] ?? "") !== "The Narrat
 error_log("*TRACE: ".__LINE__. " at ".__FILE__.": ".(microtime(true) - $startTime)."");
 
 // Include prompts, command prompts and functions.
+$GLOBALS['HERIKA_DEFER_ACTION_GROUPS'] = true;
 require(__DIR__.DIRECTORY_SEPARATOR."prompt.includes.php");
 $gameRequest[0] = strtolower($gameRequest[0]); // one more time in case it was changed by an extension
 
@@ -2464,6 +2465,11 @@ if (function_exists('chimQuestEngineApplyActionSuppressionsForTurn')) {
         $GLOBALS["HERIKA_NAME"] ?? '',
         $GLOBALS["CACHE_LOCATION"] ?? ''
     );
+}
+
+// Group only the actions still eligible after rechat and quest restrictions.
+if (function_exists('herikaActionGroupsApplyToRuntime')) {
+    herikaActionGroupsApplyToRuntime();
 }
 
 // Ensure actions and nearby sections are added to PROMPT_HEAD before building system prompt
