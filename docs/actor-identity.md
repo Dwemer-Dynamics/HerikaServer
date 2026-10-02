@@ -99,6 +99,8 @@ Playthrough saves, based on `lib/schema_clone_function.sql`, `lib/playthrough_up
 
 Linked references share memories, relationships and settings through the existing profile owner. Each event still records the physical key of each participant.
 
+Reference groups (`data/npc_profile_sharing.sql`, `lib/core/npc_profile_sharing.php`) link automatically at registration. An exact group lists 2-32 local FormIDs of one plugin. A group with no FormIDs, stored with plugin `*`, is an explicit catch-all: every registered row with that exact name (case-insensitive) whose `refid_source` is a placed plugin reference matching its current RefID, from any plugin. Dynamic `FF`, keyless and stale rows stay outside it. An exact group takes precedence: its references never join a catch-all, and saving it releases catch-all links that hold them. Saving rejects two enabled catch-alls with one name, or a catch-all named like an enabled exact group (convert that group by key instead). Duplicate stable references, conflicting kept profiles, members linked outside the group and unlink opt-outs block linking for both kinds. Version `npc_profile_sharing` `20261002001` replaces the old 2-32 check with the `*_scope` checks in place.
+
 ## Pipeline status
 
 ### Wire contract

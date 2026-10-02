@@ -4679,6 +4679,10 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
 .npc-refgroup-field textarea { font-family:"Consolas","Courier New",monospace; resize:vertical; }
 .npc-refgroup-field input:focus-visible, .npc-refgroup-field textarea:focus-visible, #npc_refgroup_enabled:focus-visible { outline:2px solid rgb(242, 124, 17); outline-offset:1px; }
 .npc-refgroup-hint { color:#9fb1c9; font-size:11.5px; font-weight:400; }
+.npc-refgroup-field input:disabled { border-style:dashed; background:#1f1f1f; color:#9aa3ae; cursor:not-allowed; }
+.npc-refgroup-field input:disabled::placeholder { color:#9aa3ae; opacity:1; }
+.npc-refgroup-scope { margin:0; padding:8px 10px; border:1px solid #6a5a2d; border-radius:6px; background:#2a2416; color:#f1dfb0; font-size:12.5px; line-height:1.4; }
+.npc-refgroup-badge.is-all { border-color:#6a5a2d; background:#2a2416; color:#f1dfb0; }
 #npc_refgroup_close:focus-visible, .pagination.npc-toolbar .npc-refgroup-open:focus-visible { outline:2px solid rgb(242, 124, 17); outline-offset:2px; }
 @media (max-width: 480px) {
     .npc-refgroup-row-actions { width:100%; }
@@ -5614,9 +5618,10 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['import_from_bio'])) {
         </div>
         <div class="npc-refgroup-field">
           <label for="npc_refgroup_ids">Local FormIDs</label>
-          <textarea id="npc_refgroup_ids" rows="4" spellcheck="false" placeholder="0001BDE8&#10;0004D6D1" aria-describedby="npc_refgroup_ids_hint" required></textarea>
-          <span class="npc-refgroup-hint" id="npc_refgroup_ids_hint">2 to 32 IDs, one per line, without the load-order prefix.</span>
+          <textarea id="npc_refgroup_ids" rows="4" spellcheck="false" placeholder="0001BDE8&#10;0004D6D1" aria-describedby="npc_refgroup_ids_hint npc_refgroup_scope"></textarea>
+          <span class="npc-refgroup-hint" id="npc_refgroup_ids_hint">2 to 32 IDs, one per line, without the load-order prefix. Leave empty to match every plugin.</span>
         </div>
+        <p id="npc_refgroup_scope" class="npc-refgroup-scope" aria-live="polite" hidden><strong>All plugins:</strong> every placed actor named exactly like this, from any plugin, will share one profile, memory and relationships.</p>
         <label class="npc-merge-confirm"><input type="checkbox" id="npc_refgroup_enabled" checked> <span>Enabled</span></label>
         <div class="npc-merge-actions">
           <button type="button" id="npc_refgroup_cancel">Cancel</button>

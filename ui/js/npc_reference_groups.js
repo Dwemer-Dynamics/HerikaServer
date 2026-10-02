@@ -2,10 +2,14 @@
 //
 // Built-in groups ship with the server. Saving one stores a custom override with the same key, and
 // Reset deletes that override so the built-in group applies again. Custom groups are user rows.
+// A group with no local FormIDs matches every placed actor with that exact name, from any plugin.
 (function () {
     'use strict';
 
     const API = '../api/chim_npc_manager.php';
+    const ANY_PLUGIN = '*';
+    const DEFAULT_PLUGIN = 'Skyrim.esm';
+    const PLUGIN_HINT = 'ESM, ESP or ESL filename.';
 
     const backdrop = document.getElementById('npc_refgroup_modal');
     if (!backdrop) return;
@@ -24,6 +28,8 @@
     const nameInput = byId('npc_refgroup_name');
     const pluginInput = byId('npc_refgroup_plugin');
     const idsInput = byId('npc_refgroup_ids');
+    const pluginHint = byId('npc_refgroup_plugin_hint');
+    const scopeNote = byId('npc_refgroup_scope');
     const enabledInput = byId('npc_refgroup_enabled');
     const saveButton = byId('npc_refgroup_save');
     const cancelButton = byId('npc_refgroup_cancel');
@@ -34,6 +40,8 @@
     let previousBodyOverflow = '';
     let requestGeneration = 0;
     let busy = false;
+    // The plugin typed before the FormIDs were cleared, restored when IDs are entered again.
+    let lastPlugin = DEFAULT_PLUGIN;
 
     function element(tag, className, text) {
         const node = document.createElement(tag);
@@ -98,6 +106,11 @@
         renderList();
     }
 
+    function isCatchAll(group) {
+        return !!group.catch_all || group.plugin_name === ANY_PLUGIN
+            || !Array.isArray(group.local_formids) || group.local_formids.length === 0;
+    }
+
     function badge(text, modifier) {
         return element('span', 'npc-refgroup-badge' + (modifier ? ' ' + modifier : ''), text);
     }
@@ -127,10 +140,16 @@
                 group.source === 'default' ? 'Built-in' : (group.source === 'override' ? 'Built-in, edited' : 'Custom'),
                 group.source === 'custom' ? 'is-custom' : ''
             ));
+            const catchAll = isCatchAll(group);
+            if (catchAll) title.append(badge('All plugins', 'is-all'));
             if (!group.enabled) title.append(badge('Disabled', 'is-off'));
             const meta = element('div', 'npc-merge-option-meta');
-            meta.append(element('span', 'npc-merge-origin', group.plugin_name));
-            meta.append(element('span', 'npc-merge-refid', group.local_formids.join(', ')));
+            if (catchAll) {
+                meta.append(element('span', 'npc-merge-origin', 'All references with this name'));
+            } else {
+                meta.append(element('span', 'npc-merge-origin', group.plugin_name));
+                meta.append(element('span', 'npc-merge-refid', group.local_formids.join(', ')));
+            }
             copy.append(title, meta);
 
             const name = group.display_name;
@@ -198,13 +217,32 @@
         return String(text || '').split(/[\s,;]+/).map((value) => value.trim()).filter(Boolean);
     }
 
+    // With no FormIDs the plugin is irrelevant: disable it and explain the wider match.
+    function updateScope() {
+        const catchAll = parseIds(idsInput.value).length === 0;
+        if (catchAll && !pluginInput.disabled) {
+            if (pluginInput.value.trim()) lastPlugin = pluginInput.value.trim();
+            pluginInput.value = '';
+        } else if (!catchAll && pluginInput.disabled) {
+            pluginInput.value = lastPlugin;
+        }
+        pluginInput.disabled = catchAll;
+        pluginInput.placeholder = catchAll ? 'All plugins' : DEFAULT_PLUGIN;
+        pluginHint.textContent = catchAll ? 'Not used while Local FormIDs is empty.' : PLUGIN_HINT;
+        scopeNote.hidden = !catchAll;
+    }
+
     function showForm(group) {
         editing = group || null;
         formHeading.textContent = group ? `Edit ${group.display_name}` : 'Add custom group';
         formNote.hidden = !(group && group.source === 'default');
         nameInput.value = group ? group.display_name : '';
-        pluginInput.value = group ? group.plugin_name : 'Skyrim.esm';
-        idsInput.value = group ? group.local_formids.join('\n') : '';
+        const catchAll = !!group && isCatchAll(group);
+        lastPlugin = group && !catchAll ? group.plugin_name : DEFAULT_PLUGIN;
+        pluginInput.disabled = false;
+        pluginInput.value = lastPlugin;
+        idsInput.value = group && !catchAll ? group.local_formids.join('\n') : '';
+        updateScope();
         enabledInput.checked = group ? !!group.enabled : true;
         setError('');
         setStatus('');
@@ -228,18 +266,23 @@
     async function submitForm(event) {
         event.preventDefault();
         if (busy) return;
+        const ids = parseIds(idsInput.value);
+        const catchAll = ids.length === 0;
         const body = {
             operation: 'reference_group_save',
             display_name: nameInput.value.trim(),
-            plugin_name: pluginInput.value.trim(),
-            local_formids: parseIds(idsInput.value),
+            plugin_name: catchAll ? ANY_PLUGIN : pluginInput.value.trim(),
+            local_formids: ids,
             enabled: enabledInput.checked
         };
         if (editing) body.group_key = editing.group_key;
-        const ids = body.local_formids;
         if (!body.display_name) { setError('Enter a character name.'); nameInput.focus(); return; }
-        if (!body.plugin_name) { setError('Enter a plugin filename.'); pluginInput.focus(); return; }
-        if (ids.length < 2 || ids.length > 32) { setError('Enter between 2 and 32 local FormIDs.'); idsInput.focus(); return; }
+        if (!catchAll && !body.plugin_name) { setError('Enter a plugin filename.'); pluginInput.focus(); return; }
+        if (ids.length === 1 || ids.length > 32) {
+            setError('Enter between 2 and 32 local FormIDs, or leave the field empty to match every plugin.');
+            idsInput.focus();
+            return;
+        }
         const editedKey = editing ? editing.group_key : '';
         const saved = await write(body, 'Group saved.', saveButton);
         if (!saved) return;
@@ -328,6 +371,7 @@
     addButton.addEventListener('click', function () { showForm(null); });
     cancelButton.addEventListener('click', function () { setError(''); hideForm(''); });
     form.addEventListener('submit', submitForm);
+    idsInput.addEventListener('input', updateScope);
     list.addEventListener('click', onListClick);
 
     // Capture phase so Escape does not also reach the card editor or the hosting Config Hub.

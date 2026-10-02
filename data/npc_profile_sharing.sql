@@ -26,8 +26,9 @@ CREATE TABLE IF NOT EXISTS public.npc_profile_reference_groups (
     plugin_name character varying(255) NOT NULL,
     local_formids text[] NOT NULL,
     enabled boolean NOT NULL DEFAULT TRUE,
-    CONSTRAINT npc_profile_reference_groups_member_count
-        CHECK (cardinality(local_formids) BETWEEN 2 AND 32)
+    CONSTRAINT npc_profile_reference_groups_scope
+        CHECK ((plugin_name = '*' AND cardinality(local_formids) = 0)
+            OR (plugin_name <> '*' AND cardinality(local_formids) BETWEEN 2 AND 32))
 );
 
 CREATE TABLE IF NOT EXISTS public.npc_profile_reference_groups_custom (
@@ -37,9 +38,29 @@ CREATE TABLE IF NOT EXISTS public.npc_profile_reference_groups_custom (
     local_formids text[] NOT NULL,
     enabled boolean NOT NULL DEFAULT TRUE,
     updated_at timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT npc_profile_reference_groups_custom_member_count
-        CHECK (cardinality(local_formids) BETWEEN 2 AND 32)
+    CONSTRAINT npc_profile_reference_groups_custom_scope
+        CHECK ((plugin_name = '*' AND cardinality(local_formids) = 0)
+            OR (plugin_name <> '*' AND cardinality(local_formids) BETWEEN 2 AND 32))
 );
+
+-- An empty reference list with plugin '*' is the explicit name catch-all: every registered placed
+-- actor with exactly this name, from any plugin. Older tables only allowed 2-32 references; replace
+-- that check in place so existing rows (which all satisfy the new one) are retained.
+DO $$
+DECLARE
+    t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['npc_profile_reference_groups', 'npc_profile_reference_groups_custom'] LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = ('public.' || t)::regclass
+                       AND conname = t || '_scope') THEN
+            EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT IF EXISTS %I', t, t || '_member_count');
+            EXECUTE format('ALTER TABLE public.%I ADD CONSTRAINT %I CHECK ('
+                || '(plugin_name = ''*'' AND cardinality(local_formids) = 0) OR '
+                || '(plugin_name <> ''*'' AND cardinality(local_formids) BETWEEN 2 AND 32))', t, t || '_scope');
+        END IF;
+    END LOOP;
+END;
+$$;
 
 INSERT INTO public.npc_profile_reference_groups
     (group_key, display_name, plugin_name, local_formids, enabled)

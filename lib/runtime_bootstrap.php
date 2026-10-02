@@ -84,7 +84,7 @@ if (!function_exists('chimRuntimeNeedsDbUpdates')) {
             'core_tts_connector_omnivoice' => 20260708001,
             'npc_actor_identity' => 20260824003,
             'npc_stable_identity' => 20260927001,
-            'npc_profile_sharing' => 20260901001,
+            'npc_profile_sharing' => 20261002001,
             'oghma_catalog' => 20260827001,
             'core_tts_pronunciation' => 20260829003,
             'eventlog_actor_identity' => 20260930002,

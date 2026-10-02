@@ -20,6 +20,10 @@ const CHIM_NPC_PROFILE_METADATA_KEYS = [
     '_chim_profile_epoch', '_chim_auto_link_group', '_chim_auto_link_disabled',
 ];
 
+// An empty reference list is the explicit catch-all: every placed actor with exactly the group's
+// name, from any plugin. Its canonical stored plugin is this sentinel, never a real filename.
+const CHIM_NPC_REFERENCE_GROUP_ANY_PLUGIN = '*';
+
 function chimNpcReferenceGroupBool($value): bool
 {
     if (is_bool($value)) { return $value; }
@@ -57,9 +61,10 @@ function chimNpcReferenceGroupTableRows(string $table): array
         $key = strtolower(trim((string)($row['group_key'] ?? '')));
         $displayName = trim((string)($row['display_name'] ?? ''));
         $pluginName = trim((string)($row['plugin_name'] ?? ''));
-        if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $key) || $displayName === '' ||
-            count($references) < 2 || count($references) > 32 ||
-            !preg_match('/^[^\\\\\/:*?"<>|\x00-\x1F]{1,250}\.(esm|esp|esl)$/i', $pluginName)) {
+        $catchAll = $pluginName === CHIM_NPC_REFERENCE_GROUP_ANY_PLUGIN && !$references;
+        if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $key) || $displayName === '' || (!$catchAll &&
+            (count($references) < 2 || count($references) > 32 ||
+            !preg_match('/^[^\\\\\/:*?"<>|\x00-\x1F]{1,250}\.(esm|esp|esl)$/i', $pluginName)))) {
             continue;
         }
         $groups[] = [
@@ -68,6 +73,7 @@ function chimNpcReferenceGroupTableRows(string $table): array
             'plugin_name' => $pluginName,
             'local_formids' => $references,
             'enabled' => chimNpcReferenceGroupBool($row['enabled'] ?? false),
+            'catch_all' => $catchAll,
         ];
     }
     return $groups;
@@ -118,11 +124,14 @@ function chimNpcNormalizeReferenceGroupInput(array $input): array
     if ($displayName === '' || strlen($displayName) > 128) {
         throw new InvalidArgumentException('Enter a character name up to 128 characters');
     }
-    if (!preg_match('/^[^\\\\\/:*?"<>|\x00-\x1F]{1,250}\.(esm|esp|esl)$/i', $pluginName)) {
+    $catchAll = !$references;
+    if ($catchAll) {
+        // No FormIDs: match the exact character name in every plugin, so no plugin is stored.
+        $pluginName = CHIM_NPC_REFERENCE_GROUP_ANY_PLUGIN;
+    } elseif (!preg_match('/^[^\\\\\/:*?"<>|\x00-\x1F]{1,250}\.(esm|esp|esl)$/i', $pluginName)) {
         throw new InvalidArgumentException('Enter a valid ESM, ESP, or ESL plugin filename');
-    }
-    if (count($references) < 2 || count($references) > 32) {
-        throw new InvalidArgumentException('Enter between 2 and 32 local FormIDs');
+    } elseif (count($references) < 2 || count($references) > 32) {
+        throw new InvalidArgumentException('Enter between 2 and 32 local FormIDs, or none to match every plugin');
     }
     $key = strtolower(trim((string)($input['group_key'] ?? '')));
     $generatedKey = $key === '';
@@ -136,22 +145,45 @@ function chimNpcNormalizeReferenceGroupInput(array $input): array
         'plugin_name' => $pluginName,
         'local_formids' => $references,
         'enabled' => chimNpcReferenceGroupBool($input['enabled'] ?? true),
+        'catch_all' => $catchAll,
         'generated_key' => $generatedKey,
     ];
 }
 
-// Keep one stable plugin reference from activating two different character groups.
+function chimNpcReferenceGroupNameKey(string $name): string
+{
+    return mb_strtolower(trim($name), 'UTF-8');
+}
+
+// Keep one stable plugin reference, or one catch-all name, from activating two different character groups.
+// A catch-all may not share its name with an enabled exact group: convert that group by key instead.
 function chimNpcAssertReferenceGroupsUnique(array $effective): void
 {
     $seen = [];
+    $catchAllNames = [];
+    $exactNames = [];
     foreach ($effective as $group) {
         if (!$group['enabled']) { continue; }
+        $name = chimNpcReferenceGroupNameKey($group['display_name']);
+        if (!empty($group['catch_all'])) {
+            if (isset($catchAllNames[$name])) {
+                throw new InvalidArgumentException("Another enabled every-plugin group already matches {$group['display_name']}");
+            }
+            $catchAllNames[$name] = $group['group_key'];
+        } else {
+            $exactNames[$name] = $group['group_key'];
+        }
         foreach ($group['local_formids'] as $reference) {
             $stableKey = strtolower($group['plugin_name'] . '|' . $reference);
             if (isset($seen[$stableKey]) && $seen[$stableKey] !== $group['group_key']) {
                 throw new InvalidArgumentException("{$group['plugin_name']} {$reference} already belongs to another enabled group");
             }
             $seen[$stableKey] = $group['group_key'];
+        }
+    }
+    foreach ($catchAllNames as $name => $key) {
+        if (isset($exactNames[$name])) {
+            throw new InvalidArgumentException("An enabled exact-reference group already uses this name; edit group {$exactNames[$name]} to match every plugin instead");
         }
     }
 }
@@ -168,6 +200,23 @@ function chimNpcInvalidateReferenceGroup(string $key): void
         WHERE metadata->>'_chim_auto_link_group' = '{$keySql}'") === false) {
         throw new RuntimeException('Cannot refresh automatic profile bindings');
     }
+}
+
+// An exact group takes precedence over a catch-all. Release other groups' automatic links that now hold
+// one of its references so the next registration rebuilds them under the precedence rule.
+function chimNpcInvalidateReferenceOverlaps(array $group): void
+{
+    if (!$group['enabled'] || !empty($group['catch_all'])) { return; }
+    $db = $GLOBALS['db'];
+    $sources = implode(',', array_map(
+        static fn($ref) => "'" . $db->escape(strtolower($group['plugin_name'] . '|' . $ref)) . "'",
+        $group['local_formids']
+    ));
+    $keySql = $db->escape($group['group_key']);
+    $rows = $db->fetchAll("SELECT DISTINCT metadata->>'_chim_auto_link_group' AS link_group FROM core_npc_master
+        WHERE lower(metadata->>'refid_source') IN ({$sources})
+          AND COALESCE(metadata->>'_chim_auto_link_group', '') NOT IN ('', '{$keySql}')");
+    foreach ((array)$rows as $row) { chimNpcInvalidateReferenceGroup((string)$row['link_group']); }
 }
 
 // Save an override atomically while keeping every enabled reference in one group only.
@@ -203,9 +252,15 @@ function chimNpcSaveReferenceGroup(array $input): array
             static fn($reference) => "'{$reference}'", $candidate['local_formids']
         ));
         $enabledSql = $candidate['enabled'] ? 'TRUE' : 'FALSE';
+        // Tables created before every-plugin groups still carry the 2-32 reference check until db_updates runs.
+        if ($candidate['catch_all'] && !$db->fetchOne("SELECT 1 FROM pg_constraint
+            WHERE conrelid = 'public.npc_profile_reference_groups_custom'::regclass
+              AND conname = 'npc_profile_reference_groups_custom_scope'")) {
+            throw new RuntimeException('Every-plugin groups need the latest database update; run database updates first');
+        }
         if ($db->execQuery("INSERT INTO public.npc_profile_reference_groups_custom
             (group_key, display_name, plugin_name, local_formids, enabled, updated_at)
-            VALUES ('{$keySql}', '{$nameSql}', '{$pluginSql}', ARRAY[{$referenceSql}], {$enabledSql}, CURRENT_TIMESTAMP)
+            VALUES ('{$keySql}', '{$nameSql}', '{$pluginSql}', ARRAY[{$referenceSql}]::text[], {$enabledSql}, CURRENT_TIMESTAMP)
             ON CONFLICT (group_key) DO UPDATE SET
                 display_name = EXCLUDED.display_name,
                 plugin_name = EXCLUDED.plugin_name,
@@ -214,10 +269,13 @@ function chimNpcSaveReferenceGroup(array $input): array
                 updated_at = CURRENT_TIMESTAMP") === false) {
             throw new RuntimeException('Cannot save reference group');
         }
-        // Label-only edits do not disturb ownership or invalidate open workers.
+        // Label-only edits do not disturb ownership or invalidate open workers. A catch-all's name is its rule.
         if (!$previous || $previous['plugin_name'] !== $candidate['plugin_name'] ||
-            $previous['local_formids'] !== $candidate['local_formids'] || $previous['enabled'] !== $candidate['enabled']) {
+            $previous['local_formids'] !== $candidate['local_formids'] || $previous['enabled'] !== $candidate['enabled'] ||
+            ($candidate['catch_all'] && chimNpcReferenceGroupNameKey($previous['display_name']) !==
+                chimNpcReferenceGroupNameKey($candidate['display_name']))) {
             chimNpcInvalidateReferenceGroup($key);
+            chimNpcInvalidateReferenceOverlaps($candidate);
         }
         if ($db->execQuery('COMMIT') === false) { throw new RuntimeException('Cannot commit reference group'); }
         chimNpcAlternateReferenceGroups(true);
@@ -253,7 +311,10 @@ function chimNpcDeleteReferenceGroup(string $key): array
             WHERE group_key = '{$keySql}'") === false) {
             throw new RuntimeException('Cannot delete reference group');
         }
-        if ($hadOverride) { chimNpcInvalidateReferenceGroup($key); }
+        if ($hadOverride) {
+            chimNpcInvalidateReferenceGroup($key);
+            if (isset($defaults[$key])) { chimNpcInvalidateReferenceOverlaps($defaults[$key]); }
+        }
         if ($db->execQuery('COMMIT') === false) { throw new RuntimeException('Cannot commit reference group reset'); }
         chimNpcAlternateReferenceGroups(true);
     } catch (Throwable $error) {
@@ -263,18 +324,51 @@ function chimNpcDeleteReferenceGroup(string $key): array
     return chimNpcReferenceGroupCatalog();
 }
 
-// Names can differ (Erik the Slayer, translations); only exact originating references establish equivalence.
+// Names can differ (Erik the Slayer, translations); exact originating references establish equivalence first.
+// Only a row with a placed plugin reference and no exact group falls back to an opt-in catch-all for its exact
+// name. Dynamic FF and keyless legacy rows have no originating plugin, so names never place them in a group.
 function chimNpcAlternateGroup(array $row): ?string
 {
     $source = chimParseNpcReferenceSource(chimNpcProfileJson($row['metadata'] ?? null)['refid_source'] ?? '');
     if (!$source) { return null; }
+    $catchAll = [];
+    $name = chimNpcReferenceGroupNameKey((string)($row['npc_name'] ?? ''));
     foreach (chimNpcAlternateReferenceGroups() as $group => $definition) {
-        if (strcasecmp($source['plugin_name'], $definition['plugin_name']) === 0 &&
+        if ($definition['catch_all']) {
+            if ($name !== '' && chimNpcReferenceGroupNameKey($definition['display_name']) === $name) { $catchAll[] = $group; }
+        } elseif (strcasecmp($source['plugin_name'], $definition['plugin_name']) === 0 &&
             in_array($source['local_formid'], $definition['local_formids'], true)) {
             return $group;
         }
     }
-    return null;
+    $refid = NpcMaster::normalizeRefId($row['refid'] ?? '');
+    // Saving rejects two enabled catch-alls for one name; if the catalog was edited directly, fail closed.
+    return count($catchAll) === 1 && $refid !== '' && !str_starts_with($refid, 'FF') ? $catchAll[0] : null;
+}
+
+// Rows a group may link. Exact groups list their stable references. A catch-all reads the exact name and keeps
+// only currently available placed references not claimed by an exact group; dynamic, keyless and stale rows
+// stay outside it rather than blocking the rest.
+function chimNpcReferenceGroupRows(string $group, array $definition): array
+{
+    $db = $GLOBALS['db'];
+    if (!$definition['catch_all']) {
+        $sources = implode(',', array_map(
+            static fn($ref) => "'" . $db->escape(strtolower($definition['plugin_name'] . '|' . $ref)) . "'",
+            $definition['local_formids']
+        ));
+        return (array)$db->fetchAll("SELECT * FROM core_npc_master WHERE lower(metadata->>'refid_source') IN ({$sources}) ORDER BY id");
+    }
+    $nameSql = $db->escape(trim($definition['display_name']));
+    $rows = (array)$db->fetchAll("SELECT * FROM core_npc_master WHERE lower(btrim(npc_name)) = lower('{$nameSql}')
+        AND COALESCE(metadata->>'refid_source', '') <> '' ORDER BY id");
+    return array_values(array_filter($rows, static function ($row) use ($group) {
+        $source = chimParseNpcReferenceSource(chimNpcProfileJson($row['metadata'] ?? null)['refid_source'] ?? '');
+        $refid = NpcMaster::normalizeRefId($row['refid'] ?? '');
+        return $source && $refid !== '' && !str_starts_with($refid, 'FF') &&
+            chimStableFormReferenceEquals($source['stable_key'], chimConvertRuntimeFormIdToStableReference($refid)) &&
+            chimNpcAlternateGroup($row) === $group;
+    }));
 }
 
 // Registration-only, database-only linking. Existing groups keep their owner; otherwise the oldest row wins.
@@ -286,13 +380,8 @@ function chimNpcAutoLinkProfile(array $actor): bool
     $db = $GLOBALS['db'];
     $definition = chimNpcAlternateReferenceGroups()[$group] ?? null;
     if (!$definition) { return false; }
-    $sources = implode(',', array_map(
-        static fn($ref) => "'" . $GLOBALS['db']->escape(strtolower($definition['plugin_name'] . '|' . $ref)) . "'",
-        $definition['local_formids']
-    ));
-    $query = "SELECT * FROM core_npc_master WHERE lower(metadata->>'refid_source') IN ({$sources}) ORDER BY id";
     // Repeated registrations need no write lock, snapshots or epoch change once the group is settled.
-    $rows = $db->fetchAll($query);
+    $rows = chimNpcReferenceGroupRows($group, $definition);
     $owners = array_unique(array_map(static fn($row) => (int)($row['profile_owner_npc_id'] ?? $row['id']), $rows));
     foreach ($rows as $row) {
         if (!empty(chimNpcProfileJson($row['metadata'])['_chim_auto_link_disabled'])) { return false; }
@@ -308,7 +397,7 @@ function chimNpcAutoLinkProfile(array $actor): bool
             $db->execQuery('ROLLBACK');
             return false;
         }
-        $rows = $db->fetchAll($query);
+        $rows = chimNpcReferenceGroupRows($group, $definition);
         $ids = array_map(static fn($row) => (int)$row['id'], $rows);
         $existingOwners = [];
         $seen = [];
