@@ -8677,4 +8677,19 @@ if ($checkVersion('core_action_retire_drink') < 20260927001) {
     }
 }
 
+// Store relationship audits atomically without copying them into prompt history.
+if ($checkVersion('relationship_eventlog') < 20261002001) {
+    $db->execQuery('BEGIN');
+    try {
+        $sql = file_get_contents(__DIR__ . '/../lib/core/database_schema/relationship_eventlog.sql');
+        if ($sql === false || $db->execQuery($sql) === false) {
+            throw new RuntimeException('Relationship eventlog migration failed');
+        }
+        $updateVersion('relationship_eventlog', 20261002001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Relationship eventlog migration failed: ' . $e->getMessage());
+    }
+}
 ?>
