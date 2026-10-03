@@ -24,6 +24,8 @@ DECLARE
     participants text;
     identity_keys text[];
 BEGIN
+    -- A new profile's bundled relationships are starting state, not gameplay changes.
+    IF TG_OP = 'INSERT' THEN RETURN NEW; END IF;
     -- Loading an existing save restores history; it must not invent new relationship decisions.
     IF current_setting('chim.relationship_eventlog_suspended', true) = 'on' THEN RETURN NEW; END IF;
     IF TG_OP = 'UPDATE' THEN
@@ -128,5 +130,5 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_chim_relationship_eventlog ON public.core_npc_master;
-CREATE TRIGGER trg_chim_relationship_eventlog AFTER INSERT OR UPDATE OF extended_data
+CREATE TRIGGER trg_chim_relationship_eventlog AFTER UPDATE OF extended_data
 ON public.core_npc_master FOR EACH ROW EXECUTE FUNCTION public.chim_relationship_eventlog();
