@@ -13,6 +13,9 @@ DECLARE
     details text;
     target_name text;
     relationship_label text;
+    score_change numeric;
+    score_text text;
+    explanation text;
     player_name text;
     event_gamets bigint;
     event_ts bigint := floor(extract(epoch FROM clock_timestamp()));
@@ -59,20 +62,39 @@ BEGIN
         IF previous_value IS NOT DISTINCT FROM current_value THEN CONTINUE; END IF;
         target_name := CASE WHEN lower(target)='player' THEN player_name ELSE target END;
         description := NEW.npc_name || ' → ' || target_name || ': ';
+        score_text := NULL;
         IF previous_value IS NULL THEN
             relationship_label := CASE lower(current_value->>'type')
                 WHEN 'enemy' THEN 'Now considers them enemies'
                 WHEN 'friend' THEN 'Now considers them friends'
                 ELSE initcap(COALESCE(NULLIF(current_value->>'type',''),'Relationship'))
             END;
-            description := description || relationship_label || '.';
+            explanation := COALESCE(NULLIF(trim(current_value->>'note'),''), relationship_label || '.');
+            IF current_value->>'aff' ~ '^[+-]?[0-9]+([.][0-9]+)?$' THEN
+                    score_change := (current_value->>'aff')::numeric;
+                    score_text := CASE WHEN score_change >= 0 THEN '+' ELSE '' END || score_change::text;
+            END IF;
+            description := description || CASE WHEN score_text IS NOT NULL THEN score_text || ' — ' ELSE '' END
+                || explanation;
         ELSIF current_value IS NULL THEN
             description := description || 'Relationship removed.';
         ELSIF jsonb_typeof(previous_value)='object' AND jsonb_typeof(current_value)='object' THEN
+            -- Existing relationships show the change in affinity, not the resulting total.
+            IF previous_value->>'aff' ~ '^[+-]?[0-9]+([.][0-9]+)?$'
+                AND current_value->>'aff' ~ '^[+-]?[0-9]+([.][0-9]+)?$' THEN
+                IF (current_value->>'aff')::numeric <> (previous_value->>'aff')::numeric THEN
+                    score_change := (current_value->>'aff')::numeric - (previous_value->>'aff')::numeric;
+                    score_text := CASE WHEN score_change > 0 THEN '+' ELSE '' END || score_change::text;
+                    explanation := COALESCE(NULLIF(trim(current_value->>'note'),''), 'Relationship updated.');
+                    description := description || score_text || ' — ' || explanation;
+                END IF;
+            END IF;
             details := '';
             FOR field IN SELECT jsonb_object_keys(previous_value) UNION SELECT jsonb_object_keys(current_value)
             LOOP
-                IF previous_value->field IS DISTINCT FROM current_value->field THEN
+                IF previous_value->field IS DISTINCT FROM current_value->field
+                    AND NOT (score_text IS NOT NULL AND (field = 'aff'
+                        OR (field = 'note' AND NULLIF(trim(current_value->>'note'),'') IS NOT NULL))) THEN
                     details := details || CASE WHEN details='' THEN '' ELSE '; ' END
                         || CASE field WHEN 'aff' THEN 'Affinity' WHEN 'type' THEN 'Relationship'
                             WHEN 'note' THEN 'Note' WHEN 'best' THEN 'Best memory'
@@ -82,7 +104,7 @@ BEGIN
                         || ' → ' || COALESCE(current_value->>field,'none');
                 END IF;
             END LOOP;
-            description := description || details;
+            description := description || CASE WHEN score_text IS NOT NULL AND details <> '' THEN '; ' ELSE '' END || details;
         ELSE
             description := description || COALESCE(previous_value::text,'(unset)')
                 || ' → ' || COALESCE(current_value::text,'(unset)');
