@@ -19,6 +19,8 @@
 require_once $GLOBALS["ENGINE_PATH"] . "lib/logger.php";
 // Actor-key helpers used by endpoint capture; the standalone worker does not load them otherwise
 require_once $GLOBALS["ENGINE_PATH"] . "lib/core/npc_reference.php";
+// Standalone workers validate queued profile ownership before loading the NPC class.
+require_once $GLOBALS["ENGINE_PATH"] . "lib/core/npc_profile_sharing.php";
 
 /**
  * Convert malformed or unsuccessful LLM results into a retryable queue failure.
