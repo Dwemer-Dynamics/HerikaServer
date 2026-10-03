@@ -4141,8 +4141,7 @@ try {
     Logger::error("Error creating combined_descriptions view: " . $e->getMessage());
 }
 
-// Preserve additive history-view columns installed by newer builds when switching back.
-if ($checkVersion("memory_v") < 20251122001) try {
+try {
     $db->execQuery("CREATE OR REPLACE VIEW \"public\".\"memory_v\" AS
  SELECT message,
     uid,

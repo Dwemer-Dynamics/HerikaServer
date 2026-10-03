@@ -532,8 +532,8 @@ class NpcMaster
         }
 
         $escaped = $this->escape($npcName);
-        $rows = $this->db->fetchAll("SELECT * FROM {$this->table} WHERE npc_name = '{$escaped}' LIMIT 2");
-        return count($rows) === 1 ? $rows[0] : null;
+        $query   = "SELECT * FROM {$this->table} WHERE npc_name = '{$escaped}' LIMIT 1";
+        return $this->db->fetchOne($query);
     }
 
     // Read NPC by md5
@@ -545,20 +545,9 @@ class NpcMaster
             return null;
         }
 
-        if (!preg_match('/^[a-f0-9]{32}$/i', (string)$md5Hash)) {
-            return null;
-        }
-
-        // Accept legacy clients against identity-migrated data without rewriting either key.
-        // Count all matches so a name hash cannot select one of several same-name actors.
-        $escaped = $this->escape(strtolower($md5Hash));
-        $rows = $this->db->fetchAll("SELECT * FROM {$this->table}
-            WHERE lower(md5) = '{$escaped}'
-               OR md5(npc_name) = '{$escaped}'
-               OR (COALESCE(refid, '') <> ''
-                   AND md5(BTRIM(npc_name) || ' [RefID: ' || upper(refid) || ']') = '{$escaped}')
-            LIMIT 2");
-        return count($rows) === 1 ? $rows[0] : null;
+        $escaped = $this->escape($md5Hash);
+        $query   = "SELECT * FROM {$this->table} WHERE md5 = '{$escaped}' LIMIT 1";
+        return $this->db->fetchOne($query);
     }
 
     // Read NPC by md5

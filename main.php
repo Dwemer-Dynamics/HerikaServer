@@ -594,10 +594,8 @@ if (!empty($GLOBALS['QUEST_COMMENT_SELECTED'])) {
 
             if ($fallbackNpcName !== null && strcasecmp($fallbackNpcName, "The Narrator") !== 0) {
                 $escapedNpcName = $db->escape($fallbackNpcName);
-                $fallbackNpcRows = $db->fetchAll("SELECT * FROM core_npc_master WHERE lower(npc_name)=lower('{$escapedNpcName}') LIMIT 2");
-                $fallbackNpcData = count($fallbackNpcRows) === 1 ? $fallbackNpcRows[0] : null;
+                $fallbackNpcData = $db->fetchOne("SELECT * FROM core_npc_master WHERE lower(npc_name)=lower('{$escapedNpcName}') LIMIT 1");
                 if ($fallbackNpcData) {
-                    $currentNpcData = $fallbackNpcData;
                     $npcMaster->setOldGlobalsFromCurrentNpcData($fallbackNpcData);
                     $GLOBALS["CHIM_CORE_CURRENT_NPC_DATA"] = $fallbackNpcData;
                     $GLOBALS["STOBE_CORE_CURRENT_NPC_DATA"] = $fallbackNpcData;
@@ -605,14 +603,6 @@ if (!empty($GLOBALS['QUEST_COMMENT_SELECTED'])) {
                 } else {
                     error_log("[CORE SYSTEM] Could not resolve NPC '{$fallbackNpcName}' for unknown profile hash");
                 }
-            }
-
-            // A failed NPC lookup must not reuse the Narrator loaded during bootstrap.
-            if (!$fallbackNpcData && !$isNarratorScopedRequest
-                && in_array($gameRequest[0], ['inputtext', 'inputtext_s', 'ginputtext', 'ginputtext_s'], true)) {
-                Logger::warn('[PROFILE_LOOKUP] NPC target is unknown or ambiguous; dialogue skipped');
-                http_response_code(409);
-                terminate();
             }
 
             // Prefer the resolved NPC profile when available.

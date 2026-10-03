@@ -98,24 +98,3 @@ The setting is reusable general_settings configuration and stays global across p
 Automatic effects use the existing FFmpeg WAV path. Filter failure preserves the generated audio. Filtered requests keep the existing TTS-cache bypass, so default-on combat/sneaking effects can increase synthesis work and latency. No new provider request, polling or model prompt is introduced by effect selection itself. A small .wav.ttsfilter marker prevents a normal voice from reusing previously filtered audio at the same dialogue-text hash; fresh unfiltered generation removes the marker. If a marker cannot be created, filtering is skipped and speech stays available.
 
 The four actor effects are also selectable voice-filter presets in the PHP NPC editor and Prisma, through the shared preset catalog. Werewolf lowers pitch by about six semitones and adds rough modulation; Vampire Lord lowers pitch by about three semitones with chorus and echo; Combat increases pace, presence and loudness; Sneaking reduces brightness and loudness with slightly slower delivery. These are audio effects, not new expressive TTS performances: Sneaking does not synthesize a true whisper. Existing Deep, Sinister, Commanding and Soft-Spoken presets are unchanged.
-## Relationship audit and profile compatibility
-
-Relationship changes create Eventlog entries and NPC Context History rows. They are
-excluded from conversation prompts and relationship evaluation context. Initial
-profile setup does not create audit entries. New relationships show their signed
-affinity; changes to existing affinity show the signed difference.
-
-NPC profiles remain in `core_npc_master`, with relationships and history attached
-to their existing NPC IDs. This feature does not rewrite profile hashes or install
-the separate actor-identity feature. Legacy clients can resolve a unique NPC by
-its name hash even when a previous identity deployment changed the stored hash.
-The stored hash and the legacy `Name [RefID: XXXXXXXX]` hash are also accepted.
-Ambiguous matches are rejected rather than selecting a same-name actor. An
-unresolved NPC dialogue request returns HTTP 409 instead of using the Narrator.
-Explicit Narrator requests retain their normal behavior.
-
-The migration preserves newer `memory_v` columns instead of attempting to remove
-them. Existing identity metadata is retained. This is a compatibility bridge for
-relationship-only deployments, not a guarantee that every older released server
-can read an identity-migrated database. The full RefID PR still needs its separate
-identity-storage and mixed-version validation work.
