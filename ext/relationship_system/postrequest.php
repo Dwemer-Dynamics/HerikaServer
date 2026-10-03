@@ -239,6 +239,8 @@ if ($useRelLLM && $npcId) {
 
     // Build context from current conversation
     $context = [];
+    // Pass an exact event reference; the worker resolves current ownership and delivery state.
+    $context['dialogue_event_id'] = (int)($GLOBALS['CHIM_PRIVATE_THOUGHT_TURN']['event_id'] ?? 0);
 
     // Get recent dialogue
     if (!empty($GLOBALS["talkedSoFar"])) {

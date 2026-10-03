@@ -24,7 +24,6 @@ $ENABLED_FUNCTIONS_LOCAL = [
     'InspectSurroundings',
     'CheckInventory',
     'SheatheWeapon',
-    'Relax',
     'TakeASeat',
     'ReadQuestJournal',
     'Surrender',
@@ -44,7 +43,6 @@ $ENABLED_FUNCTIONS_LOCAL = [
     'UseSoulGaze',
     'MakeFollower',
     'Toast',
-    'Drink',
     'Consume',
     'StartRitualCeremony',
     'EndRitualCeremony',
@@ -2080,6 +2078,14 @@ function getFunctionNameAliases()
 function getFunctionCodeName($key)
 {
     $key = strval($key);
+
+    if (isset($GLOBALS["HERIKA_GROUPED_ACTION_NAME_TO_CODE"]) && is_array($GLOBALS["HERIKA_GROUPED_ACTION_NAME_TO_CODE"])) {
+        $groupedCode = $GLOBALS["HERIKA_GROUPED_ACTION_NAME_TO_CODE"][$key] ?? false;
+        if ($groupedCode !== false) {
+            return $groupedCode;
+        }
+    }
+
     static $resolvedCodeNames = [];
 
     if (array_key_exists($key, $resolvedCodeNames)) {
@@ -2489,7 +2495,7 @@ function functionExecutionParameterValueIsEmpty($parameterValue)
     return trim(strval($parameterValue)) === "";
 }
 
-function buildFunctionParameterValueFromResponse($functionDef, $parsedResponse)
+function buildFunctionParameterValueFromResponse($functionDef, $parsedResponse, $forceObject = false)
 {
     $properties = $functionDef["parameters"]["properties"] ?? [];
     $requiredParameters = [];
@@ -2507,7 +2513,7 @@ function buildFunctionParameterValueFromResponse($functionDef, $parsedResponse)
         }
     }
 
-    if (count($properties) > 1) {
+    if ($forceObject || count($properties) > 1) {
         $parameters = [];
         foreach ($properties as $parameterName => $parameterSchema) {
             if (array_key_exists($parameterName, $parsedResponse)) {
@@ -2545,6 +2551,7 @@ function buildFunctionExecutionContextFromResponse($parsedResponse)
     $missingRequired = [];
 
     if (is_array($functionDef)) {
+        $forceObjectParameters = isset($GLOBALS['HERIKA_GROUPED_ACTION_SPECS'][$functionCodeName]);
         $parameterResponse = is_array($parsedResponse) ? $parsedResponse : [];
         $actionParameters = $parameterResponse["action_params"] ?? [];
         if (!is_array($actionParameters)) {
@@ -2563,10 +2570,23 @@ function buildFunctionExecutionContextFromResponse($parsedResponse)
             );
         }
 
-        $parameterData = buildFunctionParameterValueFromResponse($functionDef, $parameterResponse);
+        $parameterData = buildFunctionParameterValueFromResponse(
+            $functionDef,
+            $parameterResponse,
+            $forceObjectParameters
+        );
         $parameterValue = $parameterData["parameter_value"];
         $missingRequired = $parameterData["missing_required"];
     }
+
+    $submittedParameterValue = $parameterValue;
+    $executionResolution = resolveFunctionExecutionAction($functionCodeName, $parameterValue);
+    $functionCodeName = $executionResolution["code_name"];
+    $parameterValue = $executionResolution["parameter_value"];
+    $missingRequired = array_values(array_unique(array_merge(
+        $missingRequired,
+        $executionResolution["missing_required"]
+    )));
 
     if (strcasecmp($functionCodeName, 'TakeHeldItem') === 0) {
         $resolvedHeldItem = HeldItems::resolveHeldIdentifier(strval($parameterValue));
@@ -2590,7 +2610,34 @@ function buildFunctionExecutionContextFromResponse($parsedResponse)
         "parameter_string" => buildFunctionExecutionParameter($functionCodeName, $parameterValue),
         "missing_required" => $missingRequired,
         "has_required_parameters" => functionDefinitionHasRequiredParameters($functionDef),
-        "parameter_is_empty" => functionExecutionParameterValueIsEmpty($parameterValue),
+        "parameter_is_empty" => functionExecutionParameterValueIsEmpty($submittedParameterValue),
+        "parameter_resolution_valid" => $executionResolution["valid"],
+    ];
+}
+
+// Resolves compact runtime tools before connector-specific command serialization.
+function resolveFunctionExecutionAction($functionCodeName, $parameterValue)
+{
+    $functionCodeName = trim(strval($functionCodeName));
+    $resolution = function_exists('herikaActionGroupsResolveExecution')
+        ? herikaActionGroupsResolveExecution($functionCodeName, $parameterValue)
+        : null;
+    if (!is_array($resolution)) {
+        return [
+            "code_name" => $functionCodeName,
+            "parameter_value" => $parameterValue,
+            "missing_required" => [],
+            "valid" => true,
+        ];
+    }
+
+    return [
+        "code_name" => trim(strval($resolution["code_name"] ?? '')),
+        "parameter_value" => $resolution["parameter_value"] ?? '',
+        "missing_required" => is_array($resolution["missing_required"] ?? null)
+            ? $resolution["missing_required"]
+            : [],
+        "valid" => !empty($resolution["valid"]),
     ];
 }
 
@@ -2605,6 +2652,12 @@ function queueFunctionExecutionCommand(&$commandBuffer, &$alreadySent, $executio
         if ($actionName !== "Talk") {
             Logger::warn("{$connectorName}: Function not found for {$actionName}");
         }
+        return false;
+    }
+
+    if (array_key_exists("parameter_resolution_valid", $executionContext) && empty($executionContext["parameter_resolution_valid"])) {
+        $missingRequired = $executionContext["missing_required"] ?? [];
+        Logger::warn("{$connectorName}: Invalid grouped action parameters: " . implode(", ", $missingRequired));
         return false;
     }
 
@@ -2902,6 +2955,11 @@ chimTraceFunctionsIncludePhase(__LINE__, 'bug_func_write_done', $startTime);
 
 $GLOBALS["FUNCTIONS"] = array_values($GLOBALS["FUNCTIONS"]); //Get rid of array keys
 
+// main.php groups later, after its per-turn action restrictions.
+if (function_exists('herikaActionGroupsApplyToRuntime') && empty($GLOBALS['HERIKA_DEFER_ACTION_GROUPS'])) {
+    herikaActionGroupsApplyToRuntime();
+}
+
 chimTraceFunctionsIncludePhase(__LINE__, 'functions_reindexed', $startTime);
 
 
@@ -2928,7 +2986,10 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
         $actionParts2=explode("@",$actionParts[2]);
         
         if (isset($actionParts2[0])) {
-            $actionCodeNameResolved = getFunctionCodeName($actionParts2[0]);
+            // Queued commands carry execution codes; keep legacy codes from resolving to same-named groups.
+            $actionCodeNameResolved = isset($GLOBALS["F_NAMES"][$actionParts2[0]])
+                ? $actionParts2[0]
+                : getFunctionCodeName($actionParts2[0]);
             if ($actionCodeNameResolved === false || trim(strval($actionCodeNameResolved)) === '') {
                 $actionCodeNameResolved = $actionParts2[0];
             }

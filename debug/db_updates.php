@@ -6990,6 +6990,26 @@ SQL
     }
 }
 
+if ($checkVersion("core_action") < 20261002001) {
+    Logger::debug("Applying core_action 20261002001 - enable Wait_Here by default");
+
+    // Base row only; core_action_custom rows keep the user's explicit choice.
+    $migrationOk = $db->execQuery("
+        UPDATE public.core_action
+           SET is_activated = TRUE,
+               updated_at = NOW()
+         WHERE code_name = 'WaitHere'
+           AND is_activated = FALSE
+    ") !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20261002001);
+        Logger::info("Applied patch core_action 20261002001");
+    } else {
+        Logger::error("Failed to apply patch core_action 20261002001");
+    }
+}
+
 //----------------------------------------------------
 
 // Relationship Evaluation and Initialization Queues
@@ -8537,6 +8557,25 @@ if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_pro
     throw new RuntimeException('Dynamic profile migration failed.');
 }
 
+if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/core/database_schema/eventlog_private_thought.sql')) === false) {
+    throw new RuntimeException('Private NPC thoughts migration failed.');
+}
+
+$updateVersion('eventlog_private_thought', 20260926002);
+
+if ($checkVersion('private_npc_thoughts_prompt') < 20260926001) {
+    require_once dirname(__DIR__) . '/lib/npc_private_thoughts.php';
+    $privateThoughtPrompt = $db->escape(CHIM_PRIVATE_THOUGHT_DEFAULT_PROMPT);
+    if ($db->query("INSERT INTO public.prompts (prompt_key, default_prompt, description)
+        VALUES ('private_npc_thoughts', '{$privateThoughtPrompt}',
+            'Private NPC Thoughts: instructions for the internal_thought response field. Used when enabled on the NPC profile. Thoughts are unspoken and limited to 600 characters.')
+        ON CONFLICT (prompt_key) DO UPDATE SET default_prompt = EXCLUDED.default_prompt,
+            description = EXCLUDED.description, updated_at = CURRENT_TIMESTAMP") === false) {
+        throw new RuntimeException('Private NPC thoughts prompt migration failed.');
+    }
+    $updateVersion('private_npc_thoughts_prompt', 20260926001);
+}
+
 // Scheduled NPC travel and correlated game acknowledgements.
 if ($checkVersion('npc_schedules') < 20260927001) {
     if (!$db->execQuery(file_get_contents(__DIR__ . '/../lib/core/database_schema/npc_schedules.sql'))) throw new RuntimeException('Schedule migration failed.');
@@ -8593,6 +8632,39 @@ if ($playthroughPolicyConn) {
     } finally { pg_close($playthroughPolicyConn); }
 } else {
     Logger::error('Cannot connect to update the Playthrough Save table policy.');
+}
+
+
+// Retire Relax from existing catalogs as well as fresh seeds.
+if ($checkVersion('core_action_retire_relax') < 20260927001) {
+    $db->execQuery('BEGIN');
+    try {
+        if ($db->execQuery("DELETE FROM public.core_action_custom WHERE code_name='Relax'") === false
+            || $db->execQuery("DELETE FROM public.core_action WHERE code_name='Relax'") === false) {
+            throw new RuntimeException('Could not retire Relax');
+        }
+        $updateVersion('core_action_retire_relax', 20260927001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Relax retirement failed: ' . $e->getMessage());
+    }
+}
+
+// Retire Drink from existing catalogs as well as fresh seeds.
+if ($checkVersion('core_action_retire_drink') < 20260927001) {
+    $db->execQuery('BEGIN');
+    try {
+        if ($db->execQuery("DELETE FROM public.core_action_custom WHERE code_name='Drink'") === false
+            || $db->execQuery("DELETE FROM public.core_action WHERE code_name='Drink'") === false) {
+            throw new RuntimeException('Could not retire Drink');
+        }
+        $updateVersion('core_action_retire_drink', 20260927001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Drink retirement failed: ' . $e->getMessage());
+    }
 }
 
 ?>

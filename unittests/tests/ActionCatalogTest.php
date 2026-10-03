@@ -284,15 +284,11 @@ final class ActionCatalogTest extends TestCase
         );
 
         $this->assertArrayNotHasKey('AttackHunt', $rows);
+        $this->assertArrayNotHasKey('Drink', $rows);
         $this->assertTrue($rows['MoveTo']['available_to_npc']);
         $this->assertFalse($rows['MoveTo']['available_to_followers']);
         $this->assertFalse($rows['MoveTo']['available_to_narrator']);
         $this->assertTrue($rows['MoveTo']['is_activated']);
-
-        $this->assertTrue($rows['Drink']['available_to_npc']);
-        $this->assertTrue($rows['Drink']['available_to_followers']);
-        $this->assertFalse($rows['Drink']['available_to_narrator']);
-        $this->assertTrue($rows['Drink']['is_activated']);
 
         $this->assertFalse($rows['TeleportNPC']['available_to_npc']);
         $this->assertFalse($rows['TeleportNPC']['available_to_followers']);
@@ -433,11 +429,6 @@ final class ActionCatalogTest extends TestCase
         $this->assertSame('plugin_command', $rows['MoveTo']['metadata']['dispatch']);
         $this->assertTrue($rows['MoveTo']['game_function']);
         $this->assertNull($rows['MoveTo']['script_proxy_program']);
-
-        $this->assertSame('script_proxy', $rows['Drink']['metadata']['dispatch']);
-        $this->assertTrue($rows['Drink']['game_function']);
-        $this->assertIsArray($rows['Drink']['script_proxy_program']);
-        $this->assertNotEmpty($rows['Drink']['script_proxy_program']['cases']);
 
         $this->assertSame('rolecommand', $rows['TeleportNPC']['metadata']['dispatch']);
         $this->assertTrue($rows['TeleportNPC']['game_function']);
@@ -818,6 +809,209 @@ final class ActionCatalogTest extends TestCase
             } else {
                 unset($GLOBALS['IS_NPC']);
             }
+        }
+    }
+
+    public function testVanillaActionGroupsCompactEligibleRuntimeFunctions(): void
+    {
+        $trackedGlobals = [
+            'FUNCTIONS', 'ENABLED_FUNCTIONS', 'BASE_FUNCTIONS', 'F_NAMES', 'F_TRANSLATIONS',
+            'F_RETURNMESSAGES', 'TEST_FUNCTION_CODE_MAP', 'HERIKA_ACTION_GROUP_CUSTOM_CODE_SET',
+            'HERIKA_GROUPED_ACTION_NAME_TO_CODE', 'HERIKA_GROUPED_ACTION_SPECS',
+        ];
+        $previousGlobals = [];
+        foreach ($trackedGlobals as $globalName) {
+            $previousGlobals[$globalName] = [
+                'exists' => array_key_exists($globalName, $GLOBALS),
+                'value' => $GLOBALS[$globalName] ?? null,
+            ];
+        }
+
+        $legacyCodes = [
+            'AddBounty', 'ArrestPlayer', 'ForgiveCrime', 'PayBounty',
+            'Attack', 'Brawl',
+            'Follow', 'FollowPlayer', 'ComeCloser',
+            'IncreaseWalkSpeed', 'DecreaseWalkSpeed',
+            'GiveItemTo', 'GiveGoldTo',
+            'OpenInventory', 'OpenInventory2',
+            'Toast',
+            'Inspect', 'InspectSurroundings', 'CheckInventory', 'TakeASeat', 'GoToSleep', 'TravelTo', 'ReturnBackHome',
+        ];
+        $GLOBALS['FUNCTIONS'] = [];
+        $GLOBALS['TEST_FUNCTION_CODE_MAP'] = [];
+        foreach (array_merge($legacyCodes, ['KeepAction']) as $codeName) {
+            $GLOBALS['FUNCTIONS'][] = [
+                'name' => $codeName,
+                'description' => $codeName,
+                'parameters' => ['type' => 'object', 'properties' => [], 'required' => []],
+            ];
+            $GLOBALS['TEST_FUNCTION_CODE_MAP'][$codeName] = $codeName;
+        }
+        $GLOBALS['ENABLED_FUNCTIONS'] = array_merge($legacyCodes, ['KeepAction']);
+        $GLOBALS['BASE_FUNCTIONS'] = [];
+        $GLOBALS['F_NAMES'] = [];
+        $GLOBALS['F_TRANSLATIONS'] = [];
+        $GLOBALS['F_RETURNMESSAGES'] = [];
+        $GLOBALS['HERIKA_ACTION_GROUP_CUSTOM_CODE_SET'] = [];
+
+        try {
+            $this->assertSame(9, herikaActionGroupsApplyToRuntime());
+            $this->assertCount(11, $GLOBALS['FUNCTIONS']);
+            $this->assertContains('KeepAction', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertContains('Handle_Crime', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertContains('Start_Combat', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertContains('Follow', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertContains('Set_Pace', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertContains('Give', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertContains('Exchange', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertNotContains('Perform_Gesture', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertContains('Toast', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertArrayNotHasKey('GroupedGesture', herikaActionGroupsGetSpecs());
+            $this->assertNotContains('Attack', array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertNotContains('GiveGoldTo', $GLOBALS['ENABLED_FUNCTIONS']);
+            $this->assertContains('GroupedGive', $GLOBALS['ENABLED_FUNCTIONS']);
+            $this->assertSame(
+                ['follow_actor', 'follow_player', 'approach_player'],
+                $GLOBALS['BASE_FUNCTIONS']['GroupedFollow']['parameters']['properties']['mode']['enum']
+            );
+            $this->assertSame(
+                ['mode'],
+                array_keys($GLOBALS['BASE_FUNCTIONS']['GroupedSetPace']['parameters']['properties'])
+            );
+            $this->assertFalse($GLOBALS['BASE_FUNCTIONS']['GroupedSetPace']['parameters']['additionalProperties']);
+        } finally {
+            foreach ($previousGlobals as $globalName => $previous) {
+                if ($previous['exists']) {
+                    $GLOBALS[$globalName] = $previous['value'];
+                } else {
+                    unset($GLOBALS[$globalName]);
+                }
+            }
+        }
+    }
+
+    public function testCustomizedVanillaActionsRemainIndividual(): void
+    {
+        $GLOBALS['FUNCTIONS'] = [
+            ['name' => 'IncreaseWalkSpeed', 'description' => '', 'parameters' => []],
+            ['name' => 'DecreaseWalkSpeed', 'description' => '', 'parameters' => []],
+        ];
+        $GLOBALS['ENABLED_FUNCTIONS'] = ['IncreaseWalkSpeed', 'DecreaseWalkSpeed'];
+        $GLOBALS['TEST_FUNCTION_CODE_MAP'] = ['IncreaseWalkSpeed' => 'IncreaseWalkSpeed', 'DecreaseWalkSpeed' => 'DecreaseWalkSpeed'];
+        $GLOBALS['HERIKA_ACTION_GROUP_CUSTOM_CODE_SET'] = ['DecreaseWalkSpeed' => true];
+
+        try {
+            $this->assertSame(0, herikaActionGroupsApplyToRuntime());
+            $this->assertSame(['IncreaseWalkSpeed', 'DecreaseWalkSpeed'], array_column($GLOBALS['FUNCTIONS'], 'name'));
+            $this->assertSame(['IncreaseWalkSpeed', 'DecreaseWalkSpeed'], $GLOBALS['ENABLED_FUNCTIONS']);
+        } finally {
+            unset(
+                $GLOBALS['FUNCTIONS'],
+                $GLOBALS['ENABLED_FUNCTIONS'],
+                $GLOBALS['TEST_FUNCTION_CODE_MAP'],
+                $GLOBALS['HERIKA_ACTION_GROUP_CUSTOM_CODE_SET']
+            );
+        }
+    }
+
+    public function testVanillaActionGroupsResolveLegacyCodesAndPayloads(): void
+    {
+        $GLOBALS['HERIKA_GROUPED_ACTION_SPECS'] = herikaActionGroupsGetSpecs();
+
+        try {
+            foreach ([['GroupedObserve','actor','Inspect','Lydia'], ['GroupedObserve','surroundings','InspectSurroundings',''], ['GroupedObserve','inventory','CheckInventory',''], ['GroupedRest','sit','TakeASeat',''], ['GroupedRest','sleep','GoToSleep',''], ['GroupedTravel','destination','TravelTo','Whiterun'], ['GroupedTravel','home','ReturnBackHome','']] as [$group,$mode,$legacy,$target]) {
+                $resolved = herikaActionGroupsResolveExecution($group, ['mode'=>$mode,'target'=>$target]);
+                $this->assertTrue($resolved['valid']);
+                $this->assertSame($legacy, $resolved['code_name']);
+                $this->assertSame($target, $resolved['parameter_value']);
+            }
+            $this->assertSame('potions', herikaActionGroupsResolveExecution('GroupedObserve', ['mode'=>'inventory','item'=>'potions'])['parameter_value']);
+            $this->assertFalse(herikaActionGroupsResolveExecution('GroupedObserve', ['mode'=>'actor'])['valid']);
+            $this->assertFalse(herikaActionGroupsResolveExecution('GroupedTravel', ['mode'=>'destination'])['valid']);
+            $this->assertFalse(herikaActionGroupsResolveExecution('GroupedRest', ['mode'=>'relax'])['valid']);
+            $GLOBALS['HERIKA_GROUPED_ACTION_SPECS']['GroupedObserve']['variants'] = ['inventory'=>'CheckInventory'];
+            $this->assertFalse(herikaActionGroupsResolveExecution('GroupedObserve', ['mode'=>'actor','target'=>'Lydia'])['valid']);
+            $GLOBALS['HERIKA_GROUPED_ACTION_SPECS']['GroupedObserve'] = herikaActionGroupsGetSpecs()['GroupedObserve'];
+
+            $this->assertContains('Relax', herikaGetRetiredActionCodes());
+            $this->assertFalse(herikaActionCatalogRowIsAvailableInCurrentMode(['code_name'=>'Relax','available_to_npc'=>true,'is_activated'=>true]));
+
+            $combat = herikaActionGroupsResolveExecution('GroupedStartCombat', [
+                'target' => 'Bandit',
+                'mode' => 'brawl',
+            ]);
+            $this->assertTrue($combat['valid']);
+            $this->assertSame('Brawl', $combat['code_name']);
+            $this->assertSame('Bandit', $combat['parameter_value']);
+
+            $crime = herikaActionGroupsResolveExecution('GroupedHandleCrime', [
+                'mode' => 'add_bounty',
+                'item' => 'Custom',
+                'amount' => 250,
+            ]);
+            $this->assertTrue($crime['valid']);
+            $this->assertSame('AddBounty', $crime['code_name']);
+            $this->assertSame('Custom@250', $crime['parameter_value']);
+
+            $gold = herikaActionGroupsResolveExecution('GroupedGive', [
+                'mode' => 'gold',
+                'target' => 'Player',
+                'amount' => 25,
+            ]);
+            $this->assertTrue($gold['valid']);
+            $this->assertSame('GiveGoldTo', $gold['code_name']);
+            $this->assertSame(['target' => 'Player', 'item' => '25'], $gold['parameter_value']);
+
+            $gift = herikaActionGroupsResolveExecution('GroupedExchange', ['mode' => 'receive_gift']);
+            $this->assertTrue($gift['valid']);
+            $this->assertSame('OpenInventory2', $gift['code_name']);
+
+            $pace = herikaActionGroupsResolveExecution('GroupedSetPace', ['mode' => 'slower']);
+            $this->assertTrue($pace['valid']);
+            $this->assertSame('DecreaseWalkSpeed', $pace['code_name']);
+            $this->assertSame('', $pace['parameter_value']);
+
+            $gesture = herikaActionGroupsResolveExecution('GroupedGesture', ['mode' => 'toast']);
+            $this->assertNull($gesture);
+            $this->assertContains('Drink', herikaGetRetiredActionCodes());
+            $this->assertFalse(herikaActionCatalogRowIsAvailableInCurrentMode(['code_name'=>'Drink','available_to_npc'=>true,'is_activated'=>true]));
+
+            $legacyFollow = herikaActionGroupsResolveExecution('GroupedFollow', ['target' => 'Lydia']);
+            $this->assertTrue($legacyFollow['valid']);
+            $this->assertSame('Follow', $legacyFollow['code_name']);
+            $this->assertSame('Lydia', $legacyFollow['parameter_value']);
+
+            $invalidFollow = herikaActionGroupsResolveExecution('GroupedFollow', ['mode' => 'follow_actor']);
+            $this->assertFalse($invalidFollow['valid']);
+            $this->assertContains('target', $invalidFollow['missing_required']);
+
+            $missingGoldAmount = herikaActionGroupsResolveExecution('GroupedGive', [
+                'mode' => 'gold',
+                'target' => 'Player',
+            ]);
+            $this->assertFalse($missingGoldAmount['valid']);
+            $this->assertContains('amount', $missingGoldAmount['missing_required']);
+
+            $inventoryGold = herikaActionGroupsResolveExecution('GroupedGive', [
+                'mode' => 'item',
+                'target' => 'Player',
+                'item' => 'Gold',
+            ]);
+            $this->assertTrue($inventoryGold['valid']);
+            $this->assertSame('GiveItemTo', $inventoryGold['code_name']);
+
+            $invalidCrime = herikaActionGroupsResolveExecution('GroupedHandleCrime', [
+                'mode' => 'add_bounty',
+                'item' => 'Loitering',
+            ]);
+            $this->assertFalse($invalidCrime['valid']);
+            $this->assertContains('valid item', $invalidCrime['missing_required']);
+
+            $missingFollowMode = herikaActionGroupsResolveExecution('GroupedFollow', []);
+            $this->assertFalse($missingFollowMode['valid']);
+            $this->assertContains('mode', $missingFollowMode['missing_required']);
+        } finally {
+            unset($GLOBALS['HERIKA_GROUPED_ACTION_SPECS']);
         }
     }
 }

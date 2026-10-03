@@ -947,7 +947,14 @@ class openrouterjson
     {
         return $this->recoveryStatus;
     }
+    
 
+    private $privateThoughtFinishReason = null;
+
+    public function hasCompletedPrivateThoughtResponse(): bool
+    {
+        return $this->privateThoughtFinishReason === 'stop';
+    }
 
     public function process()
     {
@@ -973,8 +980,11 @@ class openrouterjson
             Logger::error("Error response from LLM: $line");
             return -1;
         }
-
-        $data = json_decode(substr($line, 6), true);
+        
+        $data=json_decode(substr($line, 6), true);
+        if (isset($data['choices'][0]['finish_reason'])) {
+            $this->privateThoughtFinishReason = $data['choices'][0]['finish_reason'];
+        }
 
         if ($this->_is_reasoning)
             $buffer_preamble = 4096; // some reasoning models output CoT part before JSON

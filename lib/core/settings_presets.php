@@ -73,6 +73,7 @@ function chimSettingsPresetDefaultProfileOverrides(): array
         'AUTO_DIARY_WAIT_ENABLED' => false,
         'MATERIALIZE_DIARY_ENABLED' => false,
         'LATEST_DIARY_CONTEXT_ENABLED' => false,
+        'PRIVATE_NPC_THOUGHTS_ENABLED' => false,
         'LLM_RANDOMIZER_ENABLED' => false,
     ] + chimSettingsPresetDefaultProfileRuntimeValues();
 }
@@ -107,6 +108,7 @@ function chimProfileSettingsPresetBuiltIns(): array
         'AUTO_DIARY_WAIT_ENABLED' => false,
         'MATERIALIZE_DIARY_ENABLED' => false,
         'LATEST_DIARY_CONTEXT_ENABLED' => false,
+        'PRIVATE_NPC_THOUGHTS_ENABLED' => false,
         'LLM_RANDOMIZER_ENABLED' => false,
     ] + chimSettingsPresetLocalProfileRuntimeValues();
 
@@ -532,6 +534,7 @@ function chimProfileSettingsPresetNormalizeSnapshot(array $snapshot): array
     $values = array_intersect_key($values, array_flip(chimProfileSettingsPresetManagedValueKeys()));
 
     $rawOverrides = (array)($snapshot['profile_overrides'] ?? []);
+    unset($rawOverrides['PRIVATE_NPC_THOUGHTS_COUNT']); // Retired: thoughts follow the selected dialogue events.
     $unknownOverrides = array_diff(array_keys($rawOverrides), chimProfileSettingsPresetManagedOverrideKeys());
     if ($unknownOverrides) {
         throw new InvalidArgumentException('Unknown profile preset setting: ' . (string)reset($unknownOverrides));

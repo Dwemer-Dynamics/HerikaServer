@@ -1136,6 +1136,11 @@ function getDynamicProfileHistoryData($npcName) {
         $dynamicProfileContextHistory = $GLOBALS["CONTEXT_HISTORY"];
     }
     
+    require_once __DIR__ . '/npc_private_thoughts.php';
+    if (chimPrivateThoughtOwner($npcName)) {
+        $history = DataLastDataExpandedFor($npcName, -$dynamicProfileContextHistory);
+        return implode("\n", array_column($history, 'content'));
+    }
     foreach (json_decode(DataSpeechJournal($npcName, $dynamicProfileContextHistory), true) as $element) {
         $listenerName = trim((string)($element["listener"] ?? ""));
         $speakerName = trim((string)($element["speaker"] ?? ""));
