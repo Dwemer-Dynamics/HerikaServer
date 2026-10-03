@@ -8552,6 +8552,16 @@ if ($checkVersion("bgl_letters") < 20260924001) {
     Logger::info("Applied patch bgl_letters 20260924001");
 }
 
+// The courier is addressed by reference ID: CHIM's real-names system renames spawned actors.
+if ($checkVersion("bgl_letters") < 20260929001) {
+    Logger::debug("Applying bgl_letters 20260929001 - store the courier's reference ID");
+
+    $db->execQuery("ALTER TABLE public.bgl_letters ADD COLUMN IF NOT EXISTS courier_refid varchar");
+
+    $updateVersion("bgl_letters", 20260929001);
+    Logger::info("Applied patch bgl_letters 20260929001");
+}
+
 // Install durable event accounting before refreshing the snapshot schema.
 if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_profile_scheduler.sql')) === false) {
     throw new RuntimeException('Dynamic profile migration failed.');

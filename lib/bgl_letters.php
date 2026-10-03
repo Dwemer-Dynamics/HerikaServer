@@ -575,9 +575,14 @@ function chimLetterBuildCorrespondenceBlock(string $npcName, bool $markDiscussed
 // pipeline stalls for any reason, the letters are "teleported" (collected without a courier).
 // A dismissed courier stays tracked until it is no longer seen, so none are left roaming.
 //
-// courier_state on the lead letter: spawn_requested -> approaching -> departing -> dismissing -> done
+// courier_state on the lead letter:
+//   spawn_requested -> approaching -> departing (farewell) -> leaving (walks off) -> dismissing -> done
+//
+// Like a vanilla courier, it walks up, hands over, walks away and vanishes. It is addressed by its
+// reference ID (from the spawned@ status message), never by name: CHIM's real-names system renames
+// spawned actors (for example "Danwyche Cheval [Letter Carrier]"), which breaks name lookups.
 
-const CHIM_LETTER_ACTIVE_COURIER_STATES = "('spawn_requested', 'approaching', 'departing', 'dismissing')";
+const CHIM_LETTER_ACTIVE_COURIER_STATES = "('spawn_requested', 'approaching', 'departing', 'leaving', 'dismissing')";
 
 function chimLetterMaxEventRowId(): int
 {
@@ -609,6 +614,40 @@ function chimLetterSetCourierState(array $letter, string $state, array $extra = 
         'courier_state' => $state,
         'state_changed_localts' => time(),
     ], $extra));
+}
+
+// Reference ID the plugin reported for the spawn (signed decimal in "spawned@<name>@<formid>"),
+// as 8 hex digits, or '' when no spawn message has arrived yet.
+function chimLetterSpawnedRefId(string $name, int $sinceRowId): string
+{
+    $row = $GLOBALS['db']->fetchOne(
+        'SELECT data FROM eventlog WHERE rowid > $1 AND type = $2 AND position($3 in data) = 1 ORDER BY rowid ASC LIMIT 1',
+        [$sinceRowId, 'status_msg', "spawned@{$name}@"]
+    );
+    if (empty($row['data']) || !preg_match('/@(-?\d+)\s*$/', (string)$row['data'], $m)) {
+        return '';
+    }
+    $value = (int)$m[1];
+    if ($value < 0) {
+        $value += 0x100000000;
+    }
+    return $value > 0 ? sprintf('%08X', $value) : '';
+}
+
+// "0x<refid>" for BackgroundCmd and ScriptProxy, or '' when unknown.
+function chimLetterCourierRef(array $lead): string
+{
+    $refid = preg_replace('/[^0-9A-Fa-f]/', '', (string)($lead['courier_refid'] ?? ''));
+    return $refid !== '' ? '0x' . strtoupper($refid) : '';
+}
+
+// A known place for the courier to walk towards when leaving; it is disabled long before arriving.
+function chimLetterDepartureLocation(): int
+{
+    $row = $GLOBALS['db']->fetchOne(
+        "SELECT formid FROM locations WHERE formid IS NOT NULL AND formid <> 0 ORDER BY random() LIMIT 1"
+    );
+    return (int)($row['formid'] ?? 0);
 }
 
 function chimLetterActiveCourier(): array
@@ -646,44 +685,67 @@ function chimLetterSpawnCourier(array $lead): void
     ]);
 }
 
-// Give the spawned courier a small profile and make sure it is friendly, then walk to the player.
+// Make the spawned courier friendly and send it to the player. It stops on arrival (BackgroundCmd
+// MoveToPlayer uses intent 5, which ends in stayAtPlace without following).
 function chimLetterSendCourierToPlayer(NpcMaster $npcMaster, array $lead): bool
 {
-    $name = $lead['courier_name'];
-    $courier = $npcMaster->getByName($name);
-    $refid = trim((string)($courier['refid'] ?? ''));
-    if (!$courier || $refid === '') {
-        return false; // Registered on a later tick.
+    $ref = chimLetterCourierRef($lead);
+    if ($ref === '') {
+        return false;
     }
 
-    $player = chimLetterPlayerName();
-    $courier['core'] = "{$name}. A courier who carries letters across Skyrim for a small fee.";
-    $courier['npc_static_bio'] = "{$name} is a courier. They collect sealed letters from travelers and deliver them anywhere in Skyrim.";
-    $courier['speechstyle'] = 'Brisk, polite and practical, like someone with many more letters to deliver today.';
-    $courier['goals'] = "Collect sealed letters from {$player}, take the courier fee, promise delivery, then leave. Never fight.";
-    $npcMaster->updateByArray($courier);
+    // Give the courier a small persona when CHIM has registered it; purely cosmetic.
+    $name = (string)$lead['courier_name'];
+    $courier = $npcMaster->getByName($name);
+    if ($courier) {
+        $player = chimLetterPlayerName();
+        $courier['core'] = "{$name}. A courier who carries letters across Skyrim for a small fee.";
+        $courier['npc_static_bio'] = "{$name} is a courier. They collect sealed letters from travelers and deliver them anywhere in Skyrim.";
+        $courier['speechstyle'] = 'Brisk, polite and practical, like someone with many more letters to deliver today.';
+        $courier['goals'] = "Collect sealed letters from {$player}, take the courier fee, promise delivery, then leave. Never fight.";
+        $npcMaster->updateByArray($courier);
+    }
 
     $builder = new SkyrimCommandBuilder();
-    $builder->send($builder->Actor->RemoveFromAllFactions("0x{$refid}"));
-    $builder->send($builder->Actor->AddToFaction("0x{$refid}", '0x0001dd09')); // WEPlayerFriend
-    $builder->send($builder->Actor->SetFactionRank("0x{$refid}", '0x0001dd09', 1));
+    $builder->send($builder->Actor->RemoveFromAllFactions($ref));
+    $builder->send($builder->Actor->AddToFaction($ref, '0x0001dd09')); // WEPlayerFriend
+    $builder->send($builder->Actor->SetFactionRank($ref, '0x0001dd09', 1));
 
     $marker = chimLetterMaxEventRowId();
-    chimLetterQueueCommand("rolecommand|moveToPlayer@{$name}@letter{$lead['id']}@7");
+    chimLetterQueueCommand("rolecommand|BackgroundCmd@{$ref}@MoveToPlayer");
     chimLetterSetCourierState($lead, 'approaching', ['courier_event_rowid' => $marker]);
     return true;
 }
 
-// Send Despawn and keep watching; chimLetterCourierTick re-sends it while the courier is still seen.
+// After the farewell, walk away like a vanilla courier. TravelTo resets the courier's packages first.
+function chimLetterSendCourierAway(array $lead): void
+{
+    $ref = chimLetterCourierRef($lead);
+    $destination = chimLetterDepartureLocation();
+    if ($ref !== '' && $destination !== 0) {
+        chimLetterQueueCommand("rolecommand|BackgroundCmd@{$ref}@TravelTo/{$destination}");
+    }
+    chimLetterSetCourierState($lead, 'leaving');
+}
+
+// Remove the courier from the world: fade out and disable by reference ID, with the name-based
+// Despawn as a fallback. chimLetterCourierTick repeats this while the courier is still seen.
 function chimLetterDismissCourier(array $lead): void
 {
+    $ref = chimLetterCourierRef($lead);
     $name = (string)($lead['courier_name'] ?? '');
-    if ($name === '') {
+    if ($ref === '' && $name === '') {
         chimLetterSetCourierState($lead, 'done');
         return;
     }
     $marker = chimLetterMaxEventRowId();
-    chimLetterQueueCommand("rolecommand|Despawn@{$name}@0");
+    if ($ref !== '') {
+        $builder = new SkyrimCommandBuilder();
+        $builder->send($builder->ObjectReference->Disable($ref, true));
+    }
+    if ($name !== '') {
+        chimLetterQueueCommand("rolecommand|Despawn@{$name}@0");
+    }
     chimLetterSetCourierState($lead, 'dismissing', [
         'courier_event_rowid' => $marker,
         'courier_attempts' => (int)($lead['courier_attempts'] ?? 0) + 1,
@@ -745,10 +807,11 @@ function chimLetterCourierTick(NpcMaster $npcMaster): void
         $marker = (int)($active['courier_event_rowid'] ?? 0);
 
         if ($state === 'spawn_requested') {
-            if (chimLetterEventSeen('status_msg', "spawned@{$name}@", $marker)) {
-                if (!chimLetterSendCourierToPlayer($npcMaster, $active) && $age > $timeout) {
-                    chimLetterTeleportAndDismiss($active, 'Courier spawned but never registered');
-                }
+            $refid = chimLetterSpawnedRefId($name, $marker);
+            if ($refid !== '') {
+                $active['courier_refid'] = $refid;
+                chimLetterUpdate((int)$active['id'], ['courier_refid' => $refid]);
+                chimLetterSendCourierToPlayer($npcMaster, $active);
             } elseif ($age > $timeout) {
                 // It may still appear late; dismissing keeps watching for it.
                 chimLetterTeleportAndDismiss($active, 'Courier did not spawn in time');
@@ -775,8 +838,13 @@ function chimLetterCourierTick(NpcMaster $npcMaster): void
                 chimLetterTeleportAndDismiss($active, 'Courier never reached the player');
             }
         } elseif ($state === 'departing') {
-            // Leave time for the farewell line before the courier vanishes.
-            if ($age > 40) {
+            // Leave time for the farewell line, then walk away.
+            if ($age > 12) {
+                chimLetterSendCourierAway($active);
+            }
+        } elseif ($state === 'leaving') {
+            // Vanish once it has had a head start, like a vanilla courier leaving the scene.
+            if ($age > 20) {
                 chimLetterDismissCourier($active);
             }
         } elseif ($state === 'dismissing') {

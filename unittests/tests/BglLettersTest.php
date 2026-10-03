@@ -17,6 +17,8 @@ final class BglLettersFakeDb
     public array $activeCourier = [];
     public bool $stale = false;
     public int $sentToday = 0;
+    public string $spawnedData = '';
+    public int $locationFormId = 0;
     public array $seenEvents = [];
     public array $inserts = [];
     public array $updates = [];
@@ -58,6 +60,12 @@ final class BglLettersFakeDb
         }
         if (str_contains($query, 'MAX(rowid)')) {
             return ['r' => '500'];
+        }
+        if (str_contains($query, 'SELECT data FROM eventlog')) {
+            return $this->spawnedData !== '' ? ['data' => $this->spawnedData] : [];
+        }
+        if (str_contains($query, 'FROM locations')) {
+            return $this->locationFormId ? ['formid' => (string)$this->locationFormId] : [];
         }
         if (str_contains($query, 'position($3 in data)')) {
             foreach ($this->seenEvents as [$type, $needle]) {
@@ -146,13 +154,65 @@ final class BglLettersTest extends TestCase
         }
     }
 
-    private function lead(string $state, int $age, int $attempts = 0): array
+    private function lead(string $state, int $age, int $attempts = 0, string $refid = ''): array
     {
         return [
             'id' => 12, 'npc_name' => 'Lydia', 'fee' => 10, 'status' => 'awaiting_courier',
             'courier_state' => $state, 'courier_name' => 'Letter Carrier', 'courier_event_rowid' => 400,
-            'courier_attempts' => $attempts, 'state_changed_localts' => time() - $age,
+            'courier_attempts' => $attempts, 'state_changed_localts' => time() - $age, 'courier_refid' => $refid,
         ];
+    }
+
+    // ─── Courier: addressed by reference ID, stops on arrival, walks off, vanishes ──
+
+    public function testSpawnedCourierIsTrackedByReferenceIdAndStopsOnArrival(): void
+    {
+        $this->db->activeCourier = $this->lead('spawn_requested', 5);
+        // Real plugin message; the actor is renamed right after ("Danwyche Cheval [Letter Carrier]").
+        $this->db->spawnedData = 'spawned@Letter Carrier@-16748400';
+
+        chimLetterCourierTick(new NpcMaster());
+
+        $this->assertSame('FF007090', $this->db->stateOf(12)['courier_refid']);
+        $this->assertSame('approaching', $this->db->stateOf(12)['courier_state']);
+        $actions = $this->db->actionText();
+        $this->assertStringContainsString('rolecommand|BackgroundCmd@0xFF007090@MoveToPlayer', $actions);
+        $this->assertStringNotContainsString('moveToPlayer@', $actions, 'Name-based follow-mode move is gone');
+    }
+
+    public function testCourierWalksAwayAfterTheFarewell(): void
+    {
+        $this->db->activeCourier = $this->lead('departing', 13, 0, 'FF007090');
+        $this->db->locationFormId = 100951;
+
+        chimLetterCourierTick(new NpcMaster());
+
+        $this->assertStringContainsString('rolecommand|BackgroundCmd@0xFF007090@TravelTo/100951', $this->db->actionText());
+        $this->assertSame('leaving', $this->db->stateOf(12)['courier_state']);
+    }
+
+    public function testFarewellIsNotCutShort(): void
+    {
+        $this->db->activeCourier = $this->lead('departing', 5, 0, 'FF007090');
+
+        chimLetterCourierTick(new NpcMaster());
+
+        $this->assertSame([], $this->db->actions());
+    }
+
+    public function testLeavingCourierIsDisabledByReferenceIdWithNameFallback(): void
+    {
+        $this->db->activeCourier = $this->lead('leaving', 21, 0, 'FF007090');
+
+        chimLetterCourierTick(new NpcMaster());
+
+        $actions = $this->db->actionText();
+        $this->assertStringContainsString('rolecommand|ScriptProxy@', $actions);
+        $this->assertStringContainsString('"targetObjectFormId":"0xFF007090"', $actions);
+        $this->assertStringContainsString('rolecommand|Despawn@Letter Carrier@0', $actions);
+        $state = $this->db->stateOf(12);
+        $this->assertSame('dismissing', $state['courier_state']);
+        $this->assertSame(1, $state['courier_attempts']);
     }
 
     // ─── Helpers and meet-up context ─────────────────────────────────────────
