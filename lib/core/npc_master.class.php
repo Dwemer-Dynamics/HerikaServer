@@ -890,13 +890,7 @@ class NpcMaster
         $baseprofileName = $this->npcNameToCodename($baseprofile);
 
         // Check if NPC already exists in DB
-        $escapedName = $this->escape($npcname);
-        $existingRows = $this->db->fetchAll("SELECT * FROM {$this->table} WHERE npc_name = '{$escapedName}' LIMIT 2");
-        if (count($existingRows) > 1) {
-            Logger::warn('[PROFILE_LOOKUP] Ambiguous NPC registration skipped; existing profiles preserved');
-            return;
-        }
-        $existing = $existingRows[0] ?? null;
+        $existing = $this->getByName($npcname);
 
         if ($existing && ! $overwrite) {
             // Profile exists, and no overwrite requested
