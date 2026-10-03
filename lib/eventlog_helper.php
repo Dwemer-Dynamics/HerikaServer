@@ -28,7 +28,6 @@ if (!function_exists('chimGetVisibleEventLogExcludedTypes')) {
             'status_msg',
             'region',
             'ext_nsfw_physics_raw',
-            'relationship',
         ];
     }
 }

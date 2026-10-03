@@ -322,6 +322,7 @@ function chimNpcManagerHistory(array $input): array
         'goodmorning',
         'ginputtext',
         'death',
+        'relationship',
         'combatendmighty',
         'combatend',
     ];
