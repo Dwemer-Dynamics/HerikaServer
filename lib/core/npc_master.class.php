@@ -1450,7 +1450,8 @@ class NpcMaster
         }
         //error_log("[NPC BACKUP] Backup of {$npc["npc_name"]} ".print_r($npc,true));
         // Remove the original 'id' field, since the history table likely has its own auto-increment ID
-        unset($npc['id']);
+        // Profile ownership is administrative state and has no history-table column.
+        unset($npc['id'], $npc['profile_owner_npc_id']);
 
         // Add a reference to the original NPC ID
         $npc['npc_id'] = $id;
