@@ -61,6 +61,8 @@ function chimPortableGlobalFields(): array
         'AUTOFILL_CUSTOM_PROFILES' => 'boolean',
         'AUTOFILL_CUSTOM_PROFILES_TRIGGER' => 'integer',
         'BGL_TRIGGER_HOURS' => 'number',
+        'BGL_AUTO_ENROLL_ENABLED' => 'boolean',
+        'BGL_AUTO_ENROLL_EVENT_THRESHOLD' => 'integer',
         'END_CONVERSATION_COOLDOWN' => 'integer',
         'CHIM_AI_QUEST_PROGRESSION' => 'boolean',
         'CHIM_PLAYER_ONLY_QUEST_ADVANCEMENT' => 'boolean',

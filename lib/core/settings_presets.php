@@ -20,6 +20,8 @@ function chimSettingsPresetDefaultGlobalSettings(): array
         'FEATURES@MEMORY_EMBEDDING@ENABLED' => true,
         'AUTOFILL_CUSTOM_PROFILES' => true,
         'BGL_TRIGGER_HOURS' => 24,
+        'BGL_AUTO_ENROLL_ENABLED' => false,
+        'BGL_AUTO_ENROLL_EVENT_THRESHOLD' => 200,
         'CHIM_AI_QUEST_PROGRESSION' => false,
         'DETECT_MAGIC_EVENT' => true,
         'GROUND_ITEMS_DESCRIPTIONS_ONLY' => false,

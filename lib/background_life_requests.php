@@ -134,15 +134,66 @@ function chimBglUpdateNpcSetting(NpcMaster $npcMaster, array $npc, string $setti
     return $status;
 }
 
-// Toggle Background Life enrollment without replacing other extended metadata.
-function chimBglSetEnabled(NpcMaster $npcMaster, array $npc, bool $enabled): array
-{
-    $extendedData = $npcMaster->getExtendedData($npc);
-    $extendedData['background_life_enabled'] = $enabled;
-    $npc = $npcMaster->setExtendedData($npc, $extendedData);
-    $npcMaster->updateByArray($npc);
+// Marks an explicit user removal. A missing enrollment key is the normal default.
+const CHIM_BGL_AUTO_ENROLL_OPT_OUT = 'background_life_auto_enroll_opt_out';
 
-    $updatedNpc = $npcMaster->getById((int)$npc['id']);
+// Treat malformed legacy extended data as empty, matching NpcMaster::getExtendedData().
+function chimBglExtendedDataSql(): string
+{
+    return "CASE WHEN jsonb_typeof(extended_data) = 'object' THEN extended_data ELSE '{}'::jsonb END";
+}
+
+// Toggle Background Life enrollment. Removal by the user blocks automatic enrollment until
+// the user adds the NPC again. Only these keys are merged, so concurrent relationship,
+// schedule and per-NPC setting writes are preserved.
+// Passing $automaticGamets marks an automatic add: the gates are rechecked under the row lock,
+// the first scheduled update waits a full trigger period, and null is returned when another
+// decision won the race. Explicit calls always return the saved status or throw.
+function chimBglSetEnabled(NpcMaster $npcMaster, array $npc, bool $enabled, ?int $automaticGamets = null): ?array
+{
+    $npcId = (int)($npc['id'] ?? 0);
+    if ($npcId <= 0) {
+        throw new InvalidArgumentException('NPC is required');
+    }
+    $automatic = $automaticGamets !== null;
+    if ($automatic && !$enabled) {
+        throw new InvalidArgumentException('Automatic enrollment can only add NPCs');
+    }
+
+    $extended = chimBglExtendedDataSql();
+    $patch = $enabled
+        ? ['background_life_enabled' => true]
+        : ['background_life_enabled' => false, CHIM_BGL_AUTO_ENROLL_OPT_OUT => true];
+    $params = [$npcId, CHIM_BGL_AUTO_ENROLL_OPT_OUT, json_encode($patch)];
+    if ($automatic) {
+        $set = "{$extended} || \$3::jsonb
+             || CASE WHEN \$4::numeric > 0 AND NOT (({$extended}) ? 'background_life_last_updated')
+                THEN jsonb_build_object('background_life_last_updated', \$4::numeric)
+                ELSE '{}'::jsonb END";
+        $gates = "
+           AND COALESCE(jsonb_typeof(({$extended})->'background_life_enabled'), 'null') = 'null'
+           AND lower(COALESCE(({$extended})->>\$2::text, 'false')) NOT IN ('true', '1', 't', 'on')
+           AND lower(COALESCE(metadata->'stats'->>'is_dead', 'false')) NOT IN ('true', '1', 't')";
+        $params[] = max(0, $automaticGamets);
+    } else {
+        $set = "({$extended} - \$2::text) || \$3::jsonb";
+        $gates = '';
+    }
+    $saved = $GLOBALS['db']->fetchOne(
+        "UPDATE core_npc_master
+         SET extended_data = {$set}
+         WHERE id = \$1{$gates}
+         RETURNING id",
+        $params
+    );
+    if ((int)($saved['id'] ?? 0) !== $npcId) {
+        if ($automatic) {
+            return null;
+        }
+        throw new RuntimeException('Could not save Background Life enrollment');
+    }
+
+    $updatedNpc = $npcMaster->getById($npcId);
     if (!is_array($updatedNpc)) {
         throw new RuntimeException('Could not read saved Background Life enrollment');
     }
@@ -153,6 +204,147 @@ function chimBglSetEnabled(NpcMaster $npcMaster, array $npc, bool $enabled): arr
     }
 
     return $status;
+}
+
+// Known animal and summon races. Display names and editor IDs (WolfRace) are matched by word.
+function chimBglAutoEnrollRaceExcluded(string $race): bool
+{
+    $words = strtolower(preg_replace('/(?<=[a-z])(?=[A-Z])/', ' ', trim($race)) ?? '');
+    if ($words === '') {
+        return false;
+    }
+
+    return preg_match(
+        '/\b(?:dog|wolf|wolves|horse|bear|sabre ?cat|saber ?cat|skeever|spider|chaurus|deer|elk|fox|goat|cow|'
+        . 'chicken|hare|rabbit|mudcrab|slaughterfish|horker|mammoth|troll|boar|death ?hound|husky|'
+        . 'atronach|familiar|spectral|conjured|summoned|wisp)s?\b/',
+        $words
+    ) === 1;
+}
+
+// Bookkeeping, imports, initial profile data and audits are not shared experience.
+function chimBglAutoEnrollExcludedEventTypes(): array
+{
+    require_once __DIR__ . DIRECTORY_SEPARATOR . 'eventlog_helper.php';
+
+    return array_values(array_unique(array_merge(chimGetVisibleEventLogExcludedTypes(), [
+        'bored', 'combatbark', 'npc_snapshot', 'setconf', 'relationship', 'updateprofile',
+        'updateprofile_narrator', 'updateprofiles_batch_async', 'updateprofiles_batch_async_manual',
+    ])));
+}
+
+// Count distinct visible events with the NPC as a recorded participant, stopping at the limit.
+// Rows sharing an utterance ID are one spoken line. Only confirmed lines count: emitted lines
+// may still abort, and pending, aborted or failed lines never reached the game. Rows without
+// a delivery state are events or lines recorded before delivery tracking, so they count.
+// Matching rows are read oldest first in rowid batches no larger than the keys still needed,
+// so reaching the limit stops early and at most $limit keys are held. The exact participant
+// test runs outside the indexed prefilter, only until a batch is full. Below the limit every
+// matching row is still read.
+function chimBglCountAutoEnrollEvents($db, string $npcName, int $limit, int $maxBatch = 5000): int
+{
+    require_once __DIR__ . DIRECTORY_SEPARATOR . 'eventlog_helper.php';
+
+    $npcName = trim($npcName);
+    if ($npcName === '' || $limit <= 0) {
+        return 0;
+    }
+
+    $types = implode(', ', array_map(static function (string $type) use ($db): string {
+        return "'" . $db->escape($type) . "'";
+    }, chimBglAutoEnrollExcludedEventTypes()));
+    // The substring test lets the people trigram index narrow rows before the exact participant match.
+    $peopleLike = $db->escape('%' . addcslashes($npcName, '%_\\') . '%');
+    $participant = chimBuildNpcEventLogPeopleWhereClause($db, $npcName);
+
+    $maxBatch = max(1, min(5000, $maxBatch));
+    $seen = [];
+    $afterRowid = 0;
+    do {
+        $batchSize = min($maxBatch, max(100, $limit - count($seen)));
+        // OFFSET 0 keeps the participant test out of the subquery, so it is evaluated lazily.
+        $rows = $db->fetchAll(
+            "SELECT rowid, utterance_id
+             FROM (
+                SELECT rowid, utterance_id, people
+                FROM eventlog
+                WHERE rowid > {$afterRowid}
+                  AND gamets > 0
+                  AND type NOT IN ({$types})
+                  AND COALESCE(NULLIF(delivery_state, ''), 'spoken') = 'spoken'
+                  AND people ILIKE '{$peopleLike}'
+                ORDER BY rowid
+                OFFSET 0
+             ) candidates
+             WHERE {$participant}
+             ORDER BY rowid
+             LIMIT {$batchSize}"
+        ) ?: [];
+        foreach ($rows as $row) {
+            $afterRowid = (int)$row['rowid'];
+            $utteranceId = (string)($row['utterance_id'] ?? '');
+            // Distinct prefixes keep an utterance ID from matching a row-only key.
+            $seen[$utteranceId !== '' ? 'u:' . $utteranceId : 'r:' . $afterRowid] = true;
+            if (count($seen) >= $limit) {
+                return $limit;
+            }
+        }
+    } while (count($rows) === $batchSize);
+
+    return count($seen);
+}
+
+// Enroll the speaker after a delivered reply to the player once enough shared events exist.
+// Returns true only when this call enrolled the NPC; repeated or racing calls are no-ops.
+function chimBglMaybeAutoEnroll($db, string $npcName, int $gamets = 0): bool
+{
+    if (!chimGetBackgroundLifeAutoEnrollEnabled()) {
+        return false;
+    }
+
+    $npcName = trim($npcName);
+    $playerName = trim((string)($GLOBALS['PLAYER_NAME'] ?? ''));
+    if ($npcName === '' || strcasecmp($npcName, 'The Narrator') === 0
+        || ($playerName !== '' && strcasecmp($npcName, $playerName) === 0)) {
+        return false;
+    }
+
+    // Same-name records are ambiguous until actor identity uses RefIDs; leave them to manual enrollment.
+    $rows = $db->fetchAll(
+        "SELECT id, race, extended_data, metadata->'stats'->>'is_dead' AS is_dead
+         FROM core_npc_master
+         WHERE npc_name = " . $db->escapeLiteral($npcName) . "
+         LIMIT 2"
+    );
+    if (count($rows) !== 1) {
+        return false;
+    }
+
+    // Any stored enrollment value, including a removal made before the opt-out marker existed,
+    // is a user decision. Only NPCs that have never been enrolled are considered.
+    $npc = $rows[0];
+    $extendedData = json_decode((string)($npc['extended_data'] ?? ''), true);
+    $extendedData = is_array($extendedData) ? $extendedData : [];
+    if (isset($extendedData['background_life_enabled'])
+        || chimBglBoolean($extendedData[CHIM_BGL_AUTO_ENROLL_OPT_OUT] ?? false)
+        || chimBglBoolean($npc['is_dead'] ?? false)
+        || chimBglAutoEnrollRaceExcluded((string)($npc['race'] ?? ''))) {
+        return false;
+    }
+
+    $threshold = chimGetBackgroundLifeAutoEnrollThreshold();
+    if (chimBglCountAutoEnrollEvents($db, $npcName, $threshold) < $threshold) {
+        return false;
+    }
+
+    // The shared setter rechecks the gates under the row lock. Actions, Letters and combat
+    // keep their off defaults.
+    if (chimBglSetEnabled(new NpcMaster(), $npc, true, max(0, $gamets)) === null) {
+        return false;
+    }
+
+    Logger::info("[BGL] Automatically enrolled {$npcName} after {$threshold} recorded events");
+    return true;
 }
 
 // Resolve the CLI interpreter when PHP is running under Apache rather than CLI.
