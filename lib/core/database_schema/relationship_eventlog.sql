@@ -12,6 +12,7 @@ DECLARE
     description text;
     details text;
     target_name text;
+    relationship_label text;
     player_name text;
     event_gamets bigint;
     event_ts bigint := floor(extract(epoch FROM clock_timestamp()));
@@ -59,17 +60,26 @@ BEGIN
         target_name := CASE WHEN lower(target)='player' THEN player_name ELSE target END;
         description := NEW.npc_name || ' → ' || target_name || ': ';
         IF previous_value IS NULL THEN
-            description := description || 'relationship added: ' || current_value::text;
+            relationship_label := CASE lower(current_value->>'type')
+                WHEN 'enemy' THEN 'Now considers them enemies'
+                WHEN 'friend' THEN 'Now considers them friends'
+                ELSE initcap(COALESCE(NULLIF(current_value->>'type',''),'Relationship'))
+            END;
+            description := description || relationship_label || '.';
         ELSIF current_value IS NULL THEN
-            description := description || 'relationship removed: ' || previous_value::text;
+            description := description || 'Relationship removed.';
         ELSIF jsonb_typeof(previous_value)='object' AND jsonb_typeof(current_value)='object' THEN
             details := '';
             FOR field IN SELECT jsonb_object_keys(previous_value) UNION SELECT jsonb_object_keys(current_value)
             LOOP
                 IF previous_value->field IS DISTINCT FROM current_value->field THEN
                     details := details || CASE WHEN details='' THEN '' ELSE '; ' END
-                        || field || ': ' || COALESCE(previous_value->>field,'(unset)')
-                        || ' → ' || COALESCE(current_value->>field,'(unset)');
+                        || CASE field WHEN 'aff' THEN 'Affinity' WHEN 'type' THEN 'Relationship'
+                            WHEN 'note' THEN 'Note' WHEN 'best' THEN 'Best memory'
+                            WHEN 'worst' THEN 'Worst memory' WHEN 'relation' THEN 'Connection'
+                            ELSE initcap(replace(field,'_',' ')) END
+                        || ': ' || COALESCE(previous_value->>field,'none')
+                        || ' → ' || COALESCE(current_value->>field,'none');
                 END IF;
             END LOOP;
             description := description || details;
