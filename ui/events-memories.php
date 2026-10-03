@@ -557,7 +557,35 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
         font-weight: bold;
     }
 
+    .memory-bank-clear {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px 8px;
+        margin: 0;
+    }
+
+    .memory-bank-select {
+        flex: 0 1 260px;
+        min-width: 0;
+        max-width: 100%;
+        padding: 5px 8px;
+        background: #2a2a2a;
+        color: #f8f9fa;
+        border: 1px solid #666;
+        border-radius: 4px;
+        font-size: 0.95em;
+    }
+
+    .memory-bank-clear .btn-base {
+        margin: 0;
+        padding: 5px 11px;
+        font-size: 0.95em;
+        white-space: nowrap;
+    }
+
     /* .btn-base clears the default outline, so restore a visible focus ring. */
+    .memory-bank-select:focus-visible,
     #memory-tab .btn-base:focus-visible {
         outline: 2px solid rgb(242, 124, 17);
         outline-offset: 2px;
@@ -589,6 +617,16 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
             flex: 1 1 auto;
             width: 100%;
             text-align: center;
+        }
+
+        .memory-bank-select {
+            flex: 1 1 180px;
+            padding: 8px;
+        }
+
+        .memory-bank-clear .btn-base {
+            flex: 1 1 100%;
+            padding: 9px 12px;
         }
 
         /* Grows to a full-width touch target alongside the stacked actions
@@ -802,6 +840,59 @@ if (isset($_GET['delete_memory']) && !empty($_GET['delete_memory'])) {
     $rowid = intval($_GET['delete_memory']);
     $db->delete('memory_summary', "rowid = " . $rowid);
     header("Location: events-memories.php?tab=memory&deleted=1");
+    exit;
+}
+
+// Clear NPC Memories removes only summaries owned by one NPC bank (exact scope match).
+// Shared memories, events, diaries and profiles stay; a later sync can rebuild the bank.
+if (empty($_SESSION['memory_bank_csrf'])) {
+    $_SESSION['memory_bank_csrf'] = bin2hex(random_bytes(32));
+}
+$memoryBankCsrfToken = (string)$_SESSION['memory_bank_csrf'];
+
+// Accepts only a named NPC bank; blank and global scopes hold shared memories and are never cleared here.
+function chimIsClearableMemoryScope($scope) {
+    if (!is_string($scope)) {
+        return false;
+    }
+    // Matches the btrim() used to list banks, so every listed bank is clearable.
+    $trimmed = trim($scope, ' ');
+    return $trimmed !== '' && strtolower($trimmed) !== 'global';
+}
+
+if (isset($_POST['clear_npc_memories'])) {
+    $postedToken = $_POST['csrf_token'] ?? null;
+    $postedScope = $_POST['npc_scope'] ?? null;
+    $notice = ['type' => 'error', 'text' => 'Could not clear NPC memories. Reload the page and try again.'];
+
+    if (!is_string($postedToken) || !hash_equals($memoryBankCsrfToken, $postedToken)) {
+        Logger::warn("Clear NPC Memories rejected: invalid CSRF token.");
+    } elseif (!chimIsClearableMemoryScope($postedScope)) {
+        Logger::warn("Clear NPC Memories rejected: invalid NPC bank selection.");
+        $notice['text'] = 'Choose an NPC memory bank to clear.';
+    } else {
+        try {
+            // Count inside PostgreSQL so large banks do not return every deleted row to PHP.
+            $deletedRows = $db->fetchAll(
+                "WITH deleted AS (
+                     DELETE FROM memory_summary WHERE scope = " . $db->escapeLiteral($postedScope) . " RETURNING 1
+                 )
+                 SELECT COUNT(*) AS deleted_count FROM deleted"
+            );
+            $deletedCount = intval($deletedRows[0]['deleted_count'] ?? 0);
+            Logger::info("Clear NPC Memories: removed {$deletedCount} memory summaries from bank " . json_encode($postedScope));
+            if ($deletedCount > 0) {
+                $notice = ['type' => 'success', 'npc' => $postedScope, 'count' => $deletedCount];
+            } else {
+                $notice = ['type' => 'empty', 'npc' => $postedScope];
+            }
+        } catch (Throwable $e) {
+            Logger::error("Clear NPC Memories failed for bank " . json_encode($postedScope) . ": " . $e->getMessage());
+        }
+    }
+
+    $_SESSION['memory_bank_notice'] = $notice;
+    header("Location: events-memories.php?tab=memory");
     exit;
 }
 
@@ -1821,6 +1912,41 @@ function getTimeColor($time) {
                 echo "<div class='memory-notice is-deleted'>Memory summary deleted successfully!</div>";
             }
 
+            $memoryBankNotice = $_SESSION['memory_bank_notice'] ?? null;
+            unset($_SESSION['memory_bank_notice']);
+            if (is_array($memoryBankNotice)) {
+                $noticeNpc = htmlspecialchars((string)($memoryBankNotice['npc'] ?? ''), ENT_QUOTES, 'UTF-8');
+                $noticeType = $memoryBankNotice['type'] ?? 'error';
+                if ($noticeType === 'success') {
+                    $noticeCount = intval($memoryBankNotice['count'] ?? 0);
+                    $noticeText = "Cleared {$noticeCount} " . ($noticeCount === 1 ? 'memory' : 'memories') . " from {$noticeNpc}'s memory bank.";
+                    $noticeClass = 'is-success';
+                } elseif ($noticeType === 'empty') {
+                    $noticeText = "{$noticeNpc}'s memory bank was already empty. Nothing was cleared.";
+                    $noticeClass = 'is-success';
+                } else {
+                    $noticeText = htmlspecialchars((string)($memoryBankNotice['text'] ?? ''), ENT_QUOTES, 'UTF-8');
+                    $noticeClass = 'is-deleted';
+                }
+                echo "<div class='memory-notice {$noticeClass}' role='status'>{$noticeText}</div>";
+            }
+
+            $memoryBanks = [];
+            $memoryBanksUnavailable = false;
+            try {
+                $memoryBanks = $db->fetchAll(
+                    "SELECT scope, COUNT(*) AS memory_count
+                     FROM memory_summary
+                     WHERE scope IS NOT NULL AND btrim(scope) <> '' AND lower(btrim(scope)) <> 'global'
+                     GROUP BY scope
+                     ORDER BY lower(scope), scope"
+                );
+            } catch (Throwable $e) {
+                Logger::error("Memory bank list failed: " . $e->getMessage());
+                $memoryBanksUnavailable = true;
+                echo "<div class='memory-notice is-deleted' role='status'>Could not load NPC memory banks. Reload the page to try again.</div>";
+            }
+
             // Display Memory Configuration Status
             // Get memory settings
             $memoryEnabled = $GLOBALS['FEATURES']['MEMORY_EMBEDDING']['ENABLED'] ?? false;
@@ -1867,6 +1993,24 @@ function getTimeColor($time) {
 
                     <a href="<?php echo $webRoot; ?>/ui/core/config_hub.php?tab=globals" target="_blank" class="btn-base btn-primary memory-status-link">Configure Settings</a>
                 </div>
+
+                <form class="memory-bank-clear" method="post" action="events-memories.php?tab=memory" id="clear-npc-memories-form">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($memoryBankCsrfToken, ENT_QUOTES, 'UTF-8'); ?>">
+                    <input type="hidden" name="clear_npc_memories" value="1">
+                    <label for="clear-npc-memories-select" class="memory-status-label">NPC memory bank</label>
+                    <select id="clear-npc-memories-select" name="npc_scope" class="memory-bank-select"<?php echo empty($memoryBanks) ? ' disabled' : ''; ?>>
+                        <?php if (empty($memoryBanks)): ?>
+                            <option value=""><?php echo $memoryBanksUnavailable ? 'NPC memory banks unavailable' : 'No NPC memory banks'; ?></option>
+                        <?php else: ?>
+                            <option value="">Choose an NPC</option>
+                            <?php foreach ($memoryBanks as $bank): ?>
+                                <?php $bankCount = intval($bank['memory_count'] ?? 0); ?>
+                                <option value="<?php echo htmlspecialchars((string)$bank['scope'], ENT_QUOTES, 'UTF-8'); ?>" data-count="<?php echo $bankCount; ?>"><?php echo htmlspecialchars((string)$bank['scope'], ENT_QUOTES, 'UTF-8'); ?> (<?php echo $bankCount; ?>)</option>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </select>
+                    <button type="submit" id="clear-npc-memories-button" class="btn-base btn-danger" disabled>Clear NPC Memories</button>
+                </form>
 
                 <?php if (!$useText2Vec): ?>
                     <p class="memory-status-warning"><strong>Warning:</strong> TXT2VEC is disabled. Memory embeddings and vector search features are unavailable.</p>
@@ -2078,6 +2222,41 @@ function getTimeColor($time) {
                     window.location.href = 'events-memories.php?tab=memory&delete_memory=' + String(rowid);
                 }
             }
+
+            (function () {
+                const form = document.getElementById('clear-npc-memories-form');
+                const select = document.getElementById('clear-npc-memories-select');
+                const button = document.getElementById('clear-npc-memories-button');
+                if (!form || !select || !button) {
+                    return;
+                }
+
+                const syncButton = function () {
+                    button.disabled = select.disabled || select.value === '';
+                };
+                select.addEventListener('change', syncButton);
+                // Back/forward cache can restore the selection without a change event.
+                window.addEventListener('pageshow', syncButton);
+                syncButton();
+
+                form.addEventListener('submit', function (event) {
+                    const option = select.options[select.selectedIndex];
+                    if (!option || option.value === '') {
+                        event.preventDefault();
+                        return;
+                    }
+                    const count = parseInt(option.getAttribute('data-count') || '0', 10);
+                    const noun = count === 1 ? 'memory' : 'memories';
+                    const message = 'Clear ' + count + ' ' + noun + ' from ' + option.value + "'s memory bank?\n\n"
+                        + 'Only memories owned by this NPC are removed. Shared memories, events, diaries and profiles stay.\n\n'
+                        + 'A later Sync Memory Summaries can rebuild this bank from saved history.';
+                    if (!confirm(message)) {
+                        event.preventDefault();
+                        return;
+                    }
+                    button.disabled = true;
+                });
+            })();
             </script>
             <?php endif; ?>
         </div>
