@@ -532,8 +532,8 @@ class NpcMaster
         }
 
         $escaped = $this->escape($npcName);
-        $query   = "SELECT * FROM {$this->table} WHERE npc_name = '{$escaped}' LIMIT 1";
-        return $this->db->fetchOne($query);
+        $rows = $this->db->fetchAll("SELECT * FROM {$this->table} WHERE npc_name = '{$escaped}' LIMIT 2");
+        return count($rows) === 1 ? $rows[0] : null;
     }
 
     // Read NPC by md5
@@ -545,9 +545,20 @@ class NpcMaster
             return null;
         }
 
-        $escaped = $this->escape($md5Hash);
-        $query   = "SELECT * FROM {$this->table} WHERE md5 = '{$escaped}' LIMIT 1";
-        return $this->db->fetchOne($query);
+        if (!preg_match('/^[a-f0-9]{32}$/i', (string)$md5Hash)) {
+            return null;
+        }
+
+        // Accept legacy clients against identity-migrated data without rewriting either key.
+        // Count all matches so a name hash cannot select one of several same-name actors.
+        $escaped = $this->escape(strtolower($md5Hash));
+        $rows = $this->db->fetchAll("SELECT * FROM {$this->table}
+            WHERE lower(md5) = '{$escaped}'
+               OR md5(npc_name) = '{$escaped}'
+               OR (COALESCE(refid, '') <> ''
+                   AND md5(BTRIM(npc_name) || ' [RefID: ' || upper(refid) || ']') = '{$escaped}')
+            LIMIT 2");
+        return count($rows) === 1 ? $rows[0] : null;
     }
 
     // Read NPC by md5
@@ -879,7 +890,13 @@ class NpcMaster
         $baseprofileName = $this->npcNameToCodename($baseprofile);
 
         // Check if NPC already exists in DB
-        $existing = $this->getByName($npcname);
+        $escapedName = $this->escape($npcname);
+        $existingRows = $this->db->fetchAll("SELECT * FROM {$this->table} WHERE npc_name = '{$escapedName}' LIMIT 2");
+        if (count($existingRows) > 1) {
+            Logger::warn('[PROFILE_LOOKUP] Ambiguous NPC registration skipped; existing profiles preserved');
+            return;
+        }
+        $existing = $existingRows[0] ?? null;
 
         if ($existing && ! $overwrite) {
             // Profile exists, and no overwrite requested
@@ -1450,7 +1467,8 @@ class NpcMaster
         }
         //error_log("[NPC BACKUP] Backup of {$npc["npc_name"]} ".print_r($npc,true));
         // Remove the original 'id' field, since the history table likely has its own auto-increment ID
-        unset($npc['id']);
+        // Profile ownership is administrative state and has no history-table column.
+        unset($npc['id'], $npc['profile_owner_npc_id']);
 
         // Add a reference to the original NPC ID
         $npc['npc_id'] = $id;

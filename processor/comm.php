@@ -230,7 +230,15 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
     /* Restore NPCs state */
 
     $npcMaster = new NpcMaster();
-    $npcMaster->restoreNPC($gameRequest[2]);
+    // Restoring an older save replays persisted relationships, rather than changing them anew.
+    if ($db->execQuery("SELECT set_config('chim.relationship_eventlog_suspended','on',false)") === false) {
+        throw new RuntimeException('Could not suspend relationship audit during save restoration');
+    }
+    try {
+        $npcMaster->restoreNPC($gameRequest[2]);
+    } finally {
+        $db->execQuery("SELECT set_config('chim.relationship_eventlog_suspended','off',false)");
+    }
     Logger::trace("POST INIT PROCESSING " . (time() - $now));
 
     // RELATIONSHIP SYSTEM: Clear async queues on game load (Paradox Prevention)

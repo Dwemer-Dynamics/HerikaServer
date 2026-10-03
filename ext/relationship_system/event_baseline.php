@@ -218,7 +218,7 @@ if (!function_exists('chimRelBuildEventBaseline')) {
             $scanLimit = 3500;
         }
 
-        $excludeTypes = "'prechat','setconf','status_msg','user_input','npc_snapshot','playerinfo'";
+        $excludeTypes = "'relationship','prechat','setconf','status_msg','user_input','npc_snapshot','playerinfo'";
         $safeNpcEscaped = $db->escape($safeNpc);
         $rows = $db->fetchAll(
             "SELECT rowid, type, data, gamets, localts, ts, people, location, private_thought, delivery_state

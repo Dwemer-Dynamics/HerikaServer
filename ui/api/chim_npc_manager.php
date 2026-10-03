@@ -290,6 +290,12 @@ function chimNpcManagerFindNpc(array $input): array
 
 function chimNpcManagerEventRecipients($people): array
 {
+    $storedRecipients = json_decode((string)$people, true);
+    if (is_array($storedRecipients) && array_is_list($storedRecipients)) {
+        $people = implode('|', array_map(static function ($recipient) {
+            return is_array($recipient) && is_string($recipient['name'] ?? null) ? $recipient['name'] : '';
+        }, $storedRecipients));
+    }
     $recipients = [];
     foreach (explode('|', trim((string)$people, '|')) as $recipient) {
         $recipient = trim((string)$recipient);
@@ -322,6 +328,7 @@ function chimNpcManagerHistory(array $input): array
         'goodmorning',
         'ginputtext',
         'death',
+        'relationship',
         'combatendmighty',
         'combatend',
     ];
