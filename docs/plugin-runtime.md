@@ -170,14 +170,14 @@ Choose one route for each server plugin. Both write into `ext/<name>`, but they 
 
 | Route | Package and trigger | Update rule |
 |---|---|---|
-| Plugin Manager catalog | Select a catalog plugin/channel; [ui/server_plugin_installer.php](../ui/server_plugin_installer.php) downloads a `.tar.gz`/`.tar` archive with `manifest.json` at the extracted plugin root. | Uses the catalog/channel manifest and replaces the plugin directory. Do not assume schema-4 mutable-path preservation applies here. |
+| Plugin Manager listing | Select a [discovered `chim-plugin` repository](custom-plugins.md#list-a-plugin-in-plugin-manager) and channel, then confirm; [ui/server_plugin_installer.php](../ui/server_plugin_installer.php) downloads the latest release's `chim-plugin.tar.gz` (server files at the archive root, no manifest required) or a legacy channel's archive with `manifest.json` at its extracted root. | Standard packages update when the release tag changes; legacy channels compare manifest versions. Either way the plugin directory is replaced and Plugin Manager writes its own `manifest.json`. Do not assume schema-4 mutable-path preservation applies here. |
 | Game-carried package through MO2 | Install the author's game archive into MO2. Its virtual Data tree contains `CHIM/server-plugins/<name>/<version>.dwpkg` (or `.zip`). CHIM sends the schema-4 package to [ui/api/plugin_packages.php](../ui/api/plugin_packages.php). | The package manager checks exact version equality against its own installed-package record. A different version requests an upload, including an older version. Declared `server.mutable_paths` are preserved by this package manager. |
 
 Catalog walkthrough:
 
 1. Back up plugin configuration as described by its author. Disable any older **server-package copy** supplied through MO2 before switching routes; keep separately required game-side components.
 2. Open Plugin Manager, select the plugin and intended channel, then install/update.
-3. Check the installed manifest/version and installer result. Test one known interaction and inspect the plugin's log.
+3. Check the installed version (release tag) and installer result. Test one known interaction and inspect the plugin's log.
 4. Use that same channel/route for later updates unless deliberately switching.
 
 MO2 walkthrough:
