@@ -461,8 +461,7 @@ tr.featured-plugin-row td {
         echo '<br>';
         echo '<div class="table-container" style="margin-top: 30px;">';
         echo '<h1 style="margin: 0 0 15px 0; text-align: center; color: rgb(242, 124, 17); font-family: \'MagicCards\', serif; font-size: 1.8em;">CHIM Plugins Repository</h1>';
-        echo '<p style="text-align: center; color: #bbb; margin: 0 0 6px 0;">Community plugins from public GitHub repositories tagged <code>' . CHIM_PLUGIN_TOPIC . '</code>. A listing is not a review or endorsement: plugins run with full server access, so install only from authors you trust.</p>';
-        echo '<p style="text-align: center; color: #bbb; margin: 0 0 20px 0;">Built a plugin of your own? See <a href="https://github.com/Dwemer-Dynamics/HerikaServer/blob/unstable/docs/custom-plugins.md#list-a-plugin-in-plugin-manager" target="_blank" rel="noopener noreferrer">how to get your plugin listed here</a>.</p>';
+        echo '<p style="text-align: center; color: #bbb; margin: 0 0 20px 0;">Download community built plugins tagged <code>' . CHIM_PLUGIN_TOPIC . '</code> on GitHub.</p>';
 
         $listedCount = count($discovered);
         if ($discovery['state'] === 'error') {
@@ -482,7 +481,7 @@ tr.featured-plugin-row td {
         } elseif ($listedCount === 0) {
             $statusText = 'No public repositories tagged ' . CHIM_PLUGIN_TOPIC . ' were found.';
         } else {
-            $statusText = $listedCount . ' plugins listed, updated ' . pluginManagerAge($discovery['fetched_at']) . '.';
+            $statusText = '';
         }
         if (!empty($discovery['partial'])) {
             $statusText .= ' Release details for ' . (int)$discovery['partial']['count'] . ' of ' . $listedCount . ' repositories could not be checked ('
@@ -494,7 +493,9 @@ tr.featured-plugin-row td {
         if ($discovery['notice'] !== '') {
             $statusText .= ' ' . $discovery['notice'];
         }
-        echo '<p class="plugin-discovery-status" role="status">' . htmlspecialchars($statusText, ENT_QUOTES) . '</p>';
+        if ($statusText !== '') {
+            echo '<p class="plugin-discovery-status" role="status">' . htmlspecialchars($statusText, ENT_QUOTES) . '</p>';
+        }
 
         uasort($discovered, function ($a, $b) use ($pluginOverrides) {
             $featuredA = !empty($pluginOverrides[chimPluginRepoKey($a['repo'])]['featured']);
