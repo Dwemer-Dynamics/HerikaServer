@@ -669,6 +669,15 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         $speechListener = isset($speech["listener"]) ? trim((string) $speech["listener"]) : "";
         $speechUtteranceId = isset($speech["utterance_id"]) ? trim((string) $speech["utterance_id"]) : "";
         chimSpeechTrace('client_acknowledged', [], $speechUtteranceId);
+        // Interact already recorded the physical outcome. Correlate delivery exactly rather than
+        // matching this Narrator line against unrelated recent chat or adding another history entry.
+        if (preg_match('/^interact-[a-f0-9]{32}$/D', $speechUtteranceId)) {
+            $utterance=$db->escape($speechUtteranceId);
+            $db->query("UPDATE eventlog SET delivery_state='spoken' WHERE type='infoaction' AND utterance_id='{$utterance}'");
+            $MUST_END=true;
+            return;
+        }
+
         $audiblePeople = [];
         if (isset($speech["companions"]) && is_array($speech["companions"])) {
             foreach ($speech["companions"] as $companionName) {
