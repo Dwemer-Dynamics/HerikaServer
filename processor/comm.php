@@ -981,6 +981,15 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                         }
                         $db->update("eventlog", "delivery_state='spoken'", "rowid={$rowIdToUpdate} AND {$nonAbortedChatStateSql}");
                     }
+
+                    // A delivered reply to the player is the only automatic enrollment check.
+                    if ($isNpcReplyToPlayer && chimGetBackgroundLifeAutoEnrollEnabled()) {
+                        try {
+                            chimBglMaybeAutoEnroll($db, $speechSpeaker, $speechGamets);
+                        } catch (Throwable $e) {
+                            Logger::warn("[BGL] Automatic enrollment check failed for {$speechSpeaker}: " . $e->getMessage());
+                        }
+                    }
                 }
             } elseif (!empty($matchedUtteranceRowIds)) {
                 foreach ($matchedUtteranceRowIds as $matchedRowId) {
@@ -2011,24 +2020,32 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
     if ($currentNpcData) {
         $enabled = strpos($gameRequest[0], "enable_bg") === 0;
-        $extendedData = $npcMaster->getExtendedData($currentNpcData);
-        $extendedData['background_life_enabled'] = $enabled;
-        $currentNpcData = $npcMaster->setExtendedData($currentNpcData, $extendedData);
-        if ($refId !== '') {
-            $currentNpcData['refid'] = $refId;
-        }
+        try {
+            chimBglSetEnabled($npcMaster, $currentNpcData, $enabled);
 
-        if ($enabled) {
-            $metadata = $npcMaster->getMetadata($currentNpcData);
-            $metadata['low_process_actors'] = [];
-            $currentNpcData = $npcMaster->setMetadata($currentNpcData, $metadata);
-        }
+            // Update only the remaining fields so the enrollment merge is not overwritten.
+            $remainingUpdate = ['id' => $currentNpcData['id']];
+            if ($refId !== '') {
+                $currentNpcData['refid'] = $refId;
+                $remainingUpdate['refid'] = $refId;
+            }
 
-        $npcMaster->updateByArray($currentNpcData);
-        Logger::info(
-            "Background Life " . ($enabled ? "enabled" : "disabled") .
-            " for {$currentNpcData['npc_name']} ({$currentNpcData['refid']})"
-        );
+            if ($enabled) {
+                $metadata = $npcMaster->getMetadata($currentNpcData);
+                $metadata['low_process_actors'] = [];
+                $remainingUpdate['metadata'] = json_encode($metadata);
+            }
+
+            if (count($remainingUpdate) > 1) {
+                $npcMaster->updateByArray($remainingUpdate);
+            }
+            Logger::info(
+                "Background Life " . ($enabled ? "enabled" : "disabled") .
+                " for {$currentNpcData['npc_name']} ({$currentNpcData['refid']})"
+            );
+        } catch (Throwable $e) {
+            Logger::error("Background Life toggle failed for {$currentNpcData['npc_name']}: " . $e->getMessage());
+        }
     } else {
         Logger::warn("Background Life target not found: {$npcName}/{$refId}");
     }

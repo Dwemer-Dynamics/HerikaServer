@@ -621,12 +621,16 @@ if (!function_exists('race_icon_web_path')) {
         $cooldownHours = isset($_POST['bgl_trigger_hours']) ? floatval($_POST['bgl_trigger_hours']) : 24;
         $cooldownHours = chimNormalizeBackgroundLifeTriggerHours($cooldownHours);
         $description = chimGetSchemaDescription('BGL_TRIGGER_HOURS');
+        $autoEnrollEnabled = chimBglBoolean($_POST['bgl_auto_enroll_enabled'] ?? false);
+        $autoEnrollThreshold = chimNormalizeBackgroundLifeAutoEnrollThreshold($_POST['bgl_auto_enroll_threshold'] ?? 200);
 
-        if (chimSetGeneralSetting('BGL_TRIGGER_HOURS', $cooldownHours, $description)) {
-            redirectToBglSettings('success', "Background Life cooldown saved: {$cooldownHours} in-game hours.");
+        if (chimSetGeneralSetting('BGL_TRIGGER_HOURS', $cooldownHours, $description)
+            && chimSetGeneralSetting('BGL_AUTO_ENROLL_ENABLED', $autoEnrollEnabled, chimGetSchemaDescription('BGL_AUTO_ENROLL_ENABLED'))
+            && chimSetGeneralSetting('BGL_AUTO_ENROLL_EVENT_THRESHOLD', $autoEnrollThreshold, chimGetSchemaDescription('BGL_AUTO_ENROLL_EVENT_THRESHOLD'))) {
+            redirectToBglSettings('success', "Background Life settings saved: {$cooldownHours} in-game hours, automatic enrollment " . ($autoEnrollEnabled ? "on at {$autoEnrollThreshold} events." : 'off.'));
         }
 
-        redirectToBglSettings('error', 'Could not save Background Life cooldown.');
+        redirectToBglSettings('error', 'Could not save Background Life settings.');
     }
 
     // Coordinate translation constants (world bounds)
@@ -673,6 +677,8 @@ $mapImageUrl = '../data/maps/Map_of_Skyrim.png?v=7';
     $last_gamets = $res["last_gamets"];
 $currentDate=convert_gamets2skyrim_date($last_gamets);
 $bglTriggerHours = chimGetBackgroundLifeTriggerHours();
+$bglAutoEnrollEnabled = chimGetBackgroundLifeAutoEnrollEnabled();
+$bglAutoEnrollThreshold = chimGetBackgroundLifeAutoEnrollThreshold();
 
 $bglBulkState = [
     'total' => 0,
@@ -2120,6 +2126,13 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
         font-size: 14px;
     }
 
+    .bgl-settings-row input[type="checkbox"] {
+        justify-self: end;
+        width: 18px;
+        height: 18px;
+        accent-color: rgb(242, 124, 17);
+    }
+
     .bgl-settings-help {
         color: #aaa;
         font-size: 12px;
@@ -2613,6 +2626,16 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
                         <input id="bglTriggerHours" type="number" name="bgl_trigger_hours" min="1" max="720" step="0.1" value="<?php echo htmlspecialchars((string) $bglTriggerHours); ?>">
                     </div>
                     <div class="bgl-settings-help">Controls how many in-game hours pass before eligible Background Life NPCs automatically run their next update.</div>
+                    <div class="bgl-settings-row">
+                        <label for="bglAutoEnrollEnabled">Automatic Enrollment</label>
+                        <input type="hidden" name="bgl_auto_enroll_enabled" value="0">
+                        <input id="bglAutoEnrollEnabled" type="checkbox" name="bgl_auto_enroll_enabled" value="1" aria-describedby="bglAutoEnrollHelp"<?php echo $bglAutoEnrollEnabled ? ' checked' : ''; ?>>
+                    </div>
+                    <div class="bgl-settings-row">
+                        <label for="bglAutoEnrollThreshold">Events Before Enrollment</label>
+                        <input id="bglAutoEnrollThreshold" type="number" name="bgl_auto_enroll_threshold" min="1" max="5000" step="1" aria-describedby="bglAutoEnrollHelp" value="<?php echo htmlspecialchars((string) $bglAutoEnrollThreshold); ?>">
+                    </div>
+                    <div id="bglAutoEnrollHelp" class="bgl-settings-help">Adds an NPC after they reply to you and have taken part in this many recorded events. NPCs you remove stay out. Actions, Letters and combat stay off.</div>
                     <button type="submit" class="bgl-settings-save">Save</button>
                     <div class="bgl-bulk-settings">
                         <div class="bgl-bulk-settings-title">All Background Life NPCs</div>

@@ -221,6 +221,29 @@ if (!function_exists('chimGetBackgroundLifeTriggerHours')) {
     }
 }
 
+if (!function_exists('chimNormalizeBackgroundLifeAutoEnrollThreshold')) {
+    function chimNormalizeBackgroundLifeAutoEnrollThreshold($events, int $default = 200): int
+    {
+        $value = is_numeric($events) ? (int)round((float)$events) : $default;
+        return max(1, min(5000, $value));
+    }
+}
+
+if (!function_exists('chimGetBackgroundLifeAutoEnrollEnabled')) {
+    // Read the already-loaded global so the disabled default adds no database work.
+    function chimGetBackgroundLifeAutoEnrollEnabled(): bool
+    {
+        return filter_var($GLOBALS['BGL_AUTO_ENROLL_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    }
+}
+
+if (!function_exists('chimGetBackgroundLifeAutoEnrollThreshold')) {
+    function chimGetBackgroundLifeAutoEnrollThreshold(int $default = 200): int
+    {
+        return chimNormalizeBackgroundLifeAutoEnrollThreshold($GLOBALS['BGL_AUTO_ENROLL_EVENT_THRESHOLD'] ?? $default, $default);
+    }
+}
+
 if (!function_exists('chimGetManagedGeneralSettingIds')) {
     function chimGetManagedGeneralSettingIds(): array
     {
@@ -229,6 +252,8 @@ if (!function_exists('chimGetManagedGeneralSettingIds')) {
             'AUTOFILL_CUSTOM_PROFILES',
             'AUTOFILL_CUSTOM_PROFILES_TRIGGER',
             'BGL_TRIGGER_HOURS',
+            'BGL_AUTO_ENROLL_ENABLED',
+            'BGL_AUTO_ENROLL_EVENT_THRESHOLD',
             'VISUAL_CONTEXT_SCENE_TTL_MINUTES',
             'VISUAL_CONTEXT_PROMPT_MAX_CHARS',
             'SKYRIM_START_DATE',
@@ -395,6 +420,8 @@ if (!function_exists('chimPrettySettingLabel')) {
             'ENFORCE_STRICT_RECHAT_RESPONSE' => 'Strict Rechat Targeting',
             'SHORTER_NEARBY_ITEM_LIST' => 'Shorter Nearby Item List',
             'BGL_TRIGGER_HOURS' => 'Background Life Trigger Time',
+            'BGL_AUTO_ENROLL_ENABLED' => 'Background Life Auto Enrollment',
+            'BGL_AUTO_ENROLL_EVENT_THRESHOLD' => 'Background Life Enrollment Events',
             'GLOBAL_STT_CONNECTOR_ID' => 'Speech To Text Connector',
             'GLOBAL_ITT_CONNECTOR_ID' => 'Image To Text Connector',
             'CHIM_AI_QUEST_PROGRESSION' => 'AI Quest Progression (Beta)',

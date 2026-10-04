@@ -27,6 +27,8 @@ $DIARY_COOLDOWN=120; //Cooldown period in seconds between diary entries to preve
 $DYNAMIC_PROFILE=false; //Dynamic profile updates using a timer system.
 // NOTE: AUTO_DIARY and AUTO_DIARY_WAIT have been moved to profile-level settings. Configure them in your profile settings UI instead of here.
 $BGL_TRIGGER_HOURS=24; //Number of in-game hours between Background Life events. NPCs will generate thoughts and take actions based on this interval. Range: 1-720 hours.
+$BGL_AUTO_ENROLL_ENABLED=false; //Automatically add NPCs to Background Life after enough recorded events with them.
+$BGL_AUTO_ENROLL_EVENT_THRESHOLD=200; //Recorded events needed for automatic Background Life enrollment. Range: 1-5000.
 $POWER_AWARENESS_ENABLED=false; //Enable Power Awareness system. NPCs will be aware of relative power levels and react appropriately to threats.
 $MINIME_T5=false; //Assists smaller weight LLMs with action and memory functions.
 $OGHMA_KNOWLEDGE=""; //Comma-separated specialist knowledge classes available to this NPC. Public basic Oghma articles do not require an NPC tag; "knowall" explicitly grants advanced access.

@@ -63,6 +63,9 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'AUTOFILL_CUSTOM_PROFILES', 'type' => 'boolean'],
             ['name' => 'AUTOFILL_CUSTOM_PROFILES_TRIGGER', 'type' => 'integer', 'min' => 10, 'max' => 100],
             ['name' => 'BGL_TRIGGER_HOURS', 'type' => 'number', 'min' => 1, 'max' => 720, 'step' => 0.1, 'default' => 24],
+            ['name' => 'BGL_AUTO_ENROLL_ENABLED', 'label' => 'Background Life Auto Enrollment', 'type' => 'boolean', 'default' => false],
+            ['name' => 'BGL_AUTO_ENROLL_EVENT_THRESHOLD', 'label' => 'Background Life Enrollment Events', 'type' => 'integer',
+                'min' => 1, 'max' => 5000, 'default' => 200],
             // Stored as text; 'format' makes every save path validate it as a real date/time.
             ['name' => 'SKYRIM_START_DATE', 'label' => 'Skyrim Start Date', 'type' => 'string', 'format' => 'skyrim_datetime',
                 'default' => '0201-08-17 00:00:00', 'placeholder' => '0201-08-17 00:00:00'],

@@ -237,6 +237,17 @@ function chimBglDashboardPassiveMarkers(string $enginePath): array
     return $markers;
 }
 
+// Background Life page settings backed by the shared Global Settings rows.
+function chimBglDashboardSettings(bool $showAllCoords): array
+{
+    return [
+        'trigger_hours' => chimGetBackgroundLifeTriggerHours(),
+        'auto_enroll_enabled' => chimGetBackgroundLifeAutoEnrollEnabled(),
+        'auto_enroll_threshold' => chimGetBackgroundLifeAutoEnrollThreshold(),
+        'show_all_coords' => $showAllCoords,
+    ];
+}
+
 // Assemble the compact map and NPC card payload used by Prisma.
 function chimBglDashboardPayload(sql $db, string $enginePath, string $webRoot, bool $showAllCoords = false): array
 {
@@ -335,10 +346,7 @@ function chimBglDashboardPayload(sql $db, string $enginePath, string $webRoot, b
             'gamets' => $lastGamets,
             'tamrielic_date' => $lastGamets > 0 ? convert_gamets2skyrim_long_date2($lastGamets) : '',
         ],
-        'settings' => [
-            'trigger_hours' => chimGetBackgroundLifeTriggerHours(),
-            'show_all_coords' => $showAllCoords,
-        ],
+        'settings' => chimBglDashboardSettings($showAllCoords),
         'map' => [
             'image_url' => rtrim($webRoot, '/') . '/data/maps/Map_of_Skyrim.png?v=7',
             'width' => CHIM_BGL_MAP_WIDTH,
