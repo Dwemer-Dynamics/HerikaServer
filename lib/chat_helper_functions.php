@@ -2971,7 +2971,7 @@ function offerMemoryNew($gameRequest, $DIALOGUE_TARGET)
         $selectedOne=array_key_first($mostRelevantMemoryResult);
 
 
-        $results = $db->fetchAll("select summary as content,uid,gamets_truncated,classifier from memory_summary where uid=$selectedOne order by uid asc");
+        $results = $db->fetchAll("select summary as content,uid,gamets_truncated,classifier from memory_summary where uid=$selectedOne order by rowid asc");
 
         $outputMemory = array_slice($results, 0, $GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["MEMORY_CONTEXT_SIZE"]);
 
