@@ -231,9 +231,7 @@ tr.featured-plugin-row td {
 }
 .plugin-repo-id { margin-top: 3px; color: #999; font-size: 0.85em; font-family: 'Segoe UI', Tahoma, sans-serif; }
 .plugin-discovery-status { margin: 0 0 12px; padding: 8px 10px; border-radius: 5px; background: #181818; color: #ddd; }
-.plugin-discovery-skipped { margin: -6px 0 12px; color: #bbb; font-size: 0.9em; }
-.plugin-discovery-skipped summary { cursor: pointer; }
-.plugin-discovery-skipped summary:focus-visible { outline: 2px solid #f27c11; outline-offset: 2px; }
+.plugin-install-note { margin: 4px 0 6px; color: #bbb; font-size: 0.9em; font-family: 'Segoe UI', Tahoma, sans-serif; }
 </style>
 
 <main>
@@ -373,22 +371,31 @@ tr.featured-plugin-row td {
             }
             $discoveredEntry = $gitRepo !== '' ? ($discovered[chimPluginRepoKey($gitRepo)] ?? null) : null;
             $catalog = chimPluginEffectiveCatalog($repositoryEntry, $discoveredEntry, $manifest);
-            $channels = $gitRepo !== '' ? chimPluginNormalizeChannels($catalog, $folder, $gitRepo) : [];
-            $currentChannelId = (string)($manifest['channel'] ?? ($catalog['default_channel'] ?? 'main'));
+            $isReleaseInstall = ($manifest['source'] ?? '') === 'github-release';
+            $hasLegacy = !empty($discoveredEntry['legacy']) || $repositoryEntry !== null || !$isReleaseInstall;
+            $channels = $gitRepo !== '' ? chimPluginInstallChannels($catalog, $folder, $gitRepo, $discoveredEntry['release'] ?? null, $hasLegacy) : [];
+            $currentChannelId = (string)($manifest['channel'] ?? chimPluginDefaultChannel($catalog, $channels));
             if (!isset($channels[$currentChannelId]) && !empty($channels)) {
                 $currentChannelId = array_key_first($channels);
             }
             $currentChannel = !empty($channels) ? $channels[$currentChannelId] : ['id' => $currentChannelId, 'label' => ($currentChannelId ?: 'legacy'), 'allow_force' => false];
 
+            // Standard packages compare release tags; legacy channels keep their manifest version check.
             // The discovery cache already holds the default-branch manifest; other branches are read live.
             $latestVersion = '';
-            if ($gitRepo !== '' && !empty($channels)) {
+            $updateListed = false;
+            if (($currentChannel['kind'] ?? '') === 'standard') {
+                $latestVersion = $currentChannel['tag'];
+                $updateListed = !$isReleaseInstall || (string)($manifest['release_tag'] ?? '') !== $latestVersion;
+            } elseif ($gitRepo !== '' && !empty($channels)) {
                 $branch = (string)($currentChannel['branch'] ?? '');
-                if (is_array($discoveredEntry) && $discoveredEntry['version'] !== '' && ($branch === '' || $branch === $discoveredEntry['default_branch'])) {
-                    $latestVersion = $discoveredEntry['version'];
+                $legacyVersion = (string)($discoveredEntry['legacy']['version'] ?? '');
+                if ($legacyVersion !== '' && ($branch === '' || $branch === $discoveredEntry['default_branch'])) {
+                    $latestVersion = $legacyVersion;
                 } else {
                     $latestVersion = chimPluginRemoteManifestVersion($currentChannel, $gitRepo);
                 }
+                $updateListed = $latestVersion !== '' && $version !== '' && version_compare($latestVersion, $version, '>');
             }
 
             // Featured-plugin branding (display_name / icon / featured from manifest or repository entry)
@@ -413,31 +420,31 @@ tr.featured-plugin-row td {
             echo '<td>' . htmlspecialchars($version, ENT_QUOTES) . '</td>';
             $channelLabelHtml = htmlspecialchars((string)($currentChannel['label'] ?? $currentChannelId), ENT_QUOTES);
             echo '<td>' . ($isFeatured ? '<span class="featured-live">' . $channelLabelHtml . '</span>' : $channelLabelHtml) . '</td>';
-            if (!empty($latestVersion) && !empty($version) && version_compare($latestVersion, $version, '>')) {
-                echo '<td style="color: #ff4444; font-weight: bold;">' . htmlspecialchars($latestVersion, ENT_QUOTES) . ' <span title="Update Available">⬆️</span></td>';
+            if ($updateListed) {
+                echo '<td style="color: #ff4444; font-weight: bold;">' . htmlspecialchars($latestVersion, ENT_QUOTES) . ' <span title="Update Available" aria-label="Update available">⬆️</span></td>';
             } else {
                 echo '<td>' . htmlspecialchars($latestVersion, ENT_QUOTES) . '</td>';
             }
             echo '<td>';
             if (!empty($configUrl)) {
                 echo pluginManagerButton('Plugin Page', $configUrl, $rowBtnPrimary);
-                if (isset($manifest['schema_version']) && $manifest['schema_version']==2 && $gitRepo !== '') {
-                    $forceCurrentChannel = !empty($currentChannel['allow_force']);
-                    $updateUrl = buildPluginInstallerUrl($folder, $gitRepo, $currentChannelId, $forceCurrentChannel);
-                    echo pluginManagerButton('Update ' . ($currentChannel['label'] ?? 'Plugin'), $updateUrl, $rowBtnSave);
-                    foreach ($channels as $channelId => $channel) {
-                        if ($channelId === $currentChannelId) {
-                            continue;
-                        }
-                        echo pluginManagerButton('Switch to ' . $channel['label'], buildPluginInstallerUrl($folder, $gitRepo, $channelId, true), $rowBtnPrimary);
-                    }
-                }
-                if (!empty($modDownloadUrl)) {
-                    echo pluginManagerButton('Download Skyrim Modfile', $modDownloadUrl, $rowBtnSave);
-                }
-
             } else {
                 echo 'No Plugin Page';
+            }
+            // Update actions depend on the repository and its channels, not on a plugin page or manifest schema.
+            if ($gitRepo !== '' && !empty($channels)) {
+                $forceCurrentChannel = !empty($currentChannel['allow_force']);
+                $updateUrl = buildPluginInstallerUrl($folder, $gitRepo, $currentChannelId, $forceCurrentChannel);
+                echo pluginManagerButton('Update ' . ($currentChannel['label'] ?? 'Plugin'), $updateUrl, $rowBtnSave);
+                foreach ($channels as $channelId => $channel) {
+                    if ($channelId === $currentChannelId) {
+                        continue;
+                    }
+                    echo pluginManagerButton('Switch to ' . $channel['label'], buildPluginInstallerUrl($folder, $gitRepo, $channelId, true), $rowBtnPrimary);
+                }
+            }
+            if (!empty($modDownloadUrl)) {
+                echo pluginManagerButton('Download Skyrim Modfile', $modDownloadUrl, $rowBtnSave);
             }
             echo '</td>';
             echo '<td>';
@@ -462,15 +469,24 @@ tr.featured-plugin-row td {
             $statusText = 'Could not load the plugin list from GitHub: ' . $discovery['error'] . '. Installed plugins are unaffected.';
         } elseif ($discovery['state'] === 'pending') {
             $statusText = 'The plugin list has not been loaded yet. Use Refresh Plugins to try again.';
+        } elseif ($discovery['state'] === 'stale' && (int)$discovery['fetched_at'] === 0) {
+            $statusText = 'Showing a previously saved list until GitHub release details can be checked.';
+            if ($discovery['error'] !== '') {
+                $statusText .= ' The latest refresh failed: ' . $discovery['error'] . '.';
+            }
         } elseif ($discovery['state'] === 'stale') {
             $statusText = 'Showing the list from ' . pluginManagerAge($discovery['fetched_at']) . '.';
             if ($discovery['error'] !== '') {
                 $statusText .= ' The latest refresh failed: ' . $discovery['error'] . '.';
             }
         } elseif ($listedCount === 0) {
-            $statusText = 'No public repositories tagged ' . CHIM_PLUGIN_TOPIC . ' with a valid manifest.json were found.';
+            $statusText = 'No public repositories tagged ' . CHIM_PLUGIN_TOPIC . ' were found.';
         } else {
             $statusText = $listedCount . ' plugins listed, updated ' . pluginManagerAge($discovery['fetched_at']) . '.';
+        }
+        if (!empty($discovery['partial'])) {
+            $statusText .= ' Release details for ' . (int)$discovery['partial']['count'] . ' of ' . $listedCount . ' repositories could not be checked ('
+                . $discovery['partial']['error'] . '); their last known details are shown and the check is retried automatically.';
         }
         if ((int)($discovery['total_count'] ?? 0) > CHIM_PLUGIN_MAX_REPOS) {
             $statusText .= ' Only the ' . CHIM_PLUGIN_MAX_REPOS . ' most recently updated of ' . (int)$discovery['total_count'] . ' tagged repositories are checked.';
@@ -479,13 +495,6 @@ tr.featured-plugin-row td {
             $statusText .= ' ' . $discovery['notice'];
         }
         echo '<p class="plugin-discovery-status" role="status">' . htmlspecialchars($statusText, ENT_QUOTES) . '</p>';
-        if (!empty($discovery['skipped'])) {
-            echo '<details class="plugin-discovery-skipped"><summary>' . count($discovery['skipped']) . ' tagged repositories could not be listed</summary><ul>';
-            foreach ($discovery['skipped'] as $skip) {
-                echo '<li>' . htmlspecialchars($skip['repo'] . ': ' . $skip['reason'], ENT_QUOTES) . '</li>';
-            }
-            echo '</ul></details>';
-        }
 
         uasort($discovered, function ($a, $b) use ($pluginOverrides) {
             $featuredA = !empty($pluginOverrides[chimPluginRepoKey($a['repo'])]['featured']);
@@ -503,17 +512,19 @@ tr.featured-plugin-row td {
         }
         foreach ($discovered as $repoKey => $plugin) {
             $gitRepo = $plugin['repo'];
-            $name = $plugin['name'];
             $override = $pluginOverrides[$repoKey] ?? null;
             $catalog = chimPluginEffectiveCatalog($override, $plugin, null);
-            $description = $catalog['description'] ?? 'No description available';
+            $description = ($catalog['description'] ?? '') !== '' ? $catalog['description'] : 'No description available';
             $githubUrl = 'https://github.com/' . $gitRepo;
             $modDownloadUrl = (string)($catalog['mod_download_url'] ?? '');
             if (strpos($modDownloadUrl, '<version>') !== false) {
                 $modDownloadUrl = $plugin['version'] !== '' ? chimPluginSafeLink(strtr($modDownloadUrl, ['<version>' => rawurlencode($plugin['version'])])) : '';
             }
-            $channels = chimPluginNormalizeChannels($catalog, $name, $gitRepo);
-            $owner = chimPluginInstalledOwner($installedExtensions, $name, $pluginOverrides);
+            // ext/<folder> is resolved from the repository, reusing a folder it already owns.
+            $resolved = chimPluginResolvePackage($plugin, $installedExtensions, $pluginOverrides);
+            $name = $resolved['name'];
+            $hasLegacy = !empty($plugin['legacy']) || $override !== null;
+            $channels = $name !== '' ? chimPluginInstallChannels($catalog, $name, $gitRepo, $plugin['release'], $hasLegacy) : [];
 
             // Featured-plugin branding (SHARMAT) is a curated override, never self-declared.
             $displayName = (string)($catalog['display_name'] ?? $name);
@@ -521,7 +532,11 @@ tr.featured-plugin-row td {
             $repoIconUrl = (string)($override['icon'] ?? '');
             $rowBtnPrimary = $isFeatured ? 'btn-base btn-sharmat' : 'btn-base btn-primary';
             $rowBtnSave = $isFeatured ? 'btn-base btn-sharmat' : 'btn-base btn-save';
-            $repoLine = '<div class="plugin-repo-id">' . htmlspecialchars($gitRepo . ($plugin['version'] !== '' ? ' · v' . $plugin['version'] : ''), ENT_QUOTES) . '</div>';
+            $repoText = $gitRepo . ($plugin['version'] !== '' ? ' · ' . $plugin['version'] : '');
+            if (!empty($plugin['release']['stale']) && ($plugin['release']['status'] ?? '') !== 'unknown') {
+                $repoText .= ' · release details from an earlier check';
+            }
+            $repoLine = '<div class="plugin-repo-id">' . htmlspecialchars($repoText, ENT_QUOTES) . '</div>';
 
             echo $isFeatured ? '<tr class="featured-plugin-row">' : '<tr>';
             if ($isFeatured) {
@@ -531,13 +546,15 @@ tr.featured-plugin-row td {
             }
             echo '<td>' . htmlspecialchars($description, ENT_QUOTES) . '</td>';
             echo '<td>';
-            if ($owner !== null && chimPluginSameRepo($owner, $gitRepo)) {
+            if ($resolved['installed']) {
                 echo '<button type="button" class="btn-base' . ($isFeatured ? ' btn-sharmat' : '') . '" disabled style="opacity: 0.6;">Already Installed</button>';
-            } elseif ($owner !== null) {
-                $conflict = 'ext/' . $name . ' is already used by ' . ($owner !== '' ? $owner : 'a plugin from another source') . '.';
-                echo '<button type="button" class="btn-base" disabled style="opacity: 0.6;" title="' . htmlspecialchars($conflict, ENT_QUOTES) . '">Name In Use</button>';
+            } elseif ($resolved['reason'] !== '') {
+                echo '<button type="button" class="btn-base" disabled style="opacity: 0.6;">' . ($name !== '' ? 'Name In Use' : 'Unavailable') . '</button>';
+                echo '<div class="plugin-install-note">' . htmlspecialchars($resolved['reason'], ENT_QUOTES) . '</div>';
+            } elseif (empty($channels)) {
+                echo '<div class="plugin-install-note">Not installable here. ' . htmlspecialchars(chimPluginUnavailableReason($plugin), ENT_QUOTES) . '</div>';
             } else {
-                $defaultChannelId = (string)($catalog['default_channel'] ?? 'main');
+                $defaultChannelId = chimPluginDefaultChannel($catalog, $channels);
                 foreach ($channels as $channelId => $channel) {
                     $installUrl = buildPluginInstallerUrl($name, $gitRepo, $channelId, false);
                     $installBase = $isFeatured ? 'Install ' . $displayName : 'Install Plugin';

@@ -64,36 +64,39 @@ Use [CHIM-Custom's packaging scripts](https://github.com/Dwemer-Dynamics/CHIM-Cu
 
 ## List a plugin in Plugin Manager
 
-Plugin Manager discovers plugins from public GitHub repositories with the `chim-plugin` topic. There is no central registration. [lib/plugin_discovery.php](../lib/plugin_discovery.php) searches `topic:chim-plugin archived:false fork:false`, reads each repository's root `manifest.json` from its default branch and caches the result for six hours in `conf/plugin_discovery/`. **Refresh Plugins** forces a refresh, with backoff after GitHub errors. If GitHub is unavailable, the last successful list stays visible. Only the 100 most recently updated tagged repositories are checked.
+Plugin Manager discovers plugins from public GitHub repositories with the `chim-plugin` topic. There is no central registration and no author-written manifest is required. [lib/plugin_discovery.php](../lib/plugin_discovery.php) searches `topic:chim-plugin archived:false fork:false` and reads each repository's latest release. Results are cached for six hours in `conf/plugin_discovery/`. **Refresh Plugins** forces a refresh, with backoff after GitHub errors. If GitHub is unavailable, the last successful list stays visible. Only the 100 most recently updated tagged repositories are checked.
 
 A topic is a community listing, not a review or endorsement. Installation runs the plugin's PHP, migrations and Composer with server privileges. Users should install only from authors they trust.
 
-To be listed:
+To be listed and installable:
 
-1. Make the repository public, not archived and not a fork. Add the `chim-plugin` topic in its GitHub About settings.
-2. Put `manifest.json` at the repository root on the default branch. `name` is required and becomes `ext/<name>/`: 1–64 letters, digits, `_`, `.` or `-`, starting with a letter or digit. Keep it stable; it is also the installed package identity.
-3. Add `version` and `description`. Optional catalog fields are `display_name`, `mod_download_url` (an `https://` link that users open in the browser; `<version>` is replaced with the manifest version), `default_channel` and `channels`:
+1. Make the repository public, not archived and not a fork. Add the `chim-plugin` topic in its GitHub About settings. The listing shows the repository's GitHub owner, name and description.
+2. Publish a stable GitHub release (not a draft or prerelease). Its tag is the plugin version shown to users and recorded at install. Use a tag of letters, digits, `.`, `_`, `+` or `-`.
+3. Attach the server package as the release asset named exactly `chim-plugin.tar.gz` (or `chim-plugin.tar`). Put the server files at the archive root, not inside a folder:
 
-```json
-{
-  "name": "ExamplePlugin",
-  "version": "1.0.0",
-  "description": "What the plugin adds to CHIM.",
-  "schema_version": 2,
-  "config_url": "/HerikaServer/ext/ExamplePlugin/index.php",
-  "default_channel": "main",
-  "channels": {
-    "main": { "label": "Live", "branch": "main", "package_source": "release" },
-    "dev": { "label": "Dev", "branch": "dev", "package_source": "branch", "allow_force": true }
-  }
-}
+```text
+chim-plugin.tar.gz
+  context_pre.php
+  index.php          (optional plugin page)
+  lib/...
+  migrations/...     (optional)
 ```
 
-Without `channels`, the installer downloads the latest release asset `<name>.tar.gz` (or `<name>.tar`). `package_source: "branch"` downloads the branch archive instead. Explicit `package_urls` and `manifest_url` are allowed only under `https://github.com/<owner>/<repo>/`, `https://raw.githubusercontent.com/<owner>/<repo>/`, `https://codeload.github.com/<owner>/<repo>/` or `https://api.github.com/repos/<owner>/<repo>/` for the same repository. Other URLs are ignored. The installer extracts with `tar --strip-components` set by the channel's `archive_strip_components` (default `1`, maximum `3`), so by default the archive must hold one enclosing folder, such as `ExamplePlugin/manifest.json`; GitHub branch archives already do. A flat archive with `manifest.json` as a top-level entry loses it under the default and needs `"archive_strip_components": 0`. The `manifest.json` at the extracted root must have the same `name`. The installer records the source repository as `git_repo` in the installed manifest.
+Other release assets, such as a Skyrim mod archive, are never installed. A repository without a qualifying release is still listed, with the reason it cannot be installed. The archive must contain only regular files and directories with relative paths; links, special files and `..` paths are rejected.
 
-Plugins are identified by repository, not display name. An install or update is refused if `ext/<name>/` already belongs to a different repository or to an unknown source. Delete the existing plugin first to replace it deliberately. `featured` and `icon` branding is not taken from discovered manifests.
+The plugin installs into `ext/<repository name>/`. The repository name must therefore be a valid folder name: 1–64 letters, digits, `_`, `.` or `-`, starting with a letter or digit. A repository that already has a plugin folder, including one installed earlier from a legacy manifest, keeps updating that same folder. Install and update are refused if the folder already belongs to a different repository or an unknown source. Delete the existing plugin first to replace it deliberately.
 
-[ui/data/plugin_repository.json](../ui/data/plugin_repository.json) is no longer a source of listings. Its entries are applied only as backwards-compatible overrides, matched by `git_repo`, for plugins that are discovered or already installed. This keeps existing channels, download links and featured branding. A repository listed only there will not appear until it has the topic. Authors can remove an override once their own manifest carries equivalent metadata.
+At install, Plugin Manager writes `ext/<name>/manifest.json` for its own records. This is generated metadata, not an author requirement. It holds the source repository and its GitHub id, the release tag and asset, the GitHub description and `config_url` when `index.php` or `index.html` is present at the archive root. A `manifest.json` inside the package is optional. Its other fields are kept, but it cannot change the name, source, version, channels, branding or plugin page. An update is offered whenever the latest release tag differs from the installed tag, so tags do not need to follow semantic versioning.
+
+Release checks use the unauthenticated GitHub API, which allows about 60 requests an hour per IP address. If the limit is reached, every repository stays listed with its last known release, Plugin Manager shows which part of the list is stale, and the check is retried after GitHub's reset time.
+
+### Legacy manifests and overrides
+
+Plugins already published with a root `manifest.json` and their own release asset keep working. When the latest release has no `chim-plugin.tar.gz`, Plugin Manager uses the legacy manifest on the default branch (`name`, `version`, `description`, `mod_download_url`, `default_channel` and `channels`). Without `channels`, it downloads `<name>.tar.gz` (or `<name>.tar`) from the latest release; `package_source: "branch"` downloads the branch archive instead. Explicit `package_urls` and `manifest_url` are allowed only under `https://github.com/<owner>/<repo>/`, `https://raw.githubusercontent.com/<owner>/<repo>/`, `https://codeload.github.com/<owner>/<repo>/` or `https://api.github.com/repos/<owner>/<repo>/` for the same repository. Legacy archives are extracted with the channel's `archive_strip_components` (default `1`) and must contain a `manifest.json` with the same `name`. Legacy updates compare manifest versions.
+
+Once a `chim-plugin.tar.gz` release asset exists, it replaces the legacy release channel. Its channel id stays `main`, so installed plugins switch over in place. Legacy branch channels, such as a Dev channel, remain available. A missing or invalid legacy manifest never hides a listing or blocks a standard install.
+
+[ui/data/plugin_repository.json](../ui/data/plugin_repository.json) is not a source of listings. Its entries are backwards-compatible overrides, matched by `git_repo`, for plugins that are discovered or already installed. They keep existing channels, download links and featured branding. `featured` and `icon` branding is never taken from a repository or package. A repository listed only there will not appear until it has the topic.
 
 ## Validate before distributing
 

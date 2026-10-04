@@ -2,8 +2,13 @@
 // Plugin Manager discovery: public GitHub repositories tagged with the chim-plugin topic.
 // A listing is a community submission, not an endorsement. Nothing fetched here is executed;
 // installation remains an explicit, confirmed action in ui/server_plugin_installer.php.
+// The standard package is the chim-plugin.tar.gz asset of the latest stable release; an author
+// manifest.json is optional and only drives the legacy channels of already published plugins.
 
 const CHIM_PLUGIN_TOPIC = 'chim-plugin';
+const CHIM_PLUGIN_CACHE_SCHEMA = 2;           // 2: GitHub release metadata per repository
+const CHIM_PLUGIN_ASSETS = ['chim-plugin.tar.gz', 'chim-plugin.tar'];
+const CHIM_PLUGIN_RELEASE_BYTES = 1048576;
 const CHIM_PLUGIN_CACHE_TTL = 21600;          // six hours
 const CHIM_PLUGIN_MIN_REFRESH = 60;           // manual refresh spacing after a success
 const CHIM_PLUGIN_MAX_BACKOFF = 1800;
@@ -143,7 +148,7 @@ function chimPluginHttpResult($ch, array $state, $curlOk): array
 {
     $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $result = ['ok' => false, 'status' => $status, 'body' => $state['body'], 'error' => '', 'transient' => false,
-        'retry_after' => 0, 'location' => (string)curl_getinfo($ch, CURLINFO_REDIRECT_URL)];
+        'retry_after' => 0, 'rate_limited' => false, 'location' => (string)curl_getinfo($ch, CURLINFO_REDIRECT_URL)];
     $headers = $state['headers'];
     if ($state['too_large']) {
         $result['error'] = 'Response exceeded the size limit.';
@@ -157,6 +162,7 @@ function chimPluginHttpResult($ch, array $state, $curlOk): array
         $rateLimited = $status === 429 || ($status === 403 && ($headers['x-ratelimit-remaining'] ?? '') === '0');
         $result['transient'] = $rateLimited || $status >= 500 || ($status >= 300 && $status < 400);
         if ($rateLimited) {
+            $result['rate_limited'] = true;
             $result['error'] = 'GitHub rate limit reached';
             $wait = (int)($headers['retry-after'] ?? 0);
             if (isset($headers['x-ratelimit-reset'])) {
@@ -201,11 +207,19 @@ function chimPluginHttpGet(string $url, string $repo, array $opts = []): array
     return ['ok' => false, 'status' => 0, 'body' => '', 'error' => 'Too many redirects.', 'transient' => false, 'retry_after' => 0];
 }
 
-// Concurrent manifest reads; raw.githubusercontent.com does not consume the REST API quota.
+// Concurrent repository reads. raw.githubusercontent.com does not consume the REST API quota;
+// once api.github.com reports its rate limit, the remaining requests are not sent.
 function chimPluginHttpGetMany(array $requests, int $concurrency = 8): array
 {
     $results = [];
+    $limited = null;
     foreach (array_chunk($requests, $concurrency, true) as $batch) {
+        if ($limited) {
+            foreach (array_keys($batch) as $key) {
+                $results[$key] = $limited;
+            }
+            continue;
+        }
         $multi = curl_multi_init();
         $handles = [];
         $states = [];
@@ -215,7 +229,8 @@ function chimPluginHttpGetMany(array $requests, int $concurrency = 8): array
                 continue;
             }
             $states[$key] = ['body' => '', 'bytes' => 0, 'too_large' => false, 'headers' => []];
-            $handles[$key] = chimPluginCurlHandle($request['url'], ['timeout' => 12, 'accept' => 'application/json, text/plain, */*'], $states[$key]);
+            $handles[$key] = chimPluginCurlHandle($request['url'], ['timeout' => 12, 'accept' => $request['accept'] ?? 'application/json, text/plain, */*',
+                'max_bytes' => $request['max_bytes'] ?? CHIM_PLUGIN_MANIFEST_BYTES], $states[$key]);
             curl_multi_add_handle($multi, $handles[$key]);
         }
         do {
@@ -226,6 +241,9 @@ function chimPluginHttpGetMany(array $requests, int $concurrency = 8): array
         } while ($running && $status === CURLM_OK);
         foreach ($handles as $key => $ch) {
             $results[$key] = chimPluginHttpResult($ch, $states[$key], curl_errno($ch) === 0);
+            if ($results[$key]['rate_limited']) {
+                $limited = $results[$key];
+            }
             curl_multi_remove_handle($multi, $ch);
             curl_close($ch);
         }
@@ -363,9 +381,13 @@ function chimPluginNormalizeChannels(array $entry, string $packageName, string $
         if (!chimPluginAllowedFetchUrl($manifestUrl, $githubRepo) || empty($packageUrls)) {
             continue;
         }
+        $isBranch = count(array_filter($packageUrls, function ($url) {
+            return strpos($url, '/archive/') !== false;
+        })) === count($packageUrls);
         $channels[$channelId] = [
             'id' => $channelId,
             'label' => chimPluginText($config['label'] ?? '', 32) ?: ucfirst($channelId),
+            'kind' => $isBranch ? 'branch' : 'release',
             'branch' => $branch,
             'manifest_url' => $manifestUrl,
             'package_urls' => $packageUrls,
@@ -377,6 +399,7 @@ function chimPluginNormalizeChannels(array $entry, string $packageName, string $
         $channels['main'] = [
             'id' => 'main',
             'label' => 'Live',
+            'kind' => 'release',
             'branch' => '',
             'manifest_url' => 'https://api.github.com/repos/' . $githubRepo . '/contents/manifest.json',
             'package_urls' => [
@@ -390,8 +413,45 @@ function chimPluginNormalizeChannels(array $entry, string $packageName, string $
     return $channels;
 }
 
+// The standard release package replaces legacy release channels under the 'main' id, so existing
+// installs keep their channel; legacy branch channels (such as Dev) stay available. Legacy channels
+// are offered only when a legacy manifest or override describes them.
+function chimPluginInstallChannels(array $catalog, string $packageName, string $githubRepo, ?array $release, bool $legacy): array
+{
+    $channels = $legacy ? chimPluginNormalizeChannels($catalog, $packageName, $githubRepo) : [];
+    if (($release['status'] ?? '') !== 'ok') {
+        return $channels;
+    }
+    $standard = [
+        'id' => 'main',
+        'label' => $channels['main']['label'] ?? 'Live',
+        'kind' => 'standard',
+        'branch' => '',
+        'manifest_url' => '',
+        'package_urls' => [$release['url']],
+        'archive_strip_components' => 0,
+        'allow_force' => false,
+        'tag' => $release['tag'],
+        'asset' => $release['asset'],
+    ];
+    $branches = array_filter($channels, function ($channel) {
+        return $channel['kind'] === 'branch';
+    });
+    return ['main' => $standard] + array_diff_key($branches, ['main' => 1]);
+}
+
+function chimPluginDefaultChannel(array $catalog, array $channels): string
+{
+    if (($channels['main']['kind'] ?? '') === 'standard') {
+        return 'main';
+    }
+    $default = (string)($catalog['default_channel'] ?? 'main');
+    return isset($channels[$default]) || empty($channels) ? $default : (string)array_key_first($channels);
+}
+
 // Precedence: legacy override, then the author's discovered manifest, then the installed manifest.
 // Channels and their default are taken together from the highest layer that defines channels.
+// A discovered repository is always named and described by GitHub when it has a description.
 function chimPluginEffectiveCatalog(?array $override, ?array $discovered, ?array $localManifest): array
 {
     $layers = [];
@@ -399,7 +459,7 @@ function chimPluginEffectiveCatalog(?array $override, ?array $discovered, ?array
         $layers[] = chimPluginCatalogFields($localManifest);
     }
     if ($discovered) {
-        $layers[] = ($discovered['catalog'] ?? []) + ['display_name' => $discovered['display_name'], 'description' => $discovered['description']];
+        $layers[] = $discovered['legacy']['catalog'] ?? [];
     }
     if ($override) {
         $layers[] = $override;
@@ -416,6 +476,12 @@ function chimPluginEffectiveCatalog(?array $override, ?array $discovered, ?array
             $catalog['default_channel'] = $layer['default_channel'] ?? 'main';
         } elseif (isset($layer['default_channel']) && empty($catalog['channels'])) {
             $catalog['default_channel'] = $layer['default_channel'];
+        }
+    }
+    if ($discovered) {
+        $catalog['display_name'] = $discovered['display_name'];
+        if ($discovered['repo_description'] !== '' || empty($catalog['description'])) {
+            $catalog['description'] = $discovered['repo_description'];
         }
     }
     return $catalog;
@@ -507,11 +573,33 @@ function chimPluginDiscoveryLoad(): array
 {
     $path = chimPluginCacheDir() . '/cache.json';
     $data = is_file($path) ? json_decode((string)@file_get_contents($path), true) : null;
+    $empty = ['topic' => CHIM_PLUGIN_TOPIC, 'schema' => CHIM_PLUGIN_CACHE_SCHEMA, 'fetched_at' => 0, 'attempted_at' => 0, 'failures' => 0,
+        'next_attempt_at' => 0, 'error' => '', 'plugins' => [], 'partial' => null, 'total_count' => 0];
     if (!is_array($data) || ($data['topic'] ?? '') !== CHIM_PLUGIN_TOPIC || !is_array($data['plugins'] ?? null)) {
-        return ['topic' => CHIM_PLUGIN_TOPIC, 'fetched_at' => 0, 'attempted_at' => 0, 'failures' => 0,
-            'next_attempt_at' => 0, 'error' => '', 'plugins' => [], 'skipped' => [], 'total_count' => 0];
+        return $empty;
     }
-    return $data;
+    if ((int)($data['schema'] ?? 1) === CHIM_PLUGIN_CACHE_SCHEMA) {
+        return $data + $empty;
+    }
+    // Older caches hold manifest-only entries. Keep them visible as legacy entries, but refresh now.
+    $plugins = [];
+    foreach ($data['plugins'] as $key => $old) {
+        if (!is_array($old) || !chimPluginValidRepo($old['repo'] ?? null) || chimPluginRepoKey($old['repo']) !== $key) {
+            continue;
+        }
+        $repo = [
+            'repo' => $old['repo'],
+            'repo_id' => (int)($old['repo_id'] ?? 0),
+            'default_branch' => (string)($old['default_branch'] ?? 'HEAD'),
+            'repo_description' => chimPluginText($old['repo_description'] ?? '', 600),
+            'stars' => (int)($old['stars'] ?? 0),
+            'pushed_at' => chimPluginText($old['pushed_at'] ?? '', 40),
+        ];
+        $legacy = chimPluginLegacyFromManifest(['name' => $old['name'] ?? null, 'version' => $old['version'] ?? '',
+            'display_name' => $old['display_name'] ?? '', 'description' => $old['description'] ?? ''] + (is_array($old['catalog'] ?? null) ? $old['catalog'] : []));
+        $plugins[$key] = chimPluginBuildEntry($repo, $legacy, chimPluginReleaseUnknown('not checked yet'));
+    }
+    return ['plugins' => $plugins, 'total_count' => (int)($data['total_count'] ?? count($plugins))] + $empty;
 }
 
 // Atomic replace: readers see the previous complete cache or the new one, never a partial file.
@@ -597,19 +685,102 @@ function chimPluginSearchGet(string $url): array
     return $result;
 }
 
-function chimPluginBuildEntry(array $repo, array $manifest): array
+// Optional legacy author manifest: only its package name, version and catalog fields are kept.
+function chimPluginLegacyFromManifest($manifest): ?array
 {
-    $name = $manifest['name'] ?? null;
-    if (!chimPluginValidPackageName($name)) {
-        return ['error' => 'manifest.json has a missing or invalid package name'];
+    if (!is_array($manifest) || !chimPluginValidPackageName($manifest['name'] ?? null)) {
+        return null;
     }
-    $catalog = chimPluginCatalogFields($manifest);
+    return ['name' => $manifest['name'], 'version' => chimPluginText($manifest['version'] ?? '', 40), 'catalog' => chimPluginCatalogFields($manifest)];
+}
+
+function chimPluginReleaseUnknown(string $error): array
+{
+    return ['status' => 'unknown', 'reason' => 'Release information could not be checked (' . $error . ').', 'stale' => true];
+}
+
+// The latest stable release qualifies only with an uploaded chim-plugin.tar.gz (or .tar) asset whose
+// download URL is the tag-specific URL of this repository. That URL is stored, never a moving "latest".
+function chimPluginParseRelease($data, string $githubRepo): array
+{
+    if (!is_array($data)) {
+        return ['status' => 'error', 'reason' => 'GitHub returned unexpected release information.'];
+    }
+    if (!empty($data['draft']) || !empty($data['prerelease'])) {
+        return ['status' => 'none', 'reason' => 'No stable release is published.'];
+    }
+    $tag = $data['tag_name'] ?? '';
+    if (!is_string($tag) || preg_match('/^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$/', $tag) !== 1) {
+        return ['status' => 'no_asset', 'reason' => 'The latest release tag cannot be used as a plugin version.'];
+    }
+    $assets = [];
+    foreach (is_array($data['assets'] ?? null) ? $data['assets'] : [] as $asset) {
+        if (is_array($asset) && is_string($asset['name'] ?? null) && ($asset['state'] ?? 'uploaded') === 'uploaded') {
+            $assets[$asset['name']] = $asset;
+        }
+    }
+    foreach (CHIM_PLUGIN_ASSETS as $assetName) {
+        if (!isset($assets[$assetName])) {
+            continue;
+        }
+        $url = 'https://github.com/' . $githubRepo . '/releases/download/' . rawurlencode($tag) . '/' . $assetName;
+        $reported = (string)($assets[$assetName]['browser_download_url'] ?? '');
+        if (strcasecmp($reported, $url) !== 0 || !chimPluginAllowedFetchUrl($url, $githubRepo)) {
+            return ['status' => 'no_asset', 'tag' => $tag, 'reason' => 'Release ' . $tag . ' has a ' . $assetName . ' asset outside this repository release.'];
+        }
+        if ((int)($assets[$assetName]['size'] ?? 0) > CHIM_PLUGIN_PACKAGE_BYTES) {
+            return ['status' => 'no_asset', 'tag' => $tag, 'reason' => 'Release ' . $tag . ' has a ' . $assetName . ' asset larger than the installer limit.'];
+        }
+        return ['status' => 'ok', 'tag' => $tag, 'asset' => $assetName, 'url' => $url,
+            'published_at' => chimPluginText($data['published_at'] ?? '', 40), 'reason' => ''];
+    }
+    return ['status' => 'no_asset', 'tag' => $tag, 'reason' => 'Release ' . $tag . ' has no chim-plugin.tar.gz asset.'];
+}
+
+// One release response; transient failures return null so the caller keeps its last known result.
+function chimPluginReleaseFromResponse(array $response, string $githubRepo): ?array
+{
+    if ($response['ok'] ?? false) {
+        return chimPluginParseRelease(json_decode((string)$response['body'], true), $githubRepo);
+    }
+    if ((int)($response['status'] ?? 0) === 404) {
+        return ['status' => 'none', 'reason' => 'No release is published.'];
+    }
+    if (!empty($response['transient'])) {
+        return null;
+    }
+    return ['status' => 'error', 'reason' => 'Release information could not be read (' . ($response['error'] ?? 'unknown error') . ').'];
+}
+
+function chimPluginReleaseRequest(string $githubRepo): array
+{
+    return ['url' => 'https://api.github.com/repos/' . $githubRepo . '/releases/latest', 'repo' => $githubRepo,
+        'max_bytes' => CHIM_PLUGIN_RELEASE_BYTES, 'accept' => 'application/vnd.github+json'];
+}
+
+// Live check used by the installer; falls back to $cached on a transient failure.
+function chimPluginFetchRelease(string $githubRepo, ?array $cached): array
+{
+    $request = chimPluginReleaseRequest($githubRepo);
+    $response = chimPluginHttpGet($request['url'], $githubRepo, ['timeout' => 20, 'max_bytes' => $request['max_bytes'], 'accept' => $request['accept']]);
+    $release = chimPluginReleaseFromResponse($response, $githubRepo);
+    if ($release !== null) {
+        return $release;
+    }
+    return $cached ? ['stale' => true] + $cached : chimPluginReleaseUnknown($response['error'] ?? 'network error');
+}
+
+// Listing identity comes from GitHub; the legacy manifest and release decide only how it installs.
+function chimPluginBuildEntry(array $repo, ?array $legacy, array $release): array
+{
+    $name = substr($repo['repo'], strpos($repo['repo'], '/') + 1);
+    $version = ($release['status'] ?? '') === 'ok' ? $release['tag'] : ($legacy['version'] ?? '');
     return $repo + [
         'name' => $name,
-        'version' => chimPluginText($manifest['version'] ?? '', 40),
-        'display_name' => $catalog['display_name'] ?? $name,
-        'description' => $catalog['description'] ?? $repo['repo_description'],
-        'catalog' => array_diff_key($catalog, ['display_name' => 1, 'description' => 1]),
+        'display_name' => $name,
+        'version' => $version,
+        'legacy' => $legacy,
+        'release' => $release,
     ];
 }
 
@@ -629,33 +800,62 @@ function chimPluginDiscoveryRefresh(array $previous): array
     $requests = [];
     foreach ($search['repos'] as $key => $repo) {
         $branch = implode('/', array_map('rawurlencode', explode('/', $repo['default_branch'])));
-        $requests[$key] = ['url' => 'https://raw.githubusercontent.com/' . $repo['repo'] . '/' . $branch . '/manifest.json', 'repo' => $repo['repo']];
+        $requests['m:' . $key] = ['url' => 'https://raw.githubusercontent.com/' . $repo['repo'] . '/' . $branch . '/manifest.json', 'repo' => $repo['repo']];
+    }
+    // Release reads use the REST quota; the longest-unchecked repositories go first.
+    $order = array_keys($search['repos']);
+    usort($order, function ($a, $b) use ($previous) {
+        return [(int)($previous['plugins'][$a]['release']['checked_at'] ?? 0), $a] <=> [(int)($previous['plugins'][$b]['release']['checked_at'] ?? 0), $b];
+    });
+    foreach ($order as $key) {
+        $requests['r:' . $key] = chimPluginReleaseRequest($search['repos'][$key]['repo']);
     }
     $responses = function_exists('curl_multi_init') ? chimPluginHttpGetMany($requests) : [];
     $plugins = [];
-    $skipped = [];
+    $unchecked = 0;
+    $uncheckedError = '';
+    $retryAfter = 0;
     foreach ($search['repos'] as $key => $repo) {
-        $response = $responses[$key] ?? ['ok' => false, 'transient' => true, 'error' => 'not fetched'];
-        $manifest = $response['ok'] ? chimPluginDecodeManifest($response['body']) : false;
-        $entry = is_array($manifest) ? chimPluginBuildEntry($repo, $manifest) : null;
-        if (is_array($entry) && !isset($entry['error'])) {
-            $plugins[$key] = $entry;
-        } elseif (!$response['ok'] && !empty($response['transient']) && isset($previous['plugins'][$key])) {
-            // Last-known-good per repository when GitHub is briefly unavailable.
-            $plugins[$key] = $previous['plugins'][$key];
+        $old = $previous['plugins'][$key] ?? null;
+        $manifestResponse = $responses['m:' . $key] ?? ['ok' => false, 'transient' => true, 'error' => 'not fetched'];
+        if ($manifestResponse['ok']) {
+            $legacy = chimPluginLegacyFromManifest(chimPluginDecodeManifest($manifestResponse['body']));
+        } elseif (!empty($manifestResponse['transient'])) {
+            $legacy = $old['legacy'] ?? null;
         } else {
-            $reason = $entry['error'] ?? ($response['ok'] ? 'manifest.json is not valid JSON' : 'manifest.json unavailable (' . $response['error'] . ')');
-            $skipped[] = ['repo' => $repo['repo'], 'reason' => $reason];
+            $legacy = null;
         }
+        $releaseResponse = $responses['r:' . $key] ?? ['ok' => false, 'transient' => true, 'error' => 'not fetched'];
+        $release = chimPluginReleaseFromResponse($releaseResponse, $repo['repo']);
+        if ($release === null) {
+            // Never drop or downgrade a repository because its release could not be read this time.
+            $unchecked++;
+            $uncheckedError = $releaseResponse['error'] ?? 'network error';
+            $retryAfter = max($retryAfter, (int)($releaseResponse['retry_after'] ?? 0));
+            $release = isset($old['release']) && ($old['release']['status'] ?? '') !== 'unknown'
+                ? ['stale' => true] + $old['release'] : chimPluginReleaseUnknown($uncheckedError);
+        } else {
+            $release['checked_at'] = $now;
+        }
+        $plugins[$key] = chimPluginBuildEntry($repo, $legacy, $release);
     }
+    $cache['schema'] = CHIM_PLUGIN_CACHE_SCHEMA;
     $cache['plugins'] = $plugins;
-    $cache['skipped'] = array_slice($skipped, 0, 50);
     $cache['total_count'] = (int)$search['total_count'];
     $cache['fetched_at'] = $now;
     $cache['failures'] = 0;
-    $cache['next_attempt_at'] = $now + CHIM_PLUGIN_MIN_REFRESH;
     $cache['error'] = '';
+    $cache['partial'] = $unchecked > 0 ? ['count' => $unchecked, 'error' => $uncheckedError] : null;
+    // A partial refresh retries on its own once GitHub allows it, within the normal backoff bounds.
+    $cache['next_attempt_at'] = $now + ($unchecked > 0 ? max(300, min(3600, $retryAfter)) : CHIM_PLUGIN_MIN_REFRESH);
+    unset($cache['skipped']);
     return $cache;
+}
+
+function chimPluginDiscoveryExpired(array $cache, int $now): bool
+{
+    return $now - (int)$cache['fetched_at'] >= CHIM_PLUGIN_CACHE_TTL
+        || (!empty($cache['partial']) && $now >= (int)$cache['next_attempt_at']);
 }
 
 // Returns the listing plus a display state: ok, stale (last-known-good), error or pending.
@@ -664,7 +864,7 @@ function chimPluginDiscoveryGet(bool $manualRefresh = false): array
     $cache = chimPluginDiscoveryLoad();
     $now = time();
     $notice = '';
-    $expired = $now - (int)$cache['fetched_at'] >= CHIM_PLUGIN_CACHE_TTL;
+    $expired = chimPluginDiscoveryExpired($cache, $now);
     if ($manualRefresh || $expired) {
         $lock = chimPluginEnsureCacheDir() ? chimPluginOpenRefreshLock() : false;
         if (!$lock) {
@@ -673,7 +873,7 @@ function chimPluginDiscoveryGet(bool $manualRefresh = false): array
             $notice = 'Another plugin list refresh is in progress.';
         } else {
             $cache = chimPluginDiscoveryLoad();
-            $expired = $now - (int)$cache['fetched_at'] >= CHIM_PLUGIN_CACHE_TTL;
+            $expired = chimPluginDiscoveryExpired($cache, $now);
             $wait = (int)$cache['next_attempt_at'] - $now;
             if ($wait > 0 && ($manualRefresh || $expired)) {
                 if ($manualRefresh) {
@@ -691,7 +891,9 @@ function chimPluginDiscoveryGet(bool $manualRefresh = false): array
             fclose($lock);
         }
     }
-    if ((int)$cache['fetched_at'] === 0) {
+    if ((int)$cache['fetched_at'] === 0 && !empty($cache['plugins'])) {
+        $state = 'stale';
+    } elseif ((int)$cache['fetched_at'] === 0) {
         $state = $cache['error'] !== '' ? 'error' : 'pending';
     } else {
         $state = ($cache['error'] !== '' || $now - (int)$cache['fetched_at'] >= CHIM_PLUGIN_CACHE_TTL) ? 'stale' : 'ok';
@@ -735,4 +937,136 @@ function chimPluginInstalledOwner(array $installed, string $packageName, array $
         }
     }
     return '';
+}
+
+// ext/<folder> for a repository: the folder it already owns (also after a GitHub rename, matched by
+// the repository id this installer recorded), else the repository name for the standard package,
+// else the legacy manifest name. 'reason' explains why it cannot be installed.
+function chimPluginResolvePackage(array $entry, array $installed, array $overrides): array
+{
+    $repoId = (int)($entry['repo_id'] ?? 0);
+    foreach ($installed as $folder => $manifest) {
+        $folder = (string)$folder;
+        $owner = chimPluginInstalledOwner($installed, $folder, $overrides);
+        $sameId = $repoId > 0 && is_array($manifest) && ($manifest['source'] ?? '') === 'github-release' && (int)($manifest['repo_id'] ?? 0) === $repoId;
+        if (chimPluginValidPackageName($folder) && (chimPluginSameRepo($owner, $entry['repo']) || $sameId)) {
+            return ['name' => $folder, 'installed' => true, 'reason' => ''];
+        }
+    }
+    $name = ($entry['release']['status'] ?? '') === 'ok' ? $entry['name'] : ($entry['legacy']['name'] ?? $entry['name']);
+    if (!chimPluginValidPackageName($name)) {
+        return ['name' => '', 'installed' => false, 'reason' => 'The repository name cannot be used as a plugin folder.'];
+    }
+    foreach (array_keys($installed) as $folder) {
+        if (strcasecmp((string)$folder, $name) === 0) {
+            $owner = chimPluginInstalledOwner($installed, (string)$folder, $overrides);
+            return ['name' => $name, 'installed' => false,
+                'reason' => 'ext/' . $folder . ' is already used by ' . ($owner ? $owner : 'a plugin from another source') . '.'];
+        }
+    }
+    return ['name' => $name, 'installed' => false, 'reason' => ''];
+}
+
+// Why a discovered repository has no install channel, for display.
+function chimPluginUnavailableReason(array $entry): string
+{
+    $release = $entry['release'] ?? [];
+    $reason = (string)($release['reason'] ?? '');
+    return ($reason !== '' ? $reason . ' ' : '') . 'Installation needs a chim-plugin.tar.gz asset on the latest stable release.';
+}
+
+// Rejects anything but regular files and directories with safe relative names before extraction.
+function chimPluginCheckArchiveListing(string $archiveFile, bool $gzip): string
+{
+    $names = [];
+    $long = [];
+    exec('tar ' . ($gzip ? '-tzf' : '-tf') . ' ' . escapeshellarg($archiveFile), $names, $status);
+    exec('tar ' . ($gzip ? '-tvzf' : '-tvf') . ' ' . escapeshellarg($archiveFile), $long, $longStatus);
+    if ($status !== 0 || $longStatus !== 0 || empty($names)) {
+        return 'The package is not a readable tar archive.';
+    }
+    if (count($long) !== count($names)) {
+        return 'The package listing could not be verified.';
+    }
+    foreach ($names as $index => $name) {
+        $type = substr((string)$long[$index], 0, 1);
+        if ($type !== '-' && $type !== 'd') {
+            return 'The package contains a link or special file: ' . chimPluginText($name, 200);
+        }
+        if ($name === '' || $name[0] === '/' || strpos($name, '\\') !== false || preg_match('#(^|/)\.\.(/|$)#', $name) === 1) {
+            return 'The package contains an unsafe path: ' . chimPluginText($name, 200);
+        }
+    }
+    return '';
+}
+
+// After private extraction: no links or special files, and the server files sit at the archive root.
+function chimPluginCheckStagedTree(string $stagingDir): string
+{
+    $items = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($stagingDir, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST);
+    foreach ($items as $path => $item) {
+        if (is_link($path) || (!$item->isFile() && !$item->isDir())) {
+            return 'The package contains a link or special file: ' . chimPluginText(substr($path, strlen($stagingDir) + 1), 200);
+        }
+    }
+    $root = array_values(array_diff(scandir($stagingDir), ['.', '..']));
+    $rootFiles = array_filter($root, function ($name) use ($stagingDir) {
+        return is_file($stagingDir . DIRECTORY_SEPARATOR . $name);
+    });
+    if (empty($root)) {
+        return 'The package is empty.';
+    }
+    if (empty($rootFiles)) {
+        return 'chim-plugin.tar.gz must contain the server files at its root, not inside a folder (found ' . chimPluginText(implode(', ', $root), 200) . ').';
+    }
+    return '';
+}
+
+// manifest.json for the existing Plugin Manager loaders, generated from the verified repository and
+// release. Authors do not need to ship one; a bundled manifest's other fields are kept, but it cannot
+// set the name, source, version, channels, branding or settings page. A settings page is recorded only
+// when index.php or index.html is actually present.
+function chimPluginGeneratedManifest(string $stagingDir, string $packageName, array $source, string $webRoot): array
+{
+    $bundled = [];
+    $path = $stagingDir . DIRECTORY_SEPARATOR . 'manifest.json';
+    if (is_file($path) && !is_link($path) && filesize($path) <= CHIM_PLUGIN_MANIFEST_BYTES) {
+        $decoded = json_decode((string)file_get_contents($path), true);
+        $bundled = is_array($decoded) ? $decoded : [];
+    }
+    $reserved = ['name', 'display_name', 'version', 'description', 'git_repo', 'repo_id', 'source', 'release_tag', 'release_asset',
+        'package_url', 'package_urls', 'manifest_url', 'channel', 'channel_label', 'channels', 'default_channel', 'schema_version',
+        'config_url', 'config_url_target', 'featured', 'icon', 'generated_by', 'generated_note', 'installed_at'];
+    $extra = array_diff_key($bundled, array_flip($reserved));
+    if (isset($extra['mod_download_url']) && !isset(chimPluginCatalogFields($extra)['mod_download_url'])) {
+        unset($extra['mod_download_url']);
+    }
+    $description = $source['description'] !== '' ? $source['description'] : chimPluginText($bundled['description'] ?? '', 600);
+    $manifest = [
+        'name' => $packageName,
+        'display_name' => $source['display_name'],
+        'version' => $source['tag'],
+        'description' => $description,
+        'git_repo' => $source['repo'],
+        'repo_id' => (int)$source['repo_id'],
+        'source' => 'github-release',
+        'release_tag' => $source['tag'],
+        'release_asset' => $source['asset'],
+        'package_url' => $source['url'],
+        'channel' => $source['channel'],
+        'channel_label' => $source['channel_label'],
+        'generated_by' => 'CHIM Plugin Manager',
+        'generated_note' => 'Generated at install from the GitHub repository and release; plugin authors do not need to provide manifest.json.',
+        'installed_at' => gmdate('c'),
+    ];
+    foreach (['index.php', 'index.html'] as $page) {
+        $pagePath = $stagingDir . DIRECTORY_SEPARATOR . $page;
+        if (is_file($pagePath) && !is_link($pagePath)) {
+            $manifest['schema_version'] = 2;
+            $manifest['config_url'] = $webRoot . '/ext/' . rawurlencode($packageName) . '/' . $page;
+            $manifest['config_url_target'] = '_blank';
+            break;
+        }
+    }
+    return $manifest + $extra;
 }
