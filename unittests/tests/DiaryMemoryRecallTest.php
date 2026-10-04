@@ -88,7 +88,7 @@ final class DiaryMemoryRecallTest extends TestCase
     public function testNpcRecallMatchesCanonicalAndLegacyDiaryOwners(): void
     {
         $this->assertSame(
-            "(memory_summary.companions LIKE '%|Embry|%' OR memory_summary.companions='Embry')",
+            "(position('|Embry|' in memory_summary.companions) > 0 OR memory_summary.companions='Embry')",
             dataGetMemoryCompanionConditionSql('Embry', 'memory_summary.companions')
         );
     }
@@ -96,7 +96,7 @@ final class DiaryMemoryRecallTest extends TestCase
     public function testNpcNameIsEscapedInRecallCondition(): void
     {
         $this->assertSame(
-            "(companions LIKE '%|M''aiq''s Friend|%' OR companions='M''aiq''s Friend')",
+            "(position('|M''aiq''s Friend|' in companions) > 0 OR companions='M''aiq''s Friend')",
             dataGetMemoryCompanionConditionSql("M'aiq's Friend")
         );
     }

@@ -5039,7 +5039,8 @@ function dataGetMemoryCompanionConditionSql(
     }
 
     $npcEsc = $GLOBALS['db']->escape($npcName);
-    return "($column LIKE '%|$npcEsc|%' OR $column='$npcEsc')";
+    // Literal token match: LIKE would treat % _ and backslash in names as wildcards/escapes.
+    return "(position('|$npcEsc|' in $column) > 0 OR $column='$npcEsc')";
 }
 
 /**
