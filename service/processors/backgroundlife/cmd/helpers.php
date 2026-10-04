@@ -581,11 +581,13 @@ BuyItem:<NPC name>:<itemid>:<count>:<total_gold_spent>,<NPC name>:<itemid>:<coun
 - Buy items from another NPC.
 - Required after a previously agreed trade so inventories can be updated.
 - total_gold_spent is <item price>*<count>, the total amount of gold spent for that item, including any haggling or discounts.
+- E.G. Buy 3 apples from John Doe for 30 gold (10 gold each one) => BuyItem:John Doe:apple:3:30
 
 SellItem:<NPC name>:<itemid>:<count>:<total_gold_amount>,<NPC name>:<itemid>:<count>:<total_gold_amount>,...
 - Sell items to another NPC.
 - Required after a previously agreed trade so inventories can be updated.
 - total_gold_amount is <item price>*<count>, the total amount of gold received for that item, including any haggling or discounts (price*count).
+- E.G. Sell 3 apples to John Doe for 30 gold (10 gold each one) => SellItem:John Doe:apple:3:30
 
 GiveItemTo:<NPC name>:<itemid>:<count>,<NPC name>:<itemid>:<count>
 - Give items directly to one or more NPCs with no gold exchange.
@@ -596,11 +598,13 @@ GiveItemTo:<NPC name>:<itemid>:<count>,<NPC name>:<itemid>:<count>
 GiveGoldTo:<NPC name>:<gold_amount>,<NPC name>:<gold_amount>
 - Give gold directly to one or more NPCs.
 - Use this for gifts, donations, payments, or helping allies where only gold should be transferred.
+- E.G. Give 50 gold to John Doe => GiveGoldTo:John Doe:50
 
 SellService:<NPC name>:<service_description>:<total_gold_amount>,<NPC name>:<service_description>:<total_gold_amount>
 - Sell a service to another NPC. No inventory item is moved; only gold changes hands.
 - The service_description is a short label (e.g. 'healing', 'repair', 'lockpicking', 'mercenary work') describing what was provided.
 - total_gold_amount is the full price paid by the buyer for the service.
+- E.G. Sell a healing service to John Doe for 50 gold => SellService:John Doe:healing:50
 PROMPT;
     }
     $step2Content .= <<<PROMPT2

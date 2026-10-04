@@ -361,7 +361,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                 } else {
                     $npcData = $npcManager->setExtendedData($npcData, $extended);
                     $npcManager->updateByArray($npcData);
-                    error_log("[BGL] Skipping Passive event for {$npc["npc_name"]}, is NEAR TO PLAYER, delta: {$localDelta}, Presence retries: {$extended["background_life_last_updated_presence_delta"]}");
+                    error_log("[BGL] Skipping event for {$npc["npc_name"]}, is NEAR TO PLAYER, delta: {$localDelta}, Presence retries: {$extended["background_life_last_updated_presence_delta"]}");
                     continue;
                 }
 
@@ -381,7 +381,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                             'sent' => 0,
                             'actor' => "rolemaster",
                             'text' => "",
-                            'action' => "rolecommand|Instruction@{$npc["npc_name"]}@Should review own life goals, latest inner thoughts, and take a related action or express his/her concerns@0",
+                            'action' => "rolecommand|Instruction@{$npc["npc_name"]}@{$npc["npc_name"]} should review own life goals, latest inner thoughts, and take a related action or express his/her concerns@0",
                             'tag' => "",
                         ]
                     );
@@ -392,6 +392,8 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                     $extended["background_life_last_updated"] = $maxRow;
                     $extended["background_life_last_updated_presence_delta"] = 0;
                     $npcManager->updateExtendedKeysByName($npc["npc_name"], $extended);
+                    error_log("[BGL] {$npc["npc_name"]} UPDATED background life timestamps");
+
 
                 } else {
                     $locaPath = __DIR__;

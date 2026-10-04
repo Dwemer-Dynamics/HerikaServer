@@ -224,6 +224,13 @@ if ($EXECUTION_MODE == "STANDARD") {
         ]);
     }
     terminate();
+} else if ($EXECUTION_MODE == "SMARTWAIT") {
+    ignore_user_abort(true);
+    
+    $userWish = trim(preg_replace('/^[^:]+:\s*/', '', $gameRequest[3]));
+    
+    
+    terminate();
 }
 
 ?>
