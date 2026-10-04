@@ -10,6 +10,15 @@ chimRuntimeBootstrap($enginePath, [
 ]);
 
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "logger.php");
+require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "plugin_discovery.php");
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+if (empty($_SESSION['chim_plugin_csrf'])) {
+    $_SESSION['chim_plugin_csrf'] = bin2hex(random_bytes(32));
+}
+$pluginManagerCsrf = (string)$_SESSION['chim_plugin_csrf'];
 
 // Determine web root (match other pages)
 $scriptPath = $_SERVER['SCRIPT_NAME'];
@@ -220,6 +229,11 @@ tr.featured-plugin-row td {
 @media (max-width: 900px) {
     .package-sync-card { grid-template-columns: 1fr; }
 }
+.plugin-repo-id { margin-top: 3px; color: #999; font-size: 0.85em; font-family: 'Segoe UI', Tahoma, sans-serif; }
+.plugin-discovery-status { margin: 0 0 12px; padding: 8px 10px; border-radius: 5px; background: #181818; color: #ddd; }
+.plugin-discovery-skipped { margin: -6px 0 12px; color: #bbb; font-size: 0.9em; }
+.plugin-discovery-skipped summary { cursor: pointer; }
+.plugin-discovery-skipped summary:focus-visible { outline: 2px solid #f27c11; outline-offset: 2px; }
 </style>
 
 <main>
@@ -253,189 +267,79 @@ tr.featured-plugin-row td {
             }
         }
 
-        // Get latest version from GitHub manifest.json (parity with index.php)
-        function getLatestGithubRelease($repo) {
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, "https://api.github.com/repos/{$repo}/contents/manifest.json");
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-            curl_setopt($ch, CURLOPT_USERAGENT, 'CHIM-Server');
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/vnd.github.v3+json']);
-            $output = curl_exec($ch);
-            curl_close($ch);
-            if ($output) {
-                $data = json_decode($output, true);
-                if (isset($data['content'])) {
-                    $manifestContent = base64_decode($data['content']);
-                    $manifest = json_decode($manifestContent, true);
-                    if ($manifest && isset($manifest['version'])) {
-                        return $manifest['version'];
-                    }
-                }
-            }
-            return '';
+        // Links are carried as data attributes and opened by the delegated handler below.
+        function pluginManagerButton($label, $url, $class) {
+            return ' <button type="button" data-open-url="' . htmlspecialchars($url, ENT_QUOTES) . '" class="' . $class . '">' . htmlspecialchars($label, ENT_QUOTES) . '</button>';
         }
 
-        function fetchPluginManagerUrl($url) {
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, $url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-            curl_setopt($ch, CURLOPT_USERAGENT, 'CHIM-Server');
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/vnd.github.v3+json, application/json, */*']);
-            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 20);
-            $output = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-            if ($output === false || $httpCode < 200 || $httpCode >= 300) {
-                return false;
-            }
-            return $output;
+        function pluginManagerAge($timestamp) {
+            $seconds = max(0, time() - (int)$timestamp);
+            if ($seconds < 90) return 'just now';
+            if ($seconds < 5400) return round($seconds / 60) . ' minutes ago';
+            if ($seconds < 172800) return round($seconds / 3600) . ' hours ago';
+            return round($seconds / 86400) . ' days ago';
         }
 
-        function getPluginManagerManifestVersionFromUrl($url) {
-            $output = fetchPluginManagerUrl($url);
-            if (!$output) {
-                return '';
-            }
-            $data = json_decode($output, true);
-            if (!$data) {
-                return '';
-            }
-            if (isset($data['content'])) {
-                $manifestContent = base64_decode($data['content']);
-                $manifest = json_decode($manifestContent, true);
-            } else {
-                $manifest = $data;
-            }
-            return ($manifest && isset($manifest['version'])) ? $manifest['version'] : '';
-        }
-
-        function normalizePluginManagerChannels($plugin, $packageName, $gitRepo) {
-            $channels = [];
-            $rawChannels = $plugin['channels'] ?? [];
-            if (is_array($rawChannels) && !empty($rawChannels)) {
-                foreach ($rawChannels as $channelId => $channelConfig) {
-                    if (is_string($channelConfig)) {
-                        $channelConfig = ['branch' => $channelConfig];
-                    }
-                    if (!is_array($channelConfig)) {
-                        continue;
-                    }
-                    $branch = (string)($channelConfig['branch'] ?? $channelId);
-                    $label = (string)($channelConfig['label'] ?? ucfirst((string)$channelId));
-                    $manifestUrl = (string)($channelConfig['manifest_url'] ?? '');
-                    if ($manifestUrl === '' && $branch !== '') {
-                        $manifestUrl = "https://raw.githubusercontent.com/{$gitRepo}/{$branch}/manifest.json";
-                    }
-                    $manifestUrl = strtr($manifestUrl, [
-                        '<package>' => $packageName,
-                        '<repo>' => $gitRepo,
-                        '<channel>' => (string)$channelId,
-                        '<branch>' => $branch,
-                    ]);
-                    $channels[(string)$channelId] = [
-                        'id' => (string)$channelId,
-                        'label' => $label,
-                        'branch' => $branch,
-                        'manifest_url' => $manifestUrl,
-                        'allow_force' => (bool)($channelConfig['allow_force'] ?? ($channelId !== 'main')),
-                    ];
-                }
-            }
-
-            if (empty($channels)) {
-                $channels['main'] = [
-                    'id' => 'main',
-                    'label' => 'Live',
-                    'branch' => '',
-                    'manifest_url' => "https://api.github.com/repos/{$gitRepo}/contents/manifest.json",
-                    'allow_force' => false,
-                ];
-            }
-            return $channels;
-        }
-
-        function getPluginManagerChannelVersion($gitRepo, $channel) {
-            if (!empty($channel['manifest_url'])) {
-                return getPluginManagerManifestVersionFromUrl($channel['manifest_url']);
-            }
-            if (!empty($channel['branch'])) {
-                return getPluginManagerManifestVersionFromUrl("https://api.github.com/repos/{$gitRepo}/contents/manifest.json?ref=" . rawurlencode($channel['branch']));
-            }
-            return getLatestGithubRelease($gitRepo);
-        }
-
-        function findPluginRepositoryEntry($pluginRepository, $manifest, $folder) {
-            $manifestName = $manifest['name'] ?? $folder;
-            $manifestRepo = $manifest['git_repo'] ?? '';
-            foreach ($pluginRepository as $pluginId => $plugin) {
-                if (!is_array($plugin)) {
-                    continue;
-                }
-                if (($manifestRepo !== '' && ($plugin['git_repo'] ?? '') === $manifestRepo) || (($plugin['name'] ?? '') === $manifestName)) {
-                    $plugin['_plugin_id'] = $pluginId;
-                    return $plugin;
-                }
-            }
-            return false;
-        }
-
-        function buildPluginInstallerUrl($pluginId, $packageName, $gitRepo, $channelId = 'main', $force = false) {
+        function buildPluginInstallerUrl($packageName, $gitRepo, $channelId = 'main', $force = false) {
             $params = [
                 'PACKAGE_NAME' => $packageName,
                 'GITHUB_REPO' => $gitRepo,
                 'CHANNEL' => $channelId,
             ];
-            if ($pluginId !== '') {
-                $params['PLUGIN_ID'] = $pluginId;
-            }
             if ($force) {
                 $params['FORCE'] = '1';
             }
             return 'server_plugin_installer.php?' . http_build_query($params);
         }
 
-        // Load plugin repository data from JSON file
-        $pluginRepositoryFile = __DIR__ . '/data/plugin_repository.json';
-        $pluginRepository = [];
-        if (file_exists($pluginRepositoryFile)) {
-            $jsonData = json_decode(file_get_contents($pluginRepositoryFile), true);
-            if ($jsonData && isset($jsonData['plugins'])) {
-                $pluginRepository = $jsonData['plugins'];
-            }
-        }
+        $pluginOverrides = chimPluginLoadOverrides();
+        $pluginFoldersRoot = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "ext" . DIRECTORY_SEPARATOR;
+        $installedExtensions = chimPluginInstalledExtensions($pluginFoldersRoot);
+        $hiddenFolders = ['xLifeLink_plugin', 'herika_heal', 'time_awareness'];
 
         // Handle POST actions
-        if (isset($_POST['delete_plugin'])) {
-            $pluginToDelete = $_POST['delete_plugin'];
-            $pluginPath = __DIR__ . '/../ext/' . $pluginToDelete;
-            if (is_dir($pluginPath)) {
-                rrmdir($pluginPath);
-                $successMessage = "Plugin '" . htmlspecialchars($pluginToDelete) . "' has been deleted.";
-            } else {
-                $errorMessage = "Plugin '" . htmlspecialchars($pluginToDelete) . "' not found.";
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            if (!hash_equals($pluginManagerCsrf, (string)($_POST['csrf_token'] ?? ''))) {
+                $_SESSION['chim_plugin_notice'] = 'The request expired. Reload the page and try again.';
+            } elseif (isset($_POST['delete_plugin'])) {
+                $pluginToDelete = (string)$_POST['delete_plugin'];
+                // Only an installed, visible extension folder; never a path.
+                if (basename($pluginToDelete) === $pluginToDelete && array_key_exists($pluginToDelete, $installedExtensions)
+                    && !in_array($pluginToDelete, $hiddenFolders, true) && chimPluginValidPackageName($pluginToDelete)) {
+                    rrmdir($pluginFoldersRoot . $pluginToDelete);
+                } else {
+                    $_SESSION['chim_plugin_notice'] = 'That plugin cannot be deleted here.';
+                }
+            } elseif (isset($_POST['refresh_plugins'])) {
+                $refreshed = chimPluginDiscoveryGet(true);
+                if ($refreshed['notice'] !== '') {
+                    $_SESSION['chim_plugin_notice'] = $refreshed['notice'];
+                } elseif ($refreshed['error'] !== '') {
+                    $_SESSION['chim_plugin_notice'] = 'Plugin list refresh failed: ' . $refreshed['error'];
+                } else {
+                    $_SESSION['chim_plugin_notice'] = 'Plugin list refreshed.';
+                }
             }
             header('Location: ' . $_SERVER['REQUEST_URI']);
             exit;
         }
 
-        if (isset($_POST['refresh_plugins'])) {
-            header('Location: ' . $_SERVER['REQUEST_URI']);
-            exit;
+        $pluginNotice = (string)($_SESSION['chim_plugin_notice'] ?? '');
+        unset($_SESSION['chim_plugin_notice']);
+        // Release the session lock before any GitHub request.
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
         }
+        $discovery = chimPluginDiscoveryGet(false);
+        $discovered = $discovery['plugins'];
+        $csrfField = '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($pluginManagerCsrf, ENT_QUOTES) . '">';
 
-        // Gather installed plugins
-        $pluginFoldersRoot = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "ext" . DIRECTORY_SEPARATOR;
-        $pluginFolders = scandir($pluginFoldersRoot);
-        foreach ($pluginFolders as $n => $folder) {
-            if (!is_dir($pluginFoldersRoot . $folder) || substr($folder, 0, 1) === '.' || $folder === 'xLifeLink_plugin' || $folder === 'herika_heal' || $folder === 'time_awareness') {
-                unset($pluginFolders[$n]);
-            }
-        }
-
-        echo '<form method="post" style="margin:0 0 12px 0;">';
+        echo '<form method="post" style="margin:0 0 12px 0;">' . $csrfField;
         echo '<button type="submit" name="refresh_plugins" value="1" class="btn-base btn-primary">Refresh Plugins</button>';
         echo '</form>';
+        if ($pluginNotice !== '') {
+            echo '<p class="plugin-discovery-status" role="status">' . htmlspecialchars($pluginNotice, ENT_QUOTES) . '</p>';
+        }
 
         echo '<table border="1">';
         echo '<tr>
@@ -448,168 +352,226 @@ tr.featured-plugin-row td {
                 <th>Delete Plugin</th>
             </tr>';
 
-        $installed_plugins = [];
-
-        foreach ($pluginFolders as $folder) {
-            $manifestPath = $pluginFoldersRoot . $folder . '/manifest.json';
-            if (file_exists($manifestPath)) {
-                $manifest = json_decode(file_get_contents($manifestPath), true);
-                $name = $manifest['name'] ?? $folder;
-                $description = $manifest['description'] ?? 'No description available';
-                $configUrl = $manifest['config_url'] ?? '';
-                $version = $manifest['version'] ?? '';
-                $gitRepo = $manifest['git_repo'] ?? '';
-                $modDownloadUrl = !empty($manifest['mod_download_url']) ? strtr($manifest['mod_download_url'],["<version>"=>"{$manifest['version']}"]) : '';
-                $repositoryEntry = findPluginRepositoryEntry($pluginRepository, $manifest, $folder);
-                $pluginId = is_array($repositoryEntry) ? (string)($repositoryEntry['_plugin_id'] ?? '') : '';
-                $channelSource = is_array($repositoryEntry) ? $repositoryEntry : $manifest;
-                $channels = !empty($gitRepo) ? normalizePluginManagerChannels($channelSource, $name, $gitRepo) : [];
-                $currentChannelId = (string)($manifest['channel'] ?? ($channelSource['default_channel'] ?? 'main'));
-                if (!isset($channels[$currentChannelId]) && !empty($channels)) {
-                    $currentChannelId = array_key_first($channels);
-                }
-                $currentChannel = !empty($channels) ? $channels[$currentChannelId] : ['id' => $currentChannelId, 'label' => ($currentChannelId ?: 'legacy'), 'allow_force' => false];
-
-                $latestVersion = '';
-                if (!empty($gitRepo) && !empty($channels)) {
-                    $latestVersion = getPluginManagerChannelVersion($gitRepo, $currentChannel);
-                }
-
-                // Featured-plugin branding (display_name / icon / featured from manifest or repository entry)
-                $displayName = (string)($manifest['display_name'] ?? (is_array($repositoryEntry) ? ($repositoryEntry['display_name'] ?? $name) : $name));
-                $isFeatured = !empty($manifest['featured']) || (is_array($repositoryEntry) && !empty($repositoryEntry['featured']));
-                $iconRef = (string)($manifest['icon'] ?? (is_array($repositoryEntry) ? ($repositoryEntry['icon'] ?? '') : ''));
-                $iconUrl = '';
-                if ($iconRef !== '') {
-                    $iconUrl = preg_match('#^https?://#i', $iconRef) ? $iconRef : ($webRoot . '/ext/' . rawurlencode($folder) . '/' . ltrim($iconRef, '/'));
-                }
-                $rowBtnPrimary = $isFeatured ? 'btn-base btn-sharmat' : 'btn-base btn-primary';
-                $rowBtnSave = $isFeatured ? 'btn-base btn-sharmat' : 'btn-base btn-save';
-
-                echo $isFeatured ? '<tr class="featured-plugin-row">' : '<tr>';
-                if ($isFeatured) {
-                    echo '<td><span class="featured-plugin-cell">' . ($iconUrl !== '' ? '<img src="' . htmlspecialchars($iconUrl) . '" class="featured-plugin-icon" alt="">' : '') . '<span class="featured-plugin-name">' . htmlspecialchars($displayName) . '</span></span></td>';
-                } else {
-                    echo '<td>' . htmlspecialchars($displayName) . '</td>';
-                }
-                echo '<td>' . htmlspecialchars($description) . '</td>';
-                echo '<td>' . htmlspecialchars($version) . '</td>';
-                $channelLabelHtml = htmlspecialchars($currentChannel['label'] ?? $currentChannelId);
-                echo '<td>' . ($isFeatured ? '<span class="featured-live">' . $channelLabelHtml . '</span>' : $channelLabelHtml) . '</td>';
-                if (!empty($latestVersion) && !empty($version) && version_compare($latestVersion, $version, '>')) {
-                    echo '<td style="color: #ff4444; font-weight: bold;">' . htmlspecialchars($latestVersion) . ' <span title="Update Available">⬆️</span></td>';
-                } else {
-                    echo '<td>' . htmlspecialchars($latestVersion) . '</td>';
-                }
-                echo '<td>';
-                if (!empty($configUrl)) {
-                    echo '<button onclick="window.open(\'' . htmlspecialchars($configUrl) . '\', \'_blank\')" class="' . $rowBtnPrimary . '">Plugin Page</button>';
-                    if (isset($manifest['schema_version']) && $manifest['schema_version']==2 && !empty($gitRepo)) {
-                        $forceCurrentChannel = !empty($currentChannel['allow_force']);
-                        $updateUrl = buildPluginInstallerUrl($pluginId, $name, $gitRepo, $currentChannelId, $forceCurrentChannel);
-                        echo ' <button onclick="window.open(\'' . htmlspecialchars($updateUrl) . '\', \'_blank\')" class="' . $rowBtnSave . '">Update ' . htmlspecialchars($currentChannel['label'] ?? 'Plugin') . '</button>';
-                        foreach ($channels as $channelId => $channel) {
-                            if ($channelId === $currentChannelId) {
-                                continue;
-                            }
-                            $switchUrl = buildPluginInstallerUrl($pluginId, $name, $gitRepo, $channelId, true);
-                            echo ' <button onclick="window.open(\'' . htmlspecialchars($switchUrl) . '\', \'_blank\')" class="' . $rowBtnPrimary . '">Switch to ' . htmlspecialchars($channel['label']) . '</button>';
-                        }
-                    }
-                    if (!empty($modDownloadUrl)) {
-                        echo ' <button onclick="window.open(\'' . htmlspecialchars($modDownloadUrl) . '\', \'_blank\')" class="' . $rowBtnSave . '">Download Skyrim Modfile</button>';
-                    }
-
-                } else {
-                    echo 'No Plugin Page';
-                }
-                echo '</td>';
-                echo '<td>';
-                if ($folder !== 'herika_heal' && $folder !== 'time_awareness') {
-                    echo '<form method="post" style="margin:0;" onsubmit="return confirm(\'Are you sure you want to delete the ' . htmlspecialchars($name) . ' plugin?\');">';
-                    echo '<input type="hidden" name="delete_plugin" value="' . htmlspecialchars($folder) . '">';
-                    echo '<button type="submit" class="btn-base ' . ($isFeatured ? 'btn-sharmat-danger' : 'btn-danger') . '">Delete Plugin</button>';
-                    echo '</form>';
-                } else {
-                    echo 'Cannot be deleted';
-                }
-                echo '</td>';
-                echo '</tr>';
-
-                $installed_plugins[] = $name;
+        foreach ($installedExtensions as $folder => $manifest) {
+            if (in_array($folder, $hiddenFolders, true) || !is_array($manifest)) {
+                continue;
             }
+            $name = (string)($manifest['name'] ?? $folder);
+            $description = $manifest['description'] ?? 'No description available';
+            $configUrl = (string)($manifest['config_url'] ?? '');
+            $version = (string)($manifest['version'] ?? '');
+            $gitRepo = chimPluginValidRepo($manifest['git_repo'] ?? null) ? $manifest['git_repo'] : '';
+            $modDownloadUrl = chimPluginSafeLink(strtr((string)($manifest['mod_download_url'] ?? ''), ['<version>' => $version]));
+            // Overrides attach by repository; plugins installed before git_repo existed fall back to name.
+            $repositoryEntry = null;
+            if ($gitRepo !== '') {
+                $repositoryEntry = $pluginOverrides[chimPluginRepoKey($gitRepo)] ?? null;
+            } else {
+                foreach ($pluginOverrides as $override) {
+                    if (($override['name'] ?? '') === $name) { $repositoryEntry = $override; break; }
+                }
+            }
+            $discoveredEntry = $gitRepo !== '' ? ($discovered[chimPluginRepoKey($gitRepo)] ?? null) : null;
+            $catalog = chimPluginEffectiveCatalog($repositoryEntry, $discoveredEntry, $manifest);
+            $channels = $gitRepo !== '' ? chimPluginNormalizeChannels($catalog, $folder, $gitRepo) : [];
+            $currentChannelId = (string)($manifest['channel'] ?? ($catalog['default_channel'] ?? 'main'));
+            if (!isset($channels[$currentChannelId]) && !empty($channels)) {
+                $currentChannelId = array_key_first($channels);
+            }
+            $currentChannel = !empty($channels) ? $channels[$currentChannelId] : ['id' => $currentChannelId, 'label' => ($currentChannelId ?: 'legacy'), 'allow_force' => false];
+
+            // The discovery cache already holds the default-branch manifest; other branches are read live.
+            $latestVersion = '';
+            if ($gitRepo !== '' && !empty($channels)) {
+                $branch = (string)($currentChannel['branch'] ?? '');
+                if (is_array($discoveredEntry) && $discoveredEntry['version'] !== '' && ($branch === '' || $branch === $discoveredEntry['default_branch'])) {
+                    $latestVersion = $discoveredEntry['version'];
+                } else {
+                    $latestVersion = chimPluginRemoteManifestVersion($currentChannel, $gitRepo);
+                }
+            }
+
+            // Featured-plugin branding (display_name / icon / featured from manifest or repository entry)
+            $displayName = (string)($manifest['display_name'] ?? ($repositoryEntry['display_name'] ?? $name));
+            $isFeatured = !empty($manifest['featured']) || !empty($repositoryEntry['featured']);
+            $iconRef = (string)($manifest['icon'] ?? ($repositoryEntry['icon'] ?? ''));
+            $iconUrl = '';
+            if ($iconRef !== '') {
+                $iconUrl = preg_match('#^https?://#i', $iconRef) ? chimPluginSafeLink($iconRef) : ($webRoot . '/ext/' . rawurlencode($folder) . '/' . implode('/', array_map('rawurlencode', explode('/', ltrim($iconRef, '/')))));
+            }
+            $rowBtnPrimary = $isFeatured ? 'btn-base btn-sharmat' : 'btn-base btn-primary';
+            $rowBtnSave = $isFeatured ? 'btn-base btn-sharmat' : 'btn-base btn-save';
+            $repoLine = $gitRepo !== '' ? '<div class="plugin-repo-id">' . htmlspecialchars($gitRepo, ENT_QUOTES) . '</div>' : '';
+
+            echo $isFeatured ? '<tr class="featured-plugin-row">' : '<tr>';
+            if ($isFeatured) {
+                echo '<td><span class="featured-plugin-cell">' . ($iconUrl !== '' ? '<img src="' . htmlspecialchars($iconUrl, ENT_QUOTES) . '" class="featured-plugin-icon" alt="">' : '') . '<span class="featured-plugin-name">' . htmlspecialchars($displayName, ENT_QUOTES) . '</span></span>' . $repoLine . '</td>';
+            } else {
+                echo '<td>' . htmlspecialchars($displayName, ENT_QUOTES) . $repoLine . '</td>';
+            }
+            echo '<td>' . htmlspecialchars((string)$description, ENT_QUOTES) . '</td>';
+            echo '<td>' . htmlspecialchars($version, ENT_QUOTES) . '</td>';
+            $channelLabelHtml = htmlspecialchars((string)($currentChannel['label'] ?? $currentChannelId), ENT_QUOTES);
+            echo '<td>' . ($isFeatured ? '<span class="featured-live">' . $channelLabelHtml . '</span>' : $channelLabelHtml) . '</td>';
+            if (!empty($latestVersion) && !empty($version) && version_compare($latestVersion, $version, '>')) {
+                echo '<td style="color: #ff4444; font-weight: bold;">' . htmlspecialchars($latestVersion, ENT_QUOTES) . ' <span title="Update Available">⬆️</span></td>';
+            } else {
+                echo '<td>' . htmlspecialchars($latestVersion, ENT_QUOTES) . '</td>';
+            }
+            echo '<td>';
+            if (!empty($configUrl)) {
+                echo pluginManagerButton('Plugin Page', $configUrl, $rowBtnPrimary);
+                if (isset($manifest['schema_version']) && $manifest['schema_version']==2 && $gitRepo !== '') {
+                    $forceCurrentChannel = !empty($currentChannel['allow_force']);
+                    $updateUrl = buildPluginInstallerUrl($folder, $gitRepo, $currentChannelId, $forceCurrentChannel);
+                    echo pluginManagerButton('Update ' . ($currentChannel['label'] ?? 'Plugin'), $updateUrl, $rowBtnSave);
+                    foreach ($channels as $channelId => $channel) {
+                        if ($channelId === $currentChannelId) {
+                            continue;
+                        }
+                        echo pluginManagerButton('Switch to ' . $channel['label'], buildPluginInstallerUrl($folder, $gitRepo, $channelId, true), $rowBtnPrimary);
+                    }
+                }
+                if (!empty($modDownloadUrl)) {
+                    echo pluginManagerButton('Download Skyrim Modfile', $modDownloadUrl, $rowBtnSave);
+                }
+
+            } else {
+                echo 'No Plugin Page';
+            }
+            echo '</td>';
+            echo '<td>';
+            $deletePrompt = json_encode('Are you sure you want to delete the ' . $name . ' plugin?', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+            echo '<form method="post" style="margin:0;" onsubmit="return confirm(' . htmlspecialchars($deletePrompt, ENT_QUOTES) . ');">' . $csrfField;
+            echo '<input type="hidden" name="delete_plugin" value="' . htmlspecialchars($folder, ENT_QUOTES) . '">';
+            echo '<button type="submit" class="btn-base ' . ($isFeatured ? 'btn-sharmat-danger' : 'btn-danger') . '">Delete Plugin</button>';
+            echo '</form>';
+            echo '</td>';
+            echo '</tr>';
         }
         echo '</table>';
 
         echo '<br>';
         echo '<div class="table-container" style="margin-top: 30px;">';
         echo '<h1 style="margin: 0 0 15px 0; text-align: center; color: rgb(242, 124, 17); font-family: \'MagicCards\', serif; font-size: 1.8em;">CHIM Plugins Repository</h1>';
-        echo '<p style="text-align: center; color: #bbb; margin: 0 0 6px 0;">Download extensions that add extra AI features to CHIM</p>';
-        echo '<p style="text-align: center; color: #bbb; margin: 0 0 20px 0;">Built a plugin of your own? See <a href="https://dwemerdynamics.com/chim/modders-guide.html#SubmittingPluginToRepository" target="_blank" rel="noopener noreferrer">how to get your plugin listed here</a>.</p>';
+        echo '<p style="text-align: center; color: #bbb; margin: 0 0 6px 0;">Community plugins from public GitHub repositories tagged <code>' . CHIM_PLUGIN_TOPIC . '</code>. A listing is not a review or endorsement: plugins run with full server access, so install only from authors you trust.</p>';
+        echo '<p style="text-align: center; color: #bbb; margin: 0 0 20px 0;">Built a plugin of your own? See <a href="https://github.com/Dwemer-Dynamics/HerikaServer/blob/unstable/docs/custom-plugins.md#list-a-plugin-in-plugin-manager" target="_blank" rel="noopener noreferrer">how to get your plugin listed here</a>.</p>';
 
-        echo '<table border="1">';
-        echo '<tr>
-                <th>Plugin</th>
-                <th>Description</th>
-                <th>Plugin Menu</th>
-            </tr>';
-        foreach ($pluginRepository as $pluginId => $plugin) {
-            $name = $plugin['name'];
-            $description = $plugin['description'] ?? 'No description available';
-            $githubUrl = $plugin['github_url'] ?? '';
-            $modDownloadUrl = $plugin['mod_download_url'] ?? '';
-            $isInstalled = in_array($name, $installed_plugins);
-            $channels = normalizePluginManagerChannels($plugin, $name, $plugin['git_repo']);
-            if (!empty($modDownloadUrl) && strpos($modDownloadUrl, '<version>') !== false) {
-                $defaultChannelId = (string)($plugin['default_channel'] ?? 'main');
-                $versionChannel = $channels[$defaultChannelId] ?? reset($channels);
-                $downloadVersion = getPluginManagerChannelVersion($plugin['git_repo'], $versionChannel);
-                if ($downloadVersion !== '') {
-                    $modDownloadUrl = strtr($modDownloadUrl, ['<version>' => $downloadVersion]);
-                }
+        $listedCount = count($discovered);
+        if ($discovery['state'] === 'error') {
+            $statusText = 'Could not load the plugin list from GitHub: ' . $discovery['error'] . '. Installed plugins are unaffected.';
+        } elseif ($discovery['state'] === 'pending') {
+            $statusText = 'The plugin list has not been loaded yet. Use Refresh Plugins to try again.';
+        } elseif ($discovery['state'] === 'stale') {
+            $statusText = 'Showing the list from ' . pluginManagerAge($discovery['fetched_at']) . '.';
+            if ($discovery['error'] !== '') {
+                $statusText .= ' The latest refresh failed: ' . $discovery['error'] . '.';
             }
+        } elseif ($listedCount === 0) {
+            $statusText = 'No public repositories tagged ' . CHIM_PLUGIN_TOPIC . ' with a valid manifest.json were found.';
+        } else {
+            $statusText = $listedCount . ' plugins listed, updated ' . pluginManagerAge($discovery['fetched_at']) . '.';
+        }
+        if ((int)($discovery['total_count'] ?? 0) > CHIM_PLUGIN_MAX_REPOS) {
+            $statusText .= ' Only the ' . CHIM_PLUGIN_MAX_REPOS . ' most recently updated of ' . (int)$discovery['total_count'] . ' tagged repositories are checked.';
+        }
+        if ($discovery['notice'] !== '') {
+            $statusText .= ' ' . $discovery['notice'];
+        }
+        echo '<p class="plugin-discovery-status" role="status">' . htmlspecialchars($statusText, ENT_QUOTES) . '</p>';
+        if (!empty($discovery['skipped'])) {
+            echo '<details class="plugin-discovery-skipped"><summary>' . count($discovery['skipped']) . ' tagged repositories could not be listed</summary><ul>';
+            foreach ($discovery['skipped'] as $skip) {
+                echo '<li>' . htmlspecialchars($skip['repo'] . ': ' . $skip['reason'], ENT_QUOTES) . '</li>';
+            }
+            echo '</ul></details>';
+        }
 
-            // Featured-plugin branding (SHARMAT)
-            $displayName = (string)($plugin['display_name'] ?? $name);
-            $isFeatured = !empty($plugin['featured']);
-            $repoIconUrl = (string)($plugin['icon'] ?? '');
+        uasort($discovered, function ($a, $b) use ($pluginOverrides) {
+            $featuredA = !empty($pluginOverrides[chimPluginRepoKey($a['repo'])]['featured']);
+            $featuredB = !empty($pluginOverrides[chimPluginRepoKey($b['repo'])]['featured']);
+            return [$featuredB, strtolower($a['display_name'])] <=> [$featuredA, strtolower($b['display_name'])];
+        });
+
+        if ($listedCount > 0) {
+            echo '<table border="1">';
+            echo '<tr>
+                    <th>Plugin</th>
+                    <th>Description</th>
+                    <th>Plugin Menu</th>
+                </tr>';
+        }
+        foreach ($discovered as $repoKey => $plugin) {
+            $gitRepo = $plugin['repo'];
+            $name = $plugin['name'];
+            $override = $pluginOverrides[$repoKey] ?? null;
+            $catalog = chimPluginEffectiveCatalog($override, $plugin, null);
+            $description = $catalog['description'] ?? 'No description available';
+            $githubUrl = 'https://github.com/' . $gitRepo;
+            $modDownloadUrl = (string)($catalog['mod_download_url'] ?? '');
+            if (strpos($modDownloadUrl, '<version>') !== false) {
+                $modDownloadUrl = $plugin['version'] !== '' ? chimPluginSafeLink(strtr($modDownloadUrl, ['<version>' => rawurlencode($plugin['version'])])) : '';
+            }
+            $channels = chimPluginNormalizeChannels($catalog, $name, $gitRepo);
+            $owner = chimPluginInstalledOwner($installedExtensions, $name, $pluginOverrides);
+
+            // Featured-plugin branding (SHARMAT) is a curated override, never self-declared.
+            $displayName = (string)($catalog['display_name'] ?? $name);
+            $isFeatured = !empty($override['featured']);
+            $repoIconUrl = (string)($override['icon'] ?? '');
             $rowBtnPrimary = $isFeatured ? 'btn-base btn-sharmat' : 'btn-base btn-primary';
             $rowBtnSave = $isFeatured ? 'btn-base btn-sharmat' : 'btn-base btn-save';
+            $repoLine = '<div class="plugin-repo-id">' . htmlspecialchars($gitRepo . ($plugin['version'] !== '' ? ' · v' . $plugin['version'] : ''), ENT_QUOTES) . '</div>';
 
             echo $isFeatured ? '<tr class="featured-plugin-row">' : '<tr>';
             if ($isFeatured) {
-                echo '<td><span class="featured-plugin-cell">' . ($repoIconUrl !== '' ? '<img src="' . htmlspecialchars($repoIconUrl) . '" class="featured-plugin-icon" alt="">' : '') . '<span class="featured-plugin-name">' . htmlspecialchars($displayName) . '</span></span></td>';
+                echo '<td><span class="featured-plugin-cell">' . ($repoIconUrl !== '' ? '<img src="' . htmlspecialchars($repoIconUrl, ENT_QUOTES) . '" class="featured-plugin-icon" alt="">' : '') . '<span class="featured-plugin-name">' . htmlspecialchars($displayName, ENT_QUOTES) . '</span></span>' . $repoLine . '</td>';
             } else {
-                echo '<td>' . htmlspecialchars($displayName) . '</td>';
+                echo '<td>' . htmlspecialchars($displayName, ENT_QUOTES) . $repoLine . '</td>';
             }
-            echo '<td>' . htmlspecialchars($description) . '</td>';
+            echo '<td>' . htmlspecialchars($description, ENT_QUOTES) . '</td>';
             echo '<td>';
-            if ($isInstalled) {
-                echo '<button class="btn-base' . ($isFeatured ? ' btn-sharmat' : '') . '" disabled style="opacity: 0.6;">Already Installed</button>';
+            if ($owner !== null && chimPluginSameRepo($owner, $gitRepo)) {
+                echo '<button type="button" class="btn-base' . ($isFeatured ? ' btn-sharmat' : '') . '" disabled style="opacity: 0.6;">Already Installed</button>';
+            } elseif ($owner !== null) {
+                $conflict = 'ext/' . $name . ' is already used by ' . ($owner !== '' ? $owner : 'a plugin from another source') . '.';
+                echo '<button type="button" class="btn-base" disabled style="opacity: 0.6;" title="' . htmlspecialchars($conflict, ENT_QUOTES) . '">Name In Use</button>';
             } else {
-                $defaultChannelId = (string)($plugin['default_channel'] ?? 'main');
+                $defaultChannelId = (string)($catalog['default_channel'] ?? 'main');
                 foreach ($channels as $channelId => $channel) {
-                    $installUrl = buildPluginInstallerUrl($pluginId, $name, $plugin['git_repo'], $channelId, false);
+                    $installUrl = buildPluginInstallerUrl($name, $gitRepo, $channelId, false);
                     $installBase = $isFeatured ? 'Install ' . $displayName : 'Install Plugin';
-                    $installLabel = ($channelId === $defaultChannelId) ? $installBase : 'Install ' . ($channel['label'] ?? ucfirst((string)$channelId));
-                    echo ' <button onclick="window.open(\'' . htmlspecialchars($installUrl) . '\', \'_blank\')" class="' . $rowBtnSave . '">' . htmlspecialchars($installLabel) . '</button>';
+                    $installLabel = ($channelId === $defaultChannelId || count($channels) === 1) ? $installBase : 'Install ' . $channel['label'];
+                    echo pluginManagerButton($installLabel, $installUrl, $rowBtnSave);
                 }
             }
-            if (!empty($githubUrl)) {
-                echo ' <button onclick="window.open(\'' . htmlspecialchars($githubUrl) . '\', \'_blank\')" class="' . $rowBtnPrimary . '">GitHub</button>';
-            }
+            echo pluginManagerButton('GitHub', $githubUrl, $rowBtnPrimary);
             if (!empty($modDownloadUrl)) {
-                echo ' <button onclick="window.open(\'' . htmlspecialchars($modDownloadUrl) . '\', \'_blank\')" class="' . $rowBtnPrimary . '">Mod Download</button>';
+                echo pluginManagerButton('Mod Download', $modDownloadUrl, $rowBtnPrimary);
             }
             echo '</td>';
             echo '</tr>';
         }
-        echo '</table>';
+        if ($listedCount > 0) {
+            echo '</table>';
+        }
 
         echo '</div>'; // Close the second table-container
         ?>
     </div>
 </main>
+
+<script>
+(() => {
+    // Remote links are data, never interpolated into inline script.
+    document.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-open-url]');
+        if (!button) return;
+        const url = new URL(button.dataset.openUrl, window.location.href);
+        if (url.protocol === 'https:' || url.protocol === 'http:') window.open(url.href, '_blank', 'noopener');
+    });
+})();
+</script>
 
 <script>
 (() => {
