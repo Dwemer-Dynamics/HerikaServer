@@ -72,20 +72,15 @@ function chimSttTargetParseRequest($request): ?array
     return ['transcript' => $transcript, 'baseline_id' => $request['baseline_id'], 'candidates' => $candidates];
 }
 
-// The configured Scene Classifier connector, only when it is an OpenRouter Jev connector.
+// The dedicated Decision Connector, only while it is enabled and is an OpenRouter decision connector.
 function chimSttTargetJevConnector(): ?array
 {
-    $id = intval($GLOBALS['CORE_CONNECTOR_SCENECLASSIFIER'] ?? 0);
-    if ($id <= 0 || (function_exists('chimIsGlobalLlmConnectorEnabled')
-        && !chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_SCENECLASSIFIER'))) {
+    $id = intval($GLOBALS['CORE_CONNECTOR_DECISION'] ?? 0);
+    if ($id <= 0 || !chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_DECISION')) {
         return null;
     }
     $connector = (new LLMConnector())->getById($id);
-    if (!is_array($connector) || strtolower(trim((string)($connector['driver'] ?? ''))) !== 'openrouterjson') {
-        return null;
-    }
-    $model = strtolower(trim((string)($connector['model'] ?? '')));
-    return in_array($model, ['typesafe/jev-1.13', '~typesafe/jev-latest'], true) ? $connector : null;
+    return chimIsDecisionConnector($connector) ? $connector : null;
 }
 
 // Last few recorded lines with speaker and listener, oldest first; never broader history or retrieval.
