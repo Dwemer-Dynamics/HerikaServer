@@ -115,7 +115,10 @@ function chimInteractGenerate(array $context, array $allowed): array {
 function chimInteractClaimReaction(string $payload, string $speaker): ?array {
     $input=json_decode($payload,true);
     if (!is_array($input) || !is_string($input['id'] ?? null) || !preg_match('/^[a-f0-9]{32}$/D',$input['id'])
-        || !is_string($input['target_ref'] ?? null) || !preg_match('/^[A-Fa-f0-9]{8}$/D',$input['target_ref'])) return null;
+        || !is_string($input['target_ref'] ?? null) || !preg_match('/^[A-Fa-f0-9]{8}$/D',$input['target_ref'])) {
+        error_log('[INTERACT] reaction rejected reason=invalid_payload');
+        return null;
+    }
     $db=$GLOBALS['db'];
     $id=$db->escape($input['id']);
     $session=hash('sha256',(string)($_SERVER['HTTP_X_CHIM_PLAYTHROUGH'] ?? ''));
@@ -126,7 +129,18 @@ function chimInteractClaimReaction(string $payload, string $speaker): ?array {
         AND data::jsonb->>'session'='{$session}' AND data::jsonb->>'target_ref'='{$ref}'
         AND data::jsonb->>'target_speaker'='{$name}' AND COALESCE((data::jsonb->>'reaction_claimed')::boolean,false)=false
         RETURNING data");
-    if (!$row) return null;
+    if (!$row) {
+        $candidate=$db->fetchOne("SELECT data FROM rolemaster WHERE type='item_interaction' AND data::jsonb->>'id'='{$id}' LIMIT 1");
+        $saved=$candidate ? json_decode($candidate['data'],true) : [];
+        error_log('[INTERACT] reaction claim rejected id='.$input['id'].' '.json_encode([
+            'found'=>(bool)$candidate,'completed'=>($saved['status'] ?? '')==='completed',
+            'session_match'=>($saved['session'] ?? '')===$session,
+            'ref_match'=>($saved['target_ref'] ?? '')===strtoupper($input['target_ref']),
+            'speaker_match'=>($saved['target_speaker'] ?? '')===$speaker,
+            'already_claimed'=>!empty($saved['reaction_claimed'])]));
+        return null;
+    }
+    error_log('[INTERACT] reaction claimed id='.$input['id']);
     $state=json_decode($row['data'],true);
     $receipts=[];
     foreach ($state['receipts'] as $index=>$receipt) $receipts[]=array_merge($receipt,['effect'=>$state['plan']['steps'][$index]['effect']]);

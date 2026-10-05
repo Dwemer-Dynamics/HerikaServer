@@ -76,7 +76,25 @@ try {
         $budget=6000;
         foreach ($history as &$event) { $event['data']=mb_substr((string)$event['data'],0,min(600,$budget)); $budget-=mb_strlen($event['data']); }
         unset($event);
-        $npc=(new NpcMaster())->getByName($target);
+        $npcMaster=new NpcMaster();
+        $npc=$npcMaster->getByName($target);
+        // A load can restore server profiles after the native actor was registered. Recover only
+        // this freshly captured, exact actor through the normal template/voice profile creator.
+        $speaker=(string)($snapshot['target']['speaker'] ?? '');
+        $targetRef=(string)($snapshot['target']['ref_id'] ?? '');
+        if (!$npc && ($snapshot['target']['actor'] ?? false)===true && $speaker===$target
+            && preg_match('/^[A-Fa-f0-9]{8}$/D',$targetRef)) {
+            createProfile($speaker);
+            $npc=$npcMaster->getByName($speaker);
+            if (!$npc || ($npc['npc_name'] ?? '')!==$speaker || ($npc['md5'] ?? '')!==md5($speaker)) {
+                error_log('[INTERACT] target profile recovery failed id='.$id);
+                throw new RuntimeException('The target NPC profile could not be registered');
+            }
+            $npc['refid']=strtoupper($targetRef);
+            $npc['gamets_last_updated']=$gamets;
+            if ($npcMaster->updateByArray($npc)===false) throw new RuntimeException('The target NPC identity could not be saved');
+            error_log('[INTERACT] target profile recovered id='.$id.' ref='.strtoupper($targetRef));
+        }
         $profile=[];
         foreach (['personality','occupation','goals','npc_static_bio'] as $field) $profile[$field]=mb_substr((string)($npc[$field] ?? ''),0,500);
         $state=['id'=>$id,'session'=>$session,'status'=>'resolving','player'=>$player,'target'=>$target,'item'=>$item,
