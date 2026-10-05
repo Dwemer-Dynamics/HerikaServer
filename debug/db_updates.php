@@ -6143,8 +6143,8 @@ if ($checkVersion("general_settings") < 20260502003) {
     try {
         $managedDescriptions = chimGetManagedGeneralSettingDescriptions();
         foreach (chimGetManagedGeneralSettingIds() as $settingId) {
-            // SNQE slots are initialized after legacy connector assignments have been migrated.
-            if (strpos($settingId, 'CORE_CONNECTOR_QUEST_') === 0) {
+            // SNQE and Decision Connector slots are initialized after legacy connector assignments have been migrated.
+            if (strpos($settingId, 'CORE_CONNECTOR_QUEST_') === 0 || strpos($settingId, 'CORE_CONNECTOR_DECISION') === 0) {
                 continue;
             }
             $definition = chimGetSchemaDefinition($settingId);
@@ -7638,6 +7638,75 @@ if ($checkVersion("general_settings") < 20260919001) {
         $updateVersion("general_settings", 20260919001);
     } else {
         Logger::error('Failed to initialize SNQE connector settings; retry the database update.');
+    }
+}
+
+// Add the Decision Connector once. Reuse an existing Jev connector, never edit connector rows, and keep
+// saved assignments and switches on upgrades and retries.
+if ($checkVersion("decision_connector") < 20261005001) {
+    $decisionCapableSql = "LOWER(COALESCE(driver, '')) = 'openrouterjson'
+        AND (LOWER(TRIM(COALESCE(model, ''))) ~ '^~?typesafe/jev(-|$)' OR COALESCE(url, '') ~* '/decisions/?$')";
+    $migrationOk = $db->execQuery("
+        INSERT INTO public.core_llm_connector (
+            label, metadata, url, model, provider, driver, max_tokens,
+            enforce_json, prefill_json, api_badge_id, json_schema, temperature, service
+        )
+        SELECT 'OpenRouter Jev (Decision)', '{}', 'https://openrouter.ai/api/alpha/decisions',
+               'typesafe/jev-1.13', 'openrouter', 'openrouterjson', 128,
+               0, 0, (SELECT id FROM public.core_api_badge WHERE LOWER(label) = 'openrouter' ORDER BY id LIMIT 1),
+               0, 0, 'openrouter'
+        WHERE NOT EXISTS (SELECT 1 FROM public.core_llm_connector WHERE {$decisionCapableSql})
+    ") !== false;
+    $decisionRow = $migrationOk ? $db->fetchOne("
+        SELECT id FROM public.core_llm_connector
+        WHERE {$decisionCapableSql}
+        ORDER BY (LOWER(COALESCE(label, '')) = 'openrouter jev (decision)') DESC,
+                 (COALESCE(url, '') ~* '/decisions/?$') DESC, id
+        LIMIT 1
+    ") : null;
+    $decisionConnectorId = intval($decisionRow['id'] ?? 0);
+    $migrationOk = $migrationOk && $decisionConnectorId > 0;
+
+    if ($migrationOk) {
+        // Do not move scene dialogue to OpenRouter when the classifier is off or uses another provider.
+        $decisionEnabled = chimGetGeneralSettingBool('SCENE_CLASSIFIER_ENABLED',
+            (bool) chimReadLegacyGlobalValue('SCENE_CLASSIFIER_ENABLED', true));
+        $legacyConnectorId = chimGetGeneralSettingInt('CORE_CONNECTOR_SCENECLASSIFIER',
+            intval(chimReadLegacyGlobalValue('CORE_CONNECTOR_SCENECLASSIFIER', 0)));
+        if ($decisionEnabled && $legacyConnectorId > 0) {
+            $legacyConnector = $db->fetchOne("SELECT driver FROM public.core_llm_connector WHERE id = {$legacyConnectorId} LIMIT 1");
+            if (is_array($legacyConnector) && strtolower(trim((string) ($legacyConnector['driver'] ?? ''))) !== 'openrouterjson') {
+                $decisionEnabled = false;
+            }
+        }
+
+        foreach ([
+            'CORE_CONNECTOR_DECISION' => (string) $decisionConnectorId,
+            'CORE_CONNECTOR_DECISION_ENABLED' => $decisionEnabled ? 'true' : 'false',
+        ] as $settingId => $value) {
+            $idSql = $db->escapeLiteral($settingId);
+            $valueSql = $db->escapeLiteral($value);
+            $descriptionSql = $db->escapeLiteral(chimGetSchemaDescription($settingId));
+            if ($db->execQuery("INSERT INTO public.general_settings (id, value, description, updated_at)
+                VALUES ($idSql, $valueSql, $descriptionSql, CURRENT_TIMESTAMP)
+                ON CONFLICT (id) DO NOTHING") === false) {
+                $migrationOk = false;
+            }
+        }
+        foreach (['CORE_CONNECTOR_SCENECLASSIFIER', 'SCENE_CLASSIFIER_ENABLED'] as $settingId) {
+            if ($db->execQuery("UPDATE public.general_settings SET description = "
+                . $db->escapeLiteral(chimGetSchemaDescription($settingId))
+                . " WHERE id = " . $db->escapeLiteral($settingId)) === false) {
+                $migrationOk = false;
+            }
+        }
+    }
+
+    if ($migrationOk) {
+        $updateVersion("decision_connector", 20261005001);
+        Logger::info("Applied Decision Connector setup 20261005001");
+    } else {
+        Logger::error('Failed to set up the Decision Connector; retry the database update.');
     }
 }
 

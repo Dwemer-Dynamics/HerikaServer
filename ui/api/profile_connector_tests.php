@@ -212,6 +212,18 @@ function profileConnectorTestsFirstErrorMessage(array $errors): string
     return $message;
 }
 
+/** IDs of OpenRouter decision connectors, which answer fixed choices and cannot generate dialogue. */
+function profileConnectorTestsDecisionConnectorIds(): array
+{
+    $ids = [];
+    foreach ((array)(new LLMConnector())->readAll() as $row) {
+        if (chimIsDecisionConnector($row)) {
+            $ids[intval($row['id'] ?? 0)] = true;
+        }
+    }
+    return $ids;
+}
+
 function profileConnectorTestsBuildPlan(): array
 {
     $slotDefinitions = [
@@ -229,6 +241,7 @@ function profileConnectorTestsBuildPlan(): array
     $profiles = (new CoreProfile())->readAll();
     $jobs = [];
     $profileRows = [];
+    $decisionConnectorIds = profileConnectorTestsDecisionConnectorIds();
 
     foreach ($profiles as $profile) {
         $profileId = intval($profile['id'] ?? 0);
@@ -247,6 +260,20 @@ function profileConnectorTestsBuildPlan(): array
                     'job_key' => null,
                     'status' => 'skipped',
                     'message' => 'No connector selected',
+                ];
+                continue;
+            }
+
+            if ($definition['type'] === 'llm' && isset($decisionConnectorIds[$connectorId])) {
+                $slots[] = [
+                    'field' => $definition['field'],
+                    'type' => $definition['type'],
+                    'label' => $definition['label'],
+                    'required' => $definition['required'],
+                    'connector_id' => $connectorId,
+                    'job_key' => null,
+                    'status' => 'fail',
+                    'message' => 'Decision connectors cannot generate dialogue. Choose a chat model.',
                 ];
                 continue;
             }
@@ -307,7 +334,8 @@ function profileConnectorTestsBuildGlobalPlan(): array
         ['field' => 'CORE_CONNECTOR_PLAYER', 'type' => 'llm', 'label' => 'Player Respeech', 'enabled_by' => 'PLAYER_RESPEECH'],
         ['field' => 'CORE_CONNECTOR_SUMMARY', 'type' => 'llm', 'label' => 'Summaries', 'enabled_by' => 'CORE_CONNECTOR_SUMMARY_ENABLED'],
         ['field' => 'CORE_CONNECTOR_MEDIUMTERM', 'type' => 'llm', 'label' => 'Background & Memory Tasks', 'enabled_by' => 'CORE_CONNECTOR_MEDIUMTERM_ENABLED'],
-        ['field' => 'CORE_CONNECTOR_SCENECLASSIFIER', 'type' => 'llm', 'label' => 'Scene Classifier', 'enabled_by' => 'SCENE_CLASSIFIER_ENABLED', 'enabled_label' => 'Scene Classifier'],
+        ['field' => 'CORE_CONNECTOR_DECISION', 'type' => 'llm', 'label' => 'Decision Connector', 'enabled_by' => 'CORE_CONNECTOR_DECISION_ENABLED', 'decision' => true],
+        ['field' => 'CORE_CONNECTOR_SCENECLASSIFIER', 'type' => 'llm', 'label' => 'Scene Classifier (Legacy)', 'enabled_by' => 'SCENE_CLASSIFIER_ENABLED', 'enabled_label' => 'Scene Classifier (Legacy)'],
         ['field' => 'CORE_CONNECTOR_PROFILES', 'type' => 'llm', 'label' => 'Profile Tasks', 'enabled_by' => 'CORE_CONNECTOR_PROFILES_ENABLED'],
         ['field' => 'CORE_CONNECTOR_DIRECTOR', 'type' => 'llm', 'label' => 'Director Mode', 'enabled_by' => 'CORE_CONNECTOR_DIRECTOR_ENABLED'],
         ['field' => 'CORE_CONNECTOR_QUEST_CREATION', 'type' => 'llm', 'label' => 'Quest Creation Connector', 'enabled_by' => 'CORE_CONNECTOR_QUEST_CREATION_ENABLED'],
@@ -319,6 +347,7 @@ function profileConnectorTestsBuildGlobalPlan(): array
 
     $jobs = [];
     $slots = [];
+    $decisionConnectorIds = profileConnectorTestsDecisionConnectorIds();
 
     foreach ($slotDefinitions as $definition) {
         $enabledBy = profileConnectorTestsString($definition['enabled_by'] ?? '');
@@ -349,6 +378,24 @@ function profileConnectorTestsBuildGlobalPlan(): array
                 'job_key' => null,
                 'status' => 'skipped',
                 'message' => 'No connector selected',
+            ];
+            continue;
+        }
+
+        // The Decision slot needs a decision model; every other slot needs a chat model.
+        $needsDecision = !empty($definition['decision']);
+        if ($needsDecision !== isset($decisionConnectorIds[$connectorId])) {
+            $slots[] = [
+                'field' => $definition['field'],
+                'type' => $definition['type'],
+                'label' => $definition['label'],
+                'required' => false,
+                'connector_id' => $connectorId,
+                'job_key' => null,
+                'status' => 'fail',
+                'message' => $needsDecision
+                    ? 'Choose an OpenRouter decision model such as Jev.'
+                    : 'Decision connectors cannot generate text. Choose a chat model.',
             ];
             continue;
         }
@@ -442,6 +489,9 @@ function profileConnectorTestsTestLlm(int $connectorId): array
         $GLOBALS['HTTP_TIMEOUT'] = min(120, max(1, intval($GLOBALS['HTTP_TIMEOUT'] ?? 30)));
         require_once($GLOBALS["ENGINE_PATH"] . "connector" . DIRECTORY_SEPARATOR . $driver . ".php");
         $handler = new $driver();
+        if (chimIsDecisionConnector($connector)) {
+            return chimRunDecisionCapabilityTest($handler);
+        }
         return chimRunConnectorCapabilityTest($handler, $driver);
     });
 

@@ -1210,7 +1210,7 @@ class openrouterjson
     // no audit row, response log or provider-body warning. Returns the decoded response or [] on failure.
     public function jev_request($state, $instructions, $criteria, $callName = '', $options = [])
     {
-        $model = 'typesafe/jev-1.13';
+        $model = trim((string)($GLOBALS['CONNECTOR'][$this->name]['model'] ?? '')) ?: 'typesafe/jev-1.13';
         $this->init_connector(['model' => $model]);
         $question = (string)($options['question'] ?? 'genre');
 
@@ -1225,7 +1225,8 @@ class openrouterjson
                 ],
             ],
         ];
-        $url = 'https://openrouter.ai/api/alpha/decisions';
+        // Honour a configured decisions endpoint; Jev rows with a chat-completions URL use the default one.
+        $url = preg_match('#/decisions/?$#i', (string)parse_url($this->_url, PHP_URL_PATH)) ? $this->_url : 'https://openrouter.ai/api/alpha/decisions';
         $headers = [
             'Content-Type: application/json',
             "Authorization: Bearer {$GLOBALS['CONNECTOR'][$this->name]['API_KEY']}",
@@ -1287,7 +1288,7 @@ class openrouterjson
                 array(
                     'request' => json_encode($data),
                     'connector' => $callName,
-                    'url' => $this->_url,
+                    'url' => $url,
                 ),
                 "rowid"
             );

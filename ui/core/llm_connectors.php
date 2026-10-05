@@ -449,6 +449,7 @@ if (isset($_GET["partial"]) && $_GET["partial"] === "editor") {
                 <div id="model_row">
                     <label for='model'>Model</label><br>
                     <input type="text" name="model" value="<?= htmlspecialchars($editItem["model"] ?? "") ?>"><br>
+                    <?php if ($editItem && chimIsDecisionConnector($editItem)): ?><div class="orm-muted" style="font-size:12px; margin:-4px 0 8px 0;">Decision model: used only by the Decision Connector setting. It answers fixed choices and cannot generate dialogue, so do not assign it to profiles. Max tokens, temperature and JSON options are ignored.</div><?php endif; ?>
                 </div>
 
                 <div id="provider_row">
@@ -1781,6 +1782,7 @@ if (typeof window.consolidation !== 'function') {
             <div id="model_row">
                 <label for='model'>Model</label><br>
                 <input type="text" name="model" value="<?= htmlspecialchars($editItem["model"] ?? "") ?>"><br>
+                <?php if ($editItem && chimIsDecisionConnector($editItem)): ?><div class="orm-muted" style="font-size:12px; margin:-4px 0 8px 0;">Decision model: used only by the Decision Connector setting. It answers fixed choices and cannot generate dialogue, so do not assign it to profiles. Max tokens, temperature and JSON options are ignored.</div><?php endif; ?>
             </div>
 
             <div id="provider_row">

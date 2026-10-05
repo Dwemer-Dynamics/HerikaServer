@@ -47,6 +47,19 @@ if (!function_exists('chimGetEnabledConnectorExtraParameters')) {
     }
 }
 
+if (!function_exists('chimIsDecisionConnector')) {
+    /** OpenRouter decision connectors answer fixed choice questions only; they cannot generate dialogue. */
+    function chimIsDecisionConnector($connector): bool
+    {
+        if (!is_array($connector) || strtolower(trim((string)($connector['driver'] ?? ''))) !== 'openrouterjson') {
+            return false;
+        }
+        $model = strtolower(trim((string)($connector['model'] ?? '')));
+        $path = (string)parse_url(trim((string)($connector['url'] ?? '')), PHP_URL_PATH);
+        return preg_match('#^~?typesafe/jev(-|$)#', $model) === 1 || preg_match('#/decisions/?$#i', $path) === 1;
+    }
+}
+
 class LLMConnector
 {
 

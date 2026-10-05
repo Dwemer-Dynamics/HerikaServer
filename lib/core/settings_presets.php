@@ -43,6 +43,7 @@ function chimSettingsPresetConnectorAvailability(bool $available): array
         'PLAYER_RESPEECH' => $available,
         'CORE_CONNECTOR_SUMMARY_ENABLED' => $available,
         'CORE_CONNECTOR_MEDIUMTERM_ENABLED' => $available,
+        'CORE_CONNECTOR_DECISION_ENABLED' => $available,
         'SCENE_CLASSIFIER_ENABLED' => $available,
         'CORE_CONNECTOR_PROFILES_ENABLED' => $available,
         'CORE_CONNECTOR_DIRECTOR_ENABLED' => $available,
@@ -1036,6 +1037,10 @@ function chimSettingsPresetApply(string $presetId, bool $manageTransaction = tru
     }
     try {
         $settings = chimSettingsPresetNormalizeSettings((array)($snapshot['global_settings'] ?? []));
+        // Presets saved before the Decision Connector existed must not enable a remote decision model.
+        if (!array_key_exists('CORE_CONNECTOR_DECISION_ENABLED', $settings) && ($settings['SCENE_CLASSIFIER_ENABLED'] ?? '') === 'false') {
+            $settings['CORE_CONNECTOR_DECISION_ENABLED'] = 'false';
+        }
         $settingsUpdated = 0;
         foreach ($settings as $name => $value) {
             if (!chimSetGeneralSetting($name, $value)) {
