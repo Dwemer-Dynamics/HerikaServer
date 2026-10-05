@@ -94,6 +94,7 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'CORE_CONNECTOR_DECISION_ENABLED', 'type' => 'boolean', 'default' => true],
             ['name' => 'STT_TARGETING_ENABLED', 'type' => 'boolean', 'default' => true],
             ['name' => 'DECISION_SCENE_CLASSIFIER_ENABLED', 'type' => 'boolean', 'default' => true],
+            ['name' => 'DECISION_QUEST_INTENT_ENABLED', 'type' => 'boolean', 'default' => false],
             ['name' => 'CORE_CONNECTOR_SCENECLASSIFIER', 'type' => 'foreign:core_llm_connector:id:label'],
             ['name' => 'SCENE_CLASSIFIER_ENABLED', 'type' => 'boolean', 'default' => true],
             ['name' => 'CORE_CONNECTOR_PROFILES', 'type' => 'foreign:core_llm_connector:id:label'],

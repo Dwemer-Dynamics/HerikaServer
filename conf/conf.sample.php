@@ -181,6 +181,7 @@ $CORE_CONNECTOR_DECISION=8; // OpenRouter Jev (Decision). Database updates resol
 $CORE_CONNECTOR_DECISION_ENABLED=true; // Classify scene genre with the Decision Connector.
 $STT_TARGETING_ENABLED=true; // Let the Decision Connector pick which nearby NPC answers player voice input.
 $DECISION_SCENE_CLASSIFIER_ENABLED=true; // Let the Decision Connector pick the scene genre for ambient cues.
+$DECISION_QUEST_INTENT_ENABLED=false; // Let the Decision Connector interpret player dialogue for Traditional Quest steps.
 $CORE_CONNECTOR_SCENECLASSIFIER=7; // Gemma 3 4B, Scene Classifier (Legacy)
 $SCENE_CLASSIFIER_ENABLED=true; // Used when the Decision Connector is disabled.
 $CORE_CONNECTOR_PROFILES=1;

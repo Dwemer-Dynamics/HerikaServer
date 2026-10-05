@@ -2831,6 +2831,11 @@ if (!$outputWasValid) {
     }
 }
 
+// Let Traditional Quests judge the whole streamed reply if a chunk deferred it; failed or superseded replies are dropped.
+if (function_exists('chimQuestEngineEndLiveDialogueTurn')) {
+    chimQuestEngineEndLiveDialogueTurn($outputWasValid);
+}
+
 
 if (sizeof($talkedSoFar) == 0) {
     if (sizeof($alreadysent) > 0) { // AI only issued commands

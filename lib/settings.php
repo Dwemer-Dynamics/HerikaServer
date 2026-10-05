@@ -112,6 +112,22 @@ if (!function_exists('chimIsDecisionSceneClassifierEnabled')) {
     }
 }
 
+if (!function_exists('chimIsDecisionQuestIntentEnabled')) {
+    /** Quest Dialogue Intent task switch for the Decision Connector; a missing setting means off. */
+    function chimIsDecisionQuestIntentEnabled(): bool
+    {
+        $value = function_exists('chimReadLegacyGlobalValue')
+            ? chimReadLegacyGlobalValue('DECISION_QUEST_INTENT_ENABLED', false)
+            : ($GLOBALS['DECISION_QUEST_INTENT_ENABLED'] ?? false);
+
+        if (is_string($value)) {
+            return in_array(strtolower(trim($value)), ['1', 'true', 'yes', 'on'], true);
+        }
+
+        return (bool)$value;
+    }
+}
+
 if (!function_exists('chimLoadRawConfSchema')) {
     function chimLoadRawConfSchema(): array
     {
@@ -318,6 +334,7 @@ if (!function_exists('chimGetManagedGeneralSettingIds')) {
             'CORE_CONNECTOR_DECISION_ENABLED',
             'STT_TARGETING_ENABLED',
             'DECISION_SCENE_CLASSIFIER_ENABLED',
+            'DECISION_QUEST_INTENT_ENABLED',
             'CORE_CONNECTOR_SCENECLASSIFIER',
             'CORE_CONNECTOR_PROFILES',
             'CORE_CONNECTOR_DIRECTOR',
@@ -415,6 +432,7 @@ if (!function_exists('chimPrettySettingLabel')) {
             'CORE_CONNECTOR_DECISION_ENABLED' => 'Decision Connector Available',
             'STT_TARGETING_ENABLED' => 'STT Targeting',
             'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
+            'DECISION_QUEST_INTENT_ENABLED' => 'Quest Dialogue Intent',
             'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier (Legacy)',
             'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier (Legacy)',
             'CORE_CONNECTOR_PROFILES' => 'Profile Tasks',
