@@ -374,6 +374,14 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
 
                 if ($mustInstructBypassBgl) {
                     error_log("[BGL] {$npc["npc_name"]} has been near a player for more than 10 checks. Issuing INSTRUCTION");
+                    // Normal instruction prompts do not load dedicated BGL goals, so attach a short excerpt.
+                    // Strip rolecommand (@), request (|) and speaker-prefix (:) delimiters plus control characters.
+                    $bglGoals = is_string($mwdata["background_life_goals"] ?? null) ? $mwdata["background_life_goals"] : '';
+                    $bglGoals = trim(preg_replace('/[\p{Cc}\s]+/u', ' ', str_replace(['@', '|', ':'], ['', '', ' -'], $bglGoals)) ?? '');
+                    if (mb_strlen($bglGoals) > 500) {
+                        $bglGoals = rtrim(mb_substr($bglGoals, 0, 500)) . '...';
+                    }
+                    $bglGoalsText = $bglGoals !== '' ? " Background Life goals - {$bglGoals}." : '';
                     $GLOBALS["db"]->insert(
                         'responselog',
                         [
@@ -381,7 +389,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                             'sent' => 0,
                             'actor' => "rolemaster",
                             'text' => "",
-                            'action' => "rolecommand|Instruction@{$npc["npc_name"]}@{$npc["npc_name"]} should review own life goals, latest inner thoughts, and take a related action or express his/her concerns@0",
+                            'action' => "rolecommand|Instruction@{$npc["npc_name"]}@{$npc["npc_name"]} may take one concrete, feasible next step toward established goals or recent concerns, such as a purposeful talk with someone present, proposing a relevant activity, or asking the player for specific help only when justified. Use only known facts and available actions, respect recent refusals and commitments, and never assume agreement or success. If no useful opportunity exists, just interact naturally.{$bglGoalsText}@0",
                             'tag' => "",
                         ]
                     );
