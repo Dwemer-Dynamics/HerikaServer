@@ -3364,7 +3364,10 @@ if (!function_exists('chimQuestEngineRollbackRuntimeToGamets')) {
             if (chimQuestEngineIsRadiantTemplate($definition)) {
                 continue;
             }
-            if (chimQuestEngineRebuildInstanceStateAtGamets($definition, $targetGamets)) {
+            $rebuiltInstance = chimQuestEngineWithInstanceLock($definition['quest_key'] ?? '', function () use ($definition, $targetGamets) {
+                return chimQuestEngineRebuildInstanceStateAtGamets($definition, $targetGamets);
+            });
+            if ($rebuiltInstance) {
                 $rebuilt++;
             }
         }
@@ -3380,8 +3383,41 @@ if (!function_exists('chimQuestEngineRollbackRuntimeToGamets')) {
     }
 }
 
+if (!function_exists('chimQuestEngineWithInstanceLock')) {
+    // The game sends quest_stage, location and inventory events for one moment as concurrent requests, and each
+    // request rewrites every quest instance from its own read. Serialize each quest's read-modify-write so a
+    // request that read before another's commit cannot overwrite it (e.g. erasing an observed stage).
+    function chimQuestEngineWithInstanceLock($questKey, callable $callback)
+    {
+        $lockKey = "hashtext('chim_quest_instance'), hashtext('" . $GLOBALS["db"]->escape(chimQuestEngineNormalizeQuestKey($questKey)) . "')";
+        $locked = false;
+        try {
+            $locked = (bool)$GLOBALS["db"]->fetchOne("SELECT pg_advisory_lock({$lockKey}) AS locked");
+        } catch (Throwable $e) {
+            chimQuestEngineLog('warn', 'Quest instance lock unavailable: ' . $e->getMessage());
+        }
+
+        try {
+            return $callback();
+        } finally {
+            if ($locked) {
+                $GLOBALS["db"]->fetchOne("SELECT pg_advisory_unlock({$lockKey}) AS unlocked");
+            }
+        }
+    }
+}
+
 if (!function_exists('chimQuestEngineHandleEventForDefinition')) {
     function chimQuestEngineHandleEventForDefinition(array $definition, $eventType, array $payload)
+    {
+        return chimQuestEngineWithInstanceLock($definition['quest_key'] ?? '', function () use ($definition, $eventType, $payload) {
+            return chimQuestEngineHandleEventForDefinitionLocked($definition, $eventType, $payload);
+        });
+    }
+}
+
+if (!function_exists('chimQuestEngineHandleEventForDefinitionLocked')) {
+    function chimQuestEngineHandleEventForDefinitionLocked(array $definition, $eventType, array $payload)
     {
         chimQuestEngineEnsureInstanceRow($definition);
 
