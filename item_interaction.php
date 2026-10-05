@@ -134,6 +134,18 @@ try {
     if ($op!=='receipt' || !$state || !hash_equals($state['session'],$session) || $state['status']!=='ready') throw new RuntimeException('Expired or completed interaction');
     if (!is_array($input['receipts'] ?? null) || count($input['receipts'])!==count($state['plan']['steps'])) throw new InvalidArgumentException('Invalid execution receipt');
     $sentences=[]; $facts=[];
+    // Spoken attempts use ordinary verbs; receipt facts retain the exact effect identifiers below.
+    $attempts=[
+        'observe'=>'examine '.$state['target'], 'pickup'=>'pick up '.$state['target'],
+        'give'=>'give '.$state['item'].' to '.$state['target'], 'store'=>'put '.$state['item'].' in '.$state['target'],
+        'consume'=>'give '.$state['item'].' to '.$state['target'], 'consume_world'=>'consume '.$state['target'],
+        'equip'=>'outfit '.$state['target'].' with '.$state['item'], 'injure'=>'hurt '.$state['target'],
+        'kill'=>'kill '.$state['target'], 'push'=>'push '.$state['target'], 'lock'=>'lock '.$state['target'],
+        'unlock'=>'unlock '.$state['target'], 'activate'=>'use '.$state['target'], 'open'=>'open '.$state['target'],
+        'close'=>'close '.$state['target'], 'destroy'=>'damage '.$state['target'], 'disable'=>'remove '.$state['target'],
+        'resize'=>'change the size of '.$state['target'], 'magic'=>'use '.$state['item'].' on '.$state['target'],
+        'combat'=>'provoke '.$state['target'].' into a fight'
+    ];
     foreach ($state['plan']['steps'] as $index=>$step) {
         $receipt=$input['receipts'][$index];
         $status=$receipt['status'] ?? '';
@@ -143,19 +155,21 @@ try {
         }
         $detail=mb_substr((string)($receipt['detail'] ?? ''),0,300);
         $facts[]=$step['effect'].': '.$status.($detail!=='' ? ' ('.$detail.')' : '');
-        if ($status==='succeeded' && $step['effect']==='activate') $sentences[]=$state['player'].' activates '.$state['target'].'.';
-        elseif ($status==='succeeded' && $step['effect']==='consume_world') $sentences[]=$state['player'].' consumes '.$state['target'].'.';
-        elseif ($status==='succeeded' && $step['effect']==='consume') $sentences[]=$state['target'].' consumes '.$state['item'].'.';
+        if ($status==='succeeded' && $step['effect']==='activate') $sentences[]=$state['player'].' uses '.$state['target'].'.';
+        elseif ($status==='succeeded' && $step['effect']==='consume_world') $sentences[]=$state['player'].' finishes '.$state['target'].'.';
+        elseif ($status==='succeeded' && $step['effect']==='consume') $sentences[]=$state['target'].' finishes '.$state['item'].'.';
         elseif ($status==='succeeded' && $step['narration']!=='') $sentences[]=$step['narration'];
         elseif ($status==='unknown' || $status==='failed') {
-            if (str_starts_with($detail,'World item transferred')) $sentences[]=$state['player'].' takes '.$state['target'].', but consumption could not be confirmed.';
-            elseif (str_starts_with($detail,'Item transferred')) $sentences[]=$state['target'].' receives '.$state['item'].', but the rest of that action does not complete.';
-            elseif (str_starts_with($detail,'Scroll consumed')) $sentences[]=$state['player'].' uses up the scroll, but its effect could not be confirmed.';
-            else $sentences[]=$state['player']."'s attempt to ".$step['effect'].' '.$state['target'].($status==='failed' ? ' does not succeed.' : ' has an uncertain result.');
+            if (str_starts_with($detail,'World item transferred')) $sentences[]=$state['player'].' takes '.$state['target'].' and tries to consume it.';
+            elseif (str_starts_with($detail,'Item transferred')) $sentences[]=$state['target'].' receives '.$state['item']
+                .($status==='failed' ? ', but the attempt goes no further.' : '.');
+            elseif (str_starts_with($detail,'Scroll consumed')) $sentences[]=$state['player'].' uses up the scroll.';
+            else $sentences[]=$state['player'].' tries to '.($attempts[$step['effect']] ?? 'act on '.$state['target'])
+                .($status==='failed' ? ', but the attempt falls short.' : '.');
         }
     }
     if (!$state['plan']['steps']) $sentences[]=$state['plan']['failure_narration'];
-    if (!$sentences) $sentences[]=$state['player']."'s interaction with ".$state['target'].' stops before its effects can complete.';
+    if (!$sentences) $sentences[]=$state['player']."'s attempt ends before it can get underway.";
     $text=implode(' ',$sentences);
     $state['status']='completed'; $state['receipts']=$input['receipts'];
     $utterance='interact-'.$id;
