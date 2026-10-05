@@ -368,6 +368,7 @@ if (!function_exists('chimQuestEngineDefaultState')) {
             'dead_actors' => array(),
             'entered_locations' => array(),
             'current_stage' => null,
+            'observed_stage' => null,
             'radiant_aliases' => array(),
             'last_dialogue' => array(),
         );
@@ -409,6 +410,9 @@ if (!function_exists('chimQuestEngineNormalizeState')) {
         } else {
             $normalized['current_stage'] = null;
         }
+        $normalized['observed_stage'] = (is_int($normalized['observed_stage']) || (is_string($normalized['observed_stage']) && ctype_digit($normalized['observed_stage'])))
+            ? intval($normalized['observed_stage'])
+            : null;
 
         return $normalized;
     }
@@ -2801,6 +2805,26 @@ if (!function_exists('chimQuestEngineAdjustItemCount')) {
     }
 }
 
+if (!function_exists('chimQuestEngineStageCompletionReached')) {
+    // Optional authored `completion_stage`: the quest counts as completed once the game itself reports a
+    // matching quest_stage at or above it (`observed_stage`). Optimistic set_stage actions and dialogue
+    // selection only move `current_stage`, so they never prove completion. Definitions without the field
+    // are unaffected.
+    function chimQuestEngineStageCompletionReached(array $definition, array $state)
+    {
+        $completionStage = $definition['completion_stage'] ?? null;
+        if (is_string($completionStage) && ctype_digit($completionStage)) {
+            $completionStage = intval($completionStage);
+        }
+        if (!is_int($completionStage) || $completionStage < 0) {
+            return false;
+        }
+        $observed = $state['observed_stage'] ?? null;
+
+        return is_int($observed) && $observed >= $completionStage;
+    }
+}
+
 if (!function_exists('chimQuestEngineMutateStateForAction')) {
     function chimQuestEngineMutateStateForAction(array &$state, array $action)
     {
@@ -2834,6 +2858,72 @@ if (!function_exists('chimQuestEngineActionRequiresAppliedAckForState')) {
     }
 }
 
+if (!function_exists('chimQuestEngineObjectiveIndexValue')) {
+    // The plugin reads objective indexes as a Papyrus int. Accept only whole, finite values in
+    // 0..2147483647 so nothing can wrap; booleans, INF/NAN, signs, decimals and longer digit strings are rejected.
+    function chimQuestEngineObjectiveIndexValue($value)
+    {
+        $max = 2147483647;
+        if (is_int($value)) {
+            return ($value >= 0 && $value <= $max) ? $value : null;
+        }
+        if (is_float($value)) {
+            return (is_finite($value) && $value >= 0 && $value <= $max && floor($value) === $value) ? intval($value) : null;
+        }
+        if (is_string($value) && preg_match('/^\s*(\d{1,10})\s*$/', $value, $match)) {
+            $digits = ltrim($match[1], '0');
+            if ($digits === '') {
+                return 0;
+            }
+            if (strlen($digits) < 10 || strcmp($digits, (string)$max) <= 0) {
+                return intval($digits);
+            }
+        }
+
+        return null;
+    }
+}
+
+if (!function_exists('chimQuestEngineNormalizeObjectiveActionPayload')) {
+    // Definitions name the objective `index`, `objective_index` or `objective`. The client reads integer
+    // `index` for set_objective_* and cross_quest_set_objective_completed, and `objective_index` for the
+    // stage/objective start actions, so fill both for those action types only. The first valid value in the order index, objective_index,
+    // objective fills missing or invalid fields; a field that already holds a different valid value keeps
+    // it (as an integer). With no valid value the payload is returned unchanged.
+    function chimQuestEngineNormalizeObjectiveActionPayload(array $payload, $actionType = '')
+    {
+        $type = strtolower(trim((string)(($actionType !== '' && $actionType !== null) ? $actionType : ($payload['type'] ?? ''))));
+        $startTypes = array(
+            'start_quest_stage_objective',
+            'actor_dialogue_start_quest_stage_objective',
+            'change_location_start_quest_stage_objective',
+        );
+        if (strpos($type, 'set_objective_') !== 0 && $type !== 'cross_quest_set_objective_completed' && !in_array($type, $startTypes, true)) {
+            return $payload;
+        }
+
+        $resolved = null;
+        foreach (array('index', 'objective_index', 'objective') as $field) {
+            if (array_key_exists($field, $payload)) {
+                $resolved = chimQuestEngineObjectiveIndexValue($payload[$field]);
+                if ($resolved !== null) {
+                    break;
+                }
+            }
+        }
+        if ($resolved === null) {
+            return $payload;
+        }
+
+        foreach (array('index', 'objective_index') as $field) {
+            $value = array_key_exists($field, $payload) ? chimQuestEngineObjectiveIndexValue($payload[$field]) : null;
+            $payload[$field] = ($value === null) ? $resolved : $value;
+        }
+
+        return $payload;
+    }
+}
+
 if (!function_exists('chimQuestEngineQueueResolvedAction')) {
     function chimQuestEngineQueueResolvedAction(array $definition, $questKey, $beatId, array $action, array &$state, $sourceActionType = '', $gamets = null)
     {
@@ -2861,6 +2951,7 @@ if (!function_exists('chimQuestEngineQueueResolvedAction')) {
         if (!isset($payload['index']) && isset($payload['objective_index'])) {
             $payload['index'] = $payload['objective_index'];
         }
+        $payload = chimQuestEngineNormalizeObjectiveActionPayload($payload, $actionType);
 
         chimQuestEngineQueueAction($questKey, $beatId, $actionType, $payload, $actionGamets);
     }
@@ -3054,6 +3145,7 @@ if (!function_exists('chimQuestEngineApplyEventToState')) {
             $stage = intval($payload['stage'] ?? -1);
             if ($stage >= 0) {
                 $state['current_stage'] = $stage;
+                $state['observed_stage'] = $stage;
             }
             if (!empty($definition['radiant_aliases']) && is_array($definition['radiant_aliases'])) {
                 $state['radiant_aliases'] = $definition['radiant_aliases'];
@@ -3226,6 +3318,9 @@ if (!function_exists('chimQuestEngineRebuildInstanceStateAtGamets')) {
         if (!is_string($runState) || trim($runState) === '') {
             $runState = (!empty($firedBeats) || $state['current_stage'] !== null) ? 'running' : 'inactive';
         }
+        if (strtolower($runState) !== 'failed' && chimQuestEngineStageCompletionReached($definition, $state)) {
+            $runState = 'completed';
+        }
         unset($state['run_state']);
 
         return chimQuestEnginePersistInstance($definition, array(
@@ -3312,6 +3407,9 @@ if (!function_exists('chimQuestEngineHandleEventForDefinition')) {
             if ($instance['run_state'] === 'inactive' && $instance['current_stage'] !== null) {
                 $instance['run_state'] = 'running';
             }
+            if ($instance['run_state'] !== 'failed' && chimQuestEngineStageCompletionReached($definition, $instance['state_json'])) {
+                $instance['run_state'] = 'completed';
+            }
             chimQuestEnginePersistInstance($definition, $instance);
             return array(
                 'quest_key' => $definition['quest_key'],
@@ -3382,6 +3480,9 @@ if (!function_exists('chimQuestEngineHandleEventForDefinition')) {
 
         if ($instance['run_state'] === 'inactive' && (!empty($firedBeats) || $instance['current_stage'] !== null)) {
             $instance['run_state'] = 'running';
+        }
+        if ($instance['run_state'] !== 'failed' && chimQuestEngineStageCompletionReached($definition, $instance['state_json'])) {
+            $instance['run_state'] = 'completed';
         }
 
         chimQuestEnginePersistInstance($definition, $instance);
@@ -3562,13 +3663,17 @@ if (!function_exists('chimQuestEngineFetchPendingActions')) {
 
         $actions = array();
         foreach ($rows as $row) {
+            $payload = chimQuestEngineJsonDecode($row['payload_json'] ?? '{}', array());
+            if (!is_array($payload)) {
+                $payload = array();
+            }
             $actions[] = array(
                 'id' => intval($row['id']),
                 'quest_key' => $row['quest_key'],
                 'beat_id' => $row['beat_id'],
                 'action_type' => $row['action_type'],
                 'action_gamets' => ($row['action_gamets'] === null || $row['action_gamets'] === '') ? null : intval($row['action_gamets']),
-                'payload' => chimQuestEngineJsonDecode($row['payload_json'] ?? '{}', array()),
+                'payload' => chimQuestEngineNormalizeObjectiveActionPayload($payload, (string)($row['action_type'] ?? '')),
                 'status' => $row['status'],
                 'created_at' => $row['created_at'],
                 'applied_at' => $row['applied_at'],
