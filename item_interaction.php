@@ -9,7 +9,7 @@ header('Cache-Control: no-store');
 // Generate missing audio after committing the receipt; identical retries reuse its cache key.
 function chimInteractSpeech(array $state): array {
     $narration=$state['narration'];
-    $audio=$GLOBALS['ENGINE_ROOT'].'/soundcache/'.$narration['tts_cache_key'].'.wav';
+    $audio=__DIR__.'/soundcache/'.$narration['tts_cache_key'].'.wav';
     if (!is_file($audio) || filesize($audio)<=44) {
         $narrator=(new Narrator())->getNarratorData();
         chimDirectorActorGlobals($narrator);
@@ -41,6 +41,7 @@ try {
     require_once __DIR__.'/lib/core/npc_master.class.php';
     require_once __DIR__.'/lib/core/core_profiles.class.php';
     require_once __DIR__.'/lib/director_scene.php';
+    require_once __DIR__.'/lib/data_functions.php';
     $db=$GLOBALS['db'];
     $session=hash('sha256',(string)($_SERVER['HTTP_X_CHIM_PLAYTHROUGH'] ?? ''));
     $op=$input['op'] ?? 'resolve';
