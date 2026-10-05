@@ -1959,7 +1959,7 @@ if (!function_exists('chimQuestEngineBeatIntentThreshold')) {
             }
         }
 
-        return 0.80;
+        return 0.50;
     }
 }
 
@@ -2503,7 +2503,7 @@ if (!function_exists('chimQuestEngineJevDecideDialogueBeat')) {
             if (!is_array($candidate) || !is_array($candidate['beat'] ?? null)) {
                 throw new RuntimeException('malformed_answer');
             }
-            $threshold = max(CHIM_QUEST_INTENT_JEV_MIN_CONFIDENCE, floatval($candidate['threshold'] ?? 0.80));
+            $threshold = max(CHIM_QUEST_INTENT_JEV_MIN_CONFIDENCE, floatval($candidate['threshold'] ?? 0.50));
             if ($confidence < $threshold) {
                 throw new RuntimeException('low_confidence');
             }
@@ -2651,7 +2651,7 @@ if (!function_exists('chimQuestEngineSelectDialogueBeatByIntent')) {
             return null;
         }
 
-        $threshold = floatval($candidate['threshold'] ?? 0.80);
+        $threshold = floatval($candidate['threshold'] ?? 0.50);
         if (floatval($selection['confidence'] ?? 0.0) + 0.0001 < $threshold) {
             chimQuestEngineLog(
                 'debug',
@@ -3576,7 +3576,7 @@ if (!function_exists('chimQuestEngineHandleEventForDefinitionLocked')) {
                 $intentPayload['evaluation_mode'] = 'llm_fallback';
                 $intentPayload['intent_selected_beat_id'] = $intentSelection['selected_beat_id'];
                 $intentPayload['intent_confidence'] = floatval($intentSelection['confidence'] ?? 0.0);
-                $intentPayload['intent_threshold'] = floatval($intentSelection['threshold'] ?? 0.80);
+                $intentPayload['intent_threshold'] = floatval($intentSelection['threshold'] ?? 0.50);
                 $intentPayload['intent_reason'] = $intentSelection['reason'] ?? '';
 
                 chimQuestEngineFireBeat(
