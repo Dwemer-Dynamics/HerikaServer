@@ -144,6 +144,6 @@ function chimInteractClaimReaction(string $payload, string $speaker): ?array {
     $state=json_decode($row['data'],true);
     $receipts=[];
     foreach ($state['receipts'] as $index=>$receipt) $receipts[]=array_merge($receipt,['effect'=>$state['plan']['steps'][$index]['effect']]);
-    return ['player'=>$state['player'],'target'=>$state['target'],'intent'=>$state['intent'],
+    return ['id'=>$state['id'],'player'=>$state['player'],'target'=>$state['target'],'intent'=>$state['intent'],
         'receipts'=>$receipts,'narrated_outcome'=>$state['narration']['text']];
 }

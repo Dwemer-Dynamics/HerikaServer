@@ -114,10 +114,15 @@ try {
         echo json_encode(['ok'=>true,'id'=>$id,'plan'=>$plan],JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
+    if ($op==='audio' && $state && hash_equals($state['session'],$session) && $state['status']==='completed') {
+        $db->query('COMMIT');
+        echo json_encode(['ok'=>true,'id'=>$id,'narration'=>chimInteractSpeech($state)],JSON_INVALID_UTF8_SUBSTITUTE);
+        exit;
+    }
     if ($op==='receipt' && $state && hash_equals($state['session'],$session) && $state['status']==='completed') {
         if (($state['receipts'] ?? [])!==($input['receipts'] ?? [])) throw new InvalidArgumentException('Receipt changed');
         $db->query('COMMIT');
-        echo json_encode(['ok'=>true,'id'=>$id,'narration'=>chimInteractSpeech($state)],JSON_INVALID_UTF8_SUBSTITUTE);
+        echo json_encode(['ok'=>true,'id'=>$id,'narration'=>(($input['defer_audio'] ?? false)===true ? $state['narration'] : chimInteractSpeech($state))],JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
     if ($op==='cancel' && $state && hash_equals($state['session'],$session) && in_array($state['status'],['resolving','ready'],true)) {
@@ -162,7 +167,7 @@ try {
             'people'=>'|'.$state['player'].'|'.$state['target'].'|','location'=>'','party'=>'','sess'=>'',
             'utterance_id'=>$utterance,'delivery_state'=>'pending'],'rowid')) throw new RuntimeException('Could not save outcome');
     if ($db->query('COMMIT')===false) throw new RuntimeException('Could not commit outcome');
-    echo json_encode(['ok'=>true,'id'=>$id,'narration'=>chimInteractSpeech($state)],JSON_INVALID_UTF8_SUBSTITUTE);
+    echo json_encode(['ok'=>true,'id'=>$id,'narration'=>(($input['defer_audio'] ?? false)===true ? $state['narration'] : chimInteractSpeech($state))],JSON_INVALID_UTF8_SUBSTITUTE);
 } catch (Throwable $error) {
     if (isset($db)) {
         $db->query('ROLLBACK');
