@@ -81,8 +81,8 @@ function chimPrismaGlobalSettingsSections(): array
         ],
         // Each connector is followed by the boolean that makes its tasks available. Scene
         // Classifier (Legacy) and Relationship Management reuse their existing settings. An
-        // enabled Decision Connector replaces Scene Classifier (Legacy). STT Targeting is a separate
-        // Decision Connector task switch and does not affect scene genre.
+        // enabled Decision Connector replaces Scene Classifier (Legacy). STT Targeting and Scene Classifier
+        // are independent Decision Connector task switches; Scene Classifier off never falls back to the legacy one.
         'Global Connectors' => [
             ['name' => 'CORE_CONNECTOR_PLAYER', 'type' => 'foreign:core_llm_connector:id:label'],
             ['name' => 'PLAYER_RESPEECH', 'type' => 'boolean', 'default' => true],
@@ -93,6 +93,7 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'CORE_CONNECTOR_DECISION', 'type' => 'foreign:core_llm_connector:id:label'],
             ['name' => 'CORE_CONNECTOR_DECISION_ENABLED', 'type' => 'boolean', 'default' => true],
             ['name' => 'STT_TARGETING_ENABLED', 'type' => 'boolean', 'default' => true],
+            ['name' => 'DECISION_SCENE_CLASSIFIER_ENABLED', 'type' => 'boolean', 'default' => true],
             ['name' => 'CORE_CONNECTOR_SCENECLASSIFIER', 'type' => 'foreign:core_llm_connector:id:label'],
             ['name' => 'SCENE_CLASSIFIER_ENABLED', 'type' => 'boolean', 'default' => true],
             ['name' => 'CORE_CONNECTOR_PROFILES', 'type' => 'foreign:core_llm_connector:id:label'],
