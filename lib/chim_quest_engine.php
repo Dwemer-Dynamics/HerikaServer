@@ -2291,6 +2291,69 @@ if (!function_exists('chimQuestEngineJevDialogueText')) {
     }
 }
 
+if (!function_exists('chimQuestEngineLiveDialogueReply')) {
+    // A streamed reply reaches the engine one chunk at a time. This keeps the reply assembled so far for the current
+    // root request only, so Jev can judge the whole reply while each dialogue event and its evidence keep their own
+    // chunk. The turn is the request as sent (never the later game time a delayed turn is recorded at); a different
+    // turn or NPC replaces it, so at most one reply is held. Operations: append, text, defer, finishing, pending,
+    // finish, finished and reset.
+    function chimQuestEngineLiveDialogueReply($operation, array $payload = array())
+    {
+        static $turn = null;
+
+        $key = sha1(implode("\x1F", array(
+            strtolower(trim((string)($payload['npc_name'] ?? ''))),
+            strval(intval($payload['ts'] ?? 0)),
+            strtolower(trim((string)($payload['request_type'] ?? ''))),
+            trim((string)($payload['player_text'] ?? '')),
+            strval(intval($payload['request_gamets'] ?? ($payload['gamets'] ?? 0))),
+        )));
+        $current = is_array($turn) && ($payload['event_source'] ?? '') === 'live_dialogue' && $turn['key'] === $key;
+
+        switch ($operation) {
+            case 'append':
+                if (!$current) {
+                    $turn = array('key' => $key, 'parts' => array(), 'deferred' => false, 'finishing' => false);
+                }
+                $turn['payload'] = $payload;
+                $turn['parts'][] = trim((string)($payload['npc_text'] ?? ''));
+                // Same whole-text limit as Jev: drop the oldest whole chunks, never cut one.
+                while (count($turn['parts']) > 1
+                    && strlen(implode(' ', $turn['parts'])) > CHIM_QUEST_INTENT_JEV_MAX_DIALOGUE_BYTES) {
+                    array_shift($turn['parts']);
+                }
+                return true;
+            case 'text':
+                return $current ? implode(' ', $turn['parts']) : ($payload['npc_text'] ?? '');
+            case 'defer':
+                if ($current) {
+                    $turn['deferred'] = true;
+                }
+                return $current;
+            case 'finishing':
+                return $current && $turn['finishing'];
+            case 'pending':
+                return is_array($turn) && $turn['deferred'] && !$turn['finishing'];
+            case 'finish':
+                if (!is_array($turn) || !$turn['deferred'] || $turn['finishing']) {
+                    return null;
+                }
+                $turn['deferred'] = false;
+                $turn['finishing'] = true;
+                return $turn['payload'];
+            case 'finished':
+                if (is_array($turn)) {
+                    $turn['finishing'] = false;
+                }
+                return true;
+            case 'reset':
+                $turn = null;
+                return true;
+        }
+        return null;
+    }
+}
+
 if (!function_exists('chimQuestEngineSelectDialogueBeatByJev')) {
     // Uses only CORE_CONNECTOR_DECISION while it is available and is a decision connector.
     function chimQuestEngineSelectDialogueBeatByJev(array $definition, array $instance, array $payload, array $candidates)
@@ -2373,7 +2436,7 @@ if (!function_exists('chimQuestEngineJevDecideDialogueBeat')) {
                 'location' => chimQuestEngineLimitText($payload['location_name'] ?? ($payload['location'] ?? ''), 80),
                 'npc' => chimQuestEngineLimitText($payload['npc_name'] ?? '', 80),
                 'player_line' => chimQuestEngineJevDialogueText($payload['player_text'] ?? ''),
-                'npc_reply' => chimQuestEngineJevDialogueText($payload['npc_text'] ?? ''),
+                'npc_reply' => chimQuestEngineJevDialogueText(chimQuestEngineLiveDialogueReply('text', $payload)),
             );
             // Each step is judged by the actor its own description names: NPC exposition from the NPC reply,
             // player actions only from the player's line. Undescribed actors default to the stricter player rule.
@@ -2487,6 +2550,16 @@ if (!function_exists('chimQuestEngineSelectDialogueBeatByIntent')) {
             return null;
         }
 
+        // Quest Dialogue Intent replaces the chat request below for Traditional (non-radiant) quests only; it never
+        // falls back to it. Radiant templates and their concrete instances keep the chat request.
+        $isRadiant = chimQuestEngineIsRadiantTemplate($definition) || !empty($definition['radiant_instance'])
+            || trim((string)($definition['template_quest_key'] ?? '')) !== '';
+        $useJev = !$isRadiant && function_exists('chimIsDecisionQuestIntentEnabled') && chimIsDecisionQuestIntentEnabled();
+        $replyComplete = chimQuestEngineLiveDialogueReply('finishing', $payload);
+        if ($replyComplete && !$useJev) {
+            return null;
+        }
+
         $intentBudgetKey = md5(implode('|', array(
             strtolower(trim((string)($payload['npc_name'] ?? ''))),
             strtolower($playerTextCn),
@@ -2499,13 +2572,15 @@ if (!function_exists('chimQuestEngineSelectDialogueBeatByIntent')) {
             chimQuestEngineLog('debug', 'Skipping quest intent fallback: per-turn fallback limit reached');
             return null;
         }
+        // A live reply keeps the turn's last Jev call for its complete text, judged once the stream ends.
+        if ($useJev && !$replyComplete && $intentFallbackCounts[$intentBudgetKey] >= $intentFallbackLimit - 1
+            && chimQuestEngineLiveDialogueReply('defer', $payload)) {
+            chimQuestEngineLog('debug', 'Deferring quest intent to the complete reply: per-turn limit reserved');
+            return null;
+        }
         $intentFallbackCounts[$intentBudgetKey]++;
 
-        // Quest Dialogue Intent replaces the chat request below for Traditional (non-radiant) quests only; it never
-        // falls back to it. Radiant templates and their concrete instances keep the chat request.
-        $isRadiant = chimQuestEngineIsRadiantTemplate($definition) || !empty($definition['radiant_instance'])
-            || trim((string)($definition['template_quest_key'] ?? '')) !== '';
-        if (!$isRadiant && function_exists('chimIsDecisionQuestIntentEnabled') && chimIsDecisionQuestIntentEnabled()) {
+        if ($useJev) {
             return chimQuestEngineSelectDialogueBeatByJev($definition, $instance, $payload, $candidates);
         }
 
@@ -3459,9 +3534,11 @@ if (!function_exists('chimQuestEngineHandleEventForDefinitionLocked')) {
 
         $firedBeats = array();
         $passes = 0;
+        // Completing a streamed reply only adds the Jev decision; each chunk already ran the deterministic triggers.
+        $deterministicBeats = chimQuestEngineLiveDialogueReply('finishing', $payload) ? array() : ($definition['beats'] ?? array());
         do {
             $firedThisPass = false;
-            foreach ($definition['beats'] ?? array() as $beat) {
+            foreach ($deterministicBeats as $beat) {
                 if (!is_array($beat)) {
                     continue;
                 }
@@ -3567,10 +3644,15 @@ if (!function_exists('chimQuestEngineHandleEvent')) {
         $definitions = chimQuestEngineExpandRadiantDefinitionsForEvent(chimQuestEngineFetchDefinitions(true), $eventType, $payload);
         $definitions = chimQuestEngineFilterDefinitionsForEvent($definitions, $eventType, $payload);
         $results = array();
+        // The final chunk of a completed reply was already recorded as its own event.
+        $replyComplete = strtolower(trim((string)$eventType)) === 'dialogue_turn'
+            && chimQuestEngineLiveDialogueReply('finishing', $payload);
 
         foreach ($definitions as $definition) {
             $questKey = $definition['quest_key'];
-            chimQuestEngineInsertEvent($questKey, $eventType, $payload);
+            if (!$replyComplete) {
+                chimQuestEngineInsertEvent($questKey, $eventType, $payload);
+            }
             $result = chimQuestEngineHandleEventForDefinition($definition, $eventType, $payload);
             if (!empty($result['beats'])) {
                 $results[] = $result;
@@ -3687,6 +3769,7 @@ if (!function_exists('chimQuestEngineHandleLiveDialogueTurn')) {
             return array('ok' => false, 'error' => 'missing player text');
         }
         if (chimQuestEngineRequestPrecedesSaveLoad($gameRequest[1] ?? '')) {
+            chimQuestEngineLiveDialogueReply('reset');
             chimQuestEngineLog('info', 'Ignored a quest dialogue turn from a request sent before the latest save load.');
             return array('ok' => false, 'error' => 'request precedes save load');
         }
@@ -3703,8 +3786,61 @@ if (!function_exists('chimQuestEngineHandleLiveDialogueTurn')) {
             'location_name' => $GLOBALS["CACHE_LOCATION"] ?? '',
             'listener' => $GLOBALS["SCRIPTLINE_LISTENER_ATOMIC"] ?? '',
         );
+        chimQuestEngineLiveDialogueReply('append', $payload);
 
         return chimQuestEngineHandleEvent('dialogue_turn', $payload);
+    }
+}
+
+if (!function_exists('chimQuestEngineFinishLiveDialogueTurn')) {
+    // Called once the whole reply has been streamed. When a chunk deferred Jev, the reserved call judges the complete
+    // reply after the same save-load check; no event is recorded again and deterministic triggers are not re-run.
+    function chimQuestEngineFinishLiveDialogueTurn()
+    {
+        $payload = chimQuestEngineLiveDialogueReply('finish');
+        if (!is_array($payload)) {
+            return null;
+        }
+        try {
+            if (!chimQuestEngineFeatureEnabled()) {
+                return array('ok' => true, 'disabled' => true);
+            }
+            if (chimQuestEngineRequestPrecedesSaveLoad($payload['ts'] ?? '')) {
+                chimQuestEngineLog('info', 'Ignored a completed quest dialogue reply from a request sent before the latest save load.');
+                return array('ok' => false, 'error' => 'request precedes save load');
+            }
+            return chimQuestEngineHandleEvent('dialogue_turn', $payload);
+        } catch (Throwable $e) {
+            chimQuestEngineLog('warn', 'Quest dialogue reply completion failed: ' . get_class($e));
+            return array('ok' => false, 'error' => 'reply completion failed');
+        } finally {
+            chimQuestEngineLiveDialogueReply('finished');
+        }
+    }
+}
+
+if (!function_exists('chimQuestEngineEndLiveDialogueTurn')) {
+    // main.php boundary after call_llm(). Only a valid, unstopped reply that is still current (interaction On, no newer
+    // player input) is judged whole; anything else drops the assembled reply unjudged. Replies with no deferred
+    // decision return before the interaction and superseding-input checks, so ordinary replies add no queries.
+    function chimQuestEngineEndLiveDialogueTurn($outputWasValid)
+    {
+        if (!chimQuestEngineLiveDialogueReply('pending')) {
+            chimQuestEngineLiveDialogueReply('reset');
+            return null;
+        }
+        $gameRequest = $GLOBALS['gameRequest'] ?? array();
+        $complete = $outputWasValid === true
+            && empty($GLOBALS['ERROR_TRIGGERED'])
+            && empty($GLOBALS['FORCED_STOP'])
+            && function_exists('chimInteractionAllowed') && chimInteractionAllowed()
+            && function_exists('chimFindSupersedingUserInput')
+            && chimFindSupersedingUserInput($GLOBALS['db'] ?? null, $gameRequest[1] ?? '', $gameRequest[0] ?? '') === null;
+        if (!$complete) {
+            chimQuestEngineLiveDialogueReply('reset');
+            return null;
+        }
+        return chimQuestEngineFinishLiveDialogueTurn();
     }
 }
 
