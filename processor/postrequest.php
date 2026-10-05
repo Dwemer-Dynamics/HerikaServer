@@ -141,7 +141,11 @@ if ($minimeEnabled) {
                 $currentConnectorData = $connector->getById($mediumTermConnectorId);
             }
 
-            if (!empty($currentConnectorData)) {
+            require_once __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "lib" . DIRECTORY_SEPARATOR . "scene_classifier_jev.php";
+            $sceneClassifierJev = chimSceneJevSelected($currentConnectorData);
+            if ($sceneClassifierJev) {
+                // Jev uses the Decisions API below, not a chat connector.
+            } else if (!empty($currentConnectorData)) {
                 $connector->setOldGlobals($currentConnectorData);
                 $connectionHandler = $connector->getConnector($currentConnectorData);
             } else {
@@ -158,7 +162,9 @@ if ($minimeEnabled) {
             $prompt[] = ['role' => 'user', 'content' => "Respond only with the genre name."];
 
             $buffer = "";
-            if ($connectionHandler) {
+            if ($sceneClassifierJev) {
+                $buffer = chimSceneJevClassify($currentConnectorData, $historyData, $allowedGenres);
+            } else if ($connectionHandler) {
                 $buffer = $connectionHandler->fast_request(
                     $prompt,
                     ["MAX_TOKENS" => 256],
