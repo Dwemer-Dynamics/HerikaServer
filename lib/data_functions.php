@@ -5144,7 +5144,7 @@ function DataShortTermMemoryFor($actor, $sqlfilter = "")
                     AND $companionConditionSql
                     AND gamets_truncated > " . intval($mtmHightide) . "
                     AND gamets_truncated <= $boundExpr
-                  ORDER BY gamets_truncated DESC
+                  ORDER BY gamets_truncated DESC, rowid ASC
                   LIMIT " . intval($cap);
 
         $rows = $db->fetchAll($query);

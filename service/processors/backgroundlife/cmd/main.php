@@ -628,10 +628,18 @@ if ($middleTermMemorygameTs < ($lastItGamets + (24 / GAMETS_TO_HOURS))) {
      where gamets_truncated>$middleTermMemorygameTs 
      and companions like '%$npcNameEsc%' 
      and summary is not null
-     order by gamets_truncated asc limit 1");
+     order by gamets_truncated asc, rowid asc limit 1");
     if ($lastMemory) {
         $history = "\n<last_memory>\nThis represents last memory of {$GLOBALS['HERIKA_NAME']} after the last interaction with player ({$GLOBALS['PLAYER_NAME']}).\n";
-        $history .= "Memory: {$lastMemory['summary']}\n";
+        // A bucket can contain several episodes; retain the existing witness filter for every row.
+        $sourceId = intval($lastMemory['source_rowid'] ?? $lastMemory['rowid']);
+        $memoryScope = $db->escape($lastMemory['scope'] ?? 'global');
+        $episodes = $db->fetchAll("SELECT summary FROM memory_summary
+            WHERE (rowid=$sourceId OR source_rowid=$sourceId)
+              AND companions LIKE '%$npcNameEsc%' AND summary IS NOT NULL
+              AND COALESCE(scope,'global')='$memoryScope'
+            ORDER BY rowid ASC LIMIT 12");
+        $history .= "Memory: " . mb_substr(implode("\n\n", array_column($episodes, 'summary')), 0, 16000) . "\n";
         $history .= "</last_memory>\n";
     } else {
         $history = "";
