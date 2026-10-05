@@ -24,6 +24,7 @@ chimRuntimeBootstrap(BASE_PATH . DIRECTORY_SEPARATOR, [
     'load_itt_connector' => false,
 ]);
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'core' . DIRECTORY_SEPARATOR . 'prisma_settings_catalog.php';
+require_once LIB_PATH . DIRECTORY_SEPARATOR . 'core' . DIRECTORY_SEPARATOR . 'llm_connector.class.php';
 
 function chimGlobalSettingsRespond(array $payload, int $status = 200): void
 {
@@ -38,7 +39,11 @@ function chimGlobalSettingsLabel(string $name): string
         'AUTOMATIC_ACTOR_VOICE_EFFECTS' => 'Automatic Actor Voice Effects',
         'PROMPT_HEAD' => 'Prompt Head', 'EMOTEMOODS' => 'Emote Moods', 'RECHAT_MODE' => 'Rechat Mode',
         'CORE_CONNECTOR_PLAYER' => 'Player Respeech', 'CORE_CONNECTOR_SUMMARY' => 'Summaries',
-        'CORE_CONNECTOR_MEDIUMTERM' => 'Background & Memory Tasks', 'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier',
+        'CORE_CONNECTOR_MEDIUMTERM' => 'Background & Memory Tasks',
+        'CORE_CONNECTOR_DECISION' => 'Decision Connector', 'CORE_CONNECTOR_DECISION_ENABLED' => 'Decision Connector Available', 'STT_TARGETING_ENABLED' => 'STT Targeting',
+        'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
+        'DECISION_QUEST_INTENT_ENABLED' => 'Quest Dialogue Intent',
+        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier (Legacy)', 'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier (Legacy) Available',
         'CORE_CONNECTOR_PROFILES' => 'Profile Tasks', 'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
         'CORE_CONNECTOR_QUEST_CREATION' => 'Quest Creation Connector',
         'CORE_CONNECTOR_QUEST_CREATION_ENABLED' => 'Quest Creation Connector Available',
@@ -130,6 +135,10 @@ try {
             } catch (InvalidArgumentException $e) {
                 throw new InvalidArgumentException("Invalid {$name}: " . $e->getMessage());
             }
+            if ($name === 'CORE_CONNECTOR_DECISION' && $validated[$name] !== '' && $validated[$name] !== (int)chimReadLegacyGlobalValue($name, 0)
+                && !chimIsDecisionConnector((new LLMConnector())->getById($validated[$name]))) {
+                throw new InvalidArgumentException("Invalid {$name}: Choose an OpenRouter decision model such as Jev.");
+            }
         }
         // Validate the whole payload first so one bad value does not leave a partial save.
         $saved = [];
@@ -149,8 +158,11 @@ try {
         chimGlobalSettingsRespond(['success' => true, 'saved' => $saved]);
     }
 
-    $connectorRows = $GLOBALS['db']->fetchAll('SELECT id, COALESCE(NULLIF(label, \'\'), model, id::text) AS label FROM core_llm_connector ORDER BY label ASC, id ASC');
-    $connectors = array_map(static fn($row) => ['value' => (int)$row['id'], 'label' => (string)$row['label']], (array)$connectorRows);
+    $connectorRows = (array)$GLOBALS['db']->fetchAll('SELECT id, COALESCE(NULLIF(label, \'\'), model, id::text) AS label, driver, model, url FROM core_llm_connector ORDER BY label ASC, id ASC');
+    $connectors = array_map(static fn($row) => ['value' => (int)$row['id'], 'label' => (string)$row['label']], $connectorRows);
+    $decisionValue = (int)chimReadLegacyGlobalValue('CORE_CONNECTOR_DECISION', 0);
+    $decisionConnectors = array_map(static fn($row) => ['value' => (int)$row['id'], 'label' => (string)$row['label']],
+        array_values(array_filter($connectorRows, static fn($row) => chimIsDecisionConnector($row) || (int)$row['id'] === $decisionValue)));
     $descriptionMap = chimGetManagedGeneralSettingDescriptions();
     $sections = [];
     foreach (chimPrismaGlobalSettingsSections() as $section => $fields) {
@@ -163,7 +175,7 @@ try {
             if (($field['type'] ?? '') === 'boolean') {
                 $field['value'] = filter_var($field['value'], FILTER_VALIDATE_BOOLEAN);
             }
-            if (strpos((string)$field['type'], 'foreign:') === 0) $field['options'] = $connectors;
+            if (strpos((string)$field['type'], 'foreign:') === 0) $field['options'] = $name === 'CORE_CONNECTOR_DECISION' ? $decisionConnectors : $connectors;
             $items[] = $field;
         }
         $sections[] = ['name' => $section, 'tab' => chimPrismaGlobalSettingsSectionTabs()[$section] ?? 'ai-memory', 'fields' => $items];

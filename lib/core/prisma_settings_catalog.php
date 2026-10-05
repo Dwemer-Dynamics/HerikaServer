@@ -80,7 +80,9 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'CHIM_PLAYER_ONLY_QUEST_ADVANCEMENT', 'type' => 'boolean'],
         ],
         // Each connector is followed by the boolean that makes its tasks available. Scene
-        // Classifier and Relationship Management reuse their existing settings.
+        // Classifier (Legacy) and Relationship Management reuse their existing settings. An
+        // enabled Decision Connector replaces Scene Classifier (Legacy). STT Targeting and Scene Classifier
+        // are independent Decision Connector task switches; Scene Classifier off never falls back to the legacy one.
         'Global Connectors' => [
             ['name' => 'CORE_CONNECTOR_PLAYER', 'type' => 'foreign:core_llm_connector:id:label'],
             ['name' => 'PLAYER_RESPEECH', 'type' => 'boolean', 'default' => true],
@@ -88,6 +90,11 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'CORE_CONNECTOR_SUMMARY_ENABLED', 'type' => 'boolean', 'default' => true],
             ['name' => 'CORE_CONNECTOR_MEDIUMTERM', 'type' => 'foreign:core_llm_connector:id:label'],
             ['name' => 'CORE_CONNECTOR_MEDIUMTERM_ENABLED', 'type' => 'boolean', 'default' => true],
+            ['name' => 'CORE_CONNECTOR_DECISION', 'type' => 'foreign:core_llm_connector:id:label'],
+            ['name' => 'CORE_CONNECTOR_DECISION_ENABLED', 'type' => 'boolean', 'default' => true],
+            ['name' => 'STT_TARGETING_ENABLED', 'type' => 'boolean', 'default' => true],
+            ['name' => 'DECISION_SCENE_CLASSIFIER_ENABLED', 'type' => 'boolean', 'default' => true],
+            ['name' => 'DECISION_QUEST_INTENT_ENABLED', 'type' => 'boolean', 'default' => false],
             ['name' => 'CORE_CONNECTOR_SCENECLASSIFIER', 'type' => 'foreign:core_llm_connector:id:label'],
             ['name' => 'SCENE_CLASSIFIER_ENABLED', 'type' => 'boolean', 'default' => true],
             ['name' => 'CORE_CONNECTOR_PROFILES', 'type' => 'foreign:core_llm_connector:id:label'],

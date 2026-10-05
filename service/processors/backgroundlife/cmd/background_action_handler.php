@@ -1179,7 +1179,7 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
         }
     }
 
-    $vendorFactionsNpcBelongs = $db->fetchAll("SELECT name,formid,vendor_cont,stock,gold,player_rank FROM factions WHERE
+    $vendorFactionsNpcBelongs = $db->fetchAll("SELECT distinct vendor_cont,stock,gold,player_rank FROM factions WHERE
         formid IN ('" . implode("','", $factionsArray) . "') and vendor_cont is not null and vendor_cont<>'00000000'");
 
     error_log("[handleSpeakToAction] Query to obtain vendor faction chest: SELECT name,formid,vendor_cont,stock,gold,player_rank FROM factions WHERE formid IN ('" . implode("','", $factionsArray) . "') and vendor_cont is not null and vendor_cont<>'00000000'");
@@ -1187,7 +1187,11 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
     if ($vendorFactionsNpcBelongs && sizeof($vendorFactionsNpcBelongs) > 0 && !empty($vendorFactionsNpcBelongs[0]['stock'])) {
         $stockString = " $resolvedName can sell these items: ";
         foreach ($vendorFactionsNpcBelongs as $vendorFaction) {
-            $stockString .= " {$vendorFaction['stock']}.";
+            $stockArray=json_decode($vendorFaction['stock'], true);
+            $stockString .= "name;quantity;price\n";
+            foreach ($stockArray as $item) {
+                $stockString .= " {$item['name']};{$item['count']};{$item['price']}\n";
+            }
         }
     }
 

@@ -21,6 +21,7 @@ require_once $enginePath . "lib/chat_helper_functions.php";
 require_once $enginePath . "lib/memory_helper_vectordb.php";
 require_once $enginePath . "lib/data_functions.php";
 require_once $enginePath . "lib/minimet5_service.php";
+require_once $enginePath . "lib/memory_summary_episodes.php";
 
 require_once $enginePath . "lib/core/api_badge.class.php";
 require_once $enginePath . "lib/core/llm_connector.class.php";
@@ -31,6 +32,16 @@ require_once $enginePath . "lib/core/core_profiles.class.php";
 if (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_SUMMARY')) {
     echo "Summaries are disabled globally; memory summary work was skipped." . PHP_EOL;
     exit(0);
+}
+
+if (in_array($argv[1] ?? '', ['compact', 'sync', 'resync', 'fixcomp'], true)) {
+    $schemaDb = new sql();
+    $schemaReady = $schemaDb->fetchOne("SELECT 1 AS ready FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='memory_summary' AND column_name='source_rowid'");
+    if (empty($schemaReady['ready'])) {
+        Logger::warn('Memory episode migration is required; run the database update before memory processing.');
+        exit(1);
+    }
 }
 
 function chimResolveSummaryConnectorRuntime(): ?array
@@ -91,7 +102,7 @@ function resyncMemorySummaries($db, $forceAll = false, $onlyFix = false)
             // Extract and expand tags from #Tags: block
             $pattern = '/#Tags:\s*(.+)/s';
             if (preg_match($pattern, $TEST_TEXT, $matches)) {
-                preg_match_all('/#(\w+)/', $matches[1], $tagMatches);
+                preg_match_all('/#([\p{L}\p{N}_]+)/u', $matches[1], $tagMatches);
                 $tags = $tagMatches[1] ?? [];
 
                 $expandedTags = array_map(function ($tag) {
@@ -126,7 +137,7 @@ function resyncMemorySummaries($db, $forceAll = false, $onlyFix = false)
     echo "Completing companions field (method 1)..." . PHP_EOL;
     $pfi      = ($GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["AUTO_CREATE_SUMMARY_INTERVAL"] + 0) * 100000;
 
-    $missingCompanions = $db->fetchAll("SELECT * FROM memory_summary WHERE (companions IS NULL OR companions = '') and classifier<>'diary' ORDER BY gamets_truncated ASC");
+    $missingCompanions = $db->fetchAll("SELECT * FROM memory_summary WHERE (companions IS NULL OR companions = '') and classifier<>'diary' AND source_rowid IS NULL ORDER BY gamets_truncated ASC");
     $n=0;
     foreach ($missingCompanions as $row) {
         $peopleRows = $db->fetchAll("SELECT CASE WHEN party='[]' THEN people ELSE COALESCE(people, party) END AS people FROM eventlog WHERE gamets > {$row["gamets_truncated"]}::bigint - $pfi AND gamets <= {$row["gamets_truncated"]}::bigint + $pfi");
@@ -166,7 +177,7 @@ function resyncMemorySummaries($db, $forceAll = false, $onlyFix = false)
     // --- Fix companions field (second method) ---
     echo "Completing companions field (method 2)..." . PHP_EOL;
     $n=0;
-    $missingCompanions2 = $db->fetchAll("SELECT * FROM memory_summary WHERE (companions IS NULL OR companions = '') and classifier<>'diary' ORDER BY gamets_truncated ASC");
+    $missingCompanions2 = $db->fetchAll("SELECT * FROM memory_summary WHERE (companions IS NULL OR companions = '') and classifier<>'diary' AND source_rowid IS NULL ORDER BY gamets_truncated ASC");
     foreach ($missingCompanions2 as $row) {
         $peopleRow = $db->fetchOne("SELECT STRING_AGG(DISTINCT speaker || '|' || listener, '|') AS people FROM public.memory_v WHERE gamets > {$row["gamets_truncated"]}::bigint - $pfi AND gamets <= {$row["gamets_truncated"]}::bigint + $pfi");
         $npcs      = [];
@@ -196,6 +207,11 @@ function resyncMemorySummaries($db, $forceAll = false, $onlyFix = false)
         }
     }
 
+    // Empty sibling witness lists inherit the source; the explicit cleared sentinel '|' is preserved.
+    $db->execQuery("UPDATE memory_summary child SET companions=parent.companions
+        FROM memory_summary parent WHERE child.source_rowid=parent.rowid
+          AND (child.companions IS NULL OR child.companions='')
+          AND parent.companions IS NOT NULL");
     return $processed_counter;
 }
 
@@ -342,6 +358,7 @@ function syncIndividualMemorySummaries($db, $connectionHandler = null, $maxBatch
             SELECT ms.rowid, ms.uid, ms.gamets_truncated, ms.summary, ms.packed_message
             FROM memory_summary ms
             WHERE ms.summary IS NOT NULL
+              AND ms.source_rowid IS NULL
               AND (ms.scope IS NULL OR ms.scope='global')
               AND ms.gamets_truncated > $lastScopedGamets
               AND (
@@ -799,7 +816,7 @@ Note: Memories are stored in memory_summary table, which holds info from events/
         echo "Packing complete. Max gamets_truncated row ID from existing summaries: {$maxRow}" . PHP_EOL;
 
         echo "Checking for new entries to summarize and compact..." . PHP_EOL;
-        $count_query              = "select COUNT(*) as count from memory_summary where (gamets_truncated>{$maxRow} or summary is null)  ";
+        $count_query              = "select COUNT(*) as count from memory_summary where summary is null AND source_rowid IS NULL AND (scope IS NULL OR scope='global') AND classifier IN ('dialogue','diary')";
         $count_result_res_compact = $db->query($count_query);
         $count_result_arr         = $db->fetchArray($count_result_res_compact);
         $entries_to_process_count = $count_result_arr ? (int) $count_result_arr['count'] : 0;
@@ -821,10 +838,8 @@ Note: Memories are stored in memory_summary table, which holds info from events/
 
                 error_log("Using connector {$currentConnectorData["driver"]}/{$currentConnectorData["model"]}");
 
-                $results_query = "select gamets_truncated,packed_message,uid,classifier,rowid,companions from memory_summary where (gamets_truncated>{$maxRow} or summary is null)  order by gamets_truncated asc ";
+                $results_query = "select gamets_truncated,packed_message,uid,classifier,rowid,companions,scope from memory_summary where summary is null AND source_rowid IS NULL AND (scope IS NULL OR scope='global') AND classifier IN ('dialogue','diary') order by gamets_truncated asc, rowid asc";
                 $results       = $db->query($results_query);
-
-                $toUpdate = [];
 
                 while ($row = $db->fetchArray($results)) {
 
@@ -835,14 +850,27 @@ Note: Memories are stored in memory_summary table, which holds info from events/
                     }
                 }
 
-                $prevMemory = $db->fetchOne("SELECT gamets_truncated, packed_message,  uid, classifier, rowid,companions,summary FROM memory_summary WHERE gamets_truncated < {$row["gamets_truncated"]} ORDER BY gamets_truncated DESC LIMIT 1");
+                // Include the prior canonical bucket's episodes in deterministic, bounded context.
+                $prevMemory = $db->fetchOne("SELECT rowid FROM memory_summary
+                    WHERE gamets_truncated < {$row['gamets_truncated']} AND source_rowid IS NULL
+                      AND classifier='dialogue' AND (scope IS NULL OR scope='global') AND summary IS NOT NULL
+                    ORDER BY gamets_truncated DESC, rowid DESC LIMIT 1");
+                $previousText = '';
+                if (!empty($prevMemory['rowid'])) {
+                    $previousRows = $db->fetchAll("SELECT summary FROM memory_summary
+                        WHERE rowid=" . intval($prevMemory['rowid']) . " OR source_rowid=" . intval($prevMemory['rowid']) . "
+                        ORDER BY rowid ASC LIMIT 12");
+                    $previousText = mb_substr(implode("\n\n", array_column($previousRows, 'summary')), 0, 16000);
+                }
+                $episodes = [];
                 // Summarization logic begins
                 if ($row["classifier"] == "diary") {
                     $TEST_TEXT = $row["packed_message"];
                 } else {
                     $GLOBALS["COMMAND_PROMPT"] = "";
                     $gameRequest               = ["summary"];
-                    $CLFORMAT                  = "#Summary: {summary of events and dialogues}\n\n#Tags: {list of relevant twitter-like hashtags, include location names, enemies names, other NPC names}";
+                    $CLFORMAT = '{"memories":[{"summary":"One coherent episode","tags":["RelevantName","Location"]}]}';
+                    $CLFORMAT .= "\nReturn only valid JSON, with 1 to 12 memories. Each entry covers one coherent episode or topic; separate unrelated topics but do not fragment a continuous interaction. Preserve ordinary roleplay details, feelings, relationships, decisions, and useful dialogue, not just major plot events. Cover the whole chat history; combine related material if needed to stay within 12 entries. Use at most 24 short tags per entry. Do not repeat the previous memory or include #Summary/#Tags markers inside JSON values.";
                     if (isset($GLOBALS["CORE_LANG"])) {
                         if ($GLOBALS["CORE_LANG"] == "es") {
                             $CLFORMAT .= "\n\nGENERA EL CONTENIDO Y LOS TAGS EN ESPAÑOL";
@@ -900,8 +928,8 @@ Note: Memories are stored in memory_summary table, which holds info from events/
                     $prompt[] = ['role' => 'system',
                         'content' => "This is a playthrough in Skyrim.\n" . $memoryPromptProcessed
                     ];
-                    if (! empty($prevMemory["summary"])) {
-                        $prompt[] = ['role' => 'user', 'content' => "#PREVIOUS MEMORY (for reference only)#\n{$prevMemory["summary"]}\n#END OF PREVIOUS MEMORY#"];
+                    if ($previousText !== '') {
+                        $prompt[] = ['role' => 'user', 'content' => "#PREVIOUS MEMORY (for reference only)#\n{$previousText}\n#END OF PREVIOUS MEMORY#"];
                     }
                     $prompt[] = ['role' => 'user', 'content' => "#CHAT HISTORY#\n{$row["packed_message"]}\n#END OF CHAT HISTORY#"];
                     $prompt[] = ['role' => 'user',
@@ -911,31 +939,13 @@ Note: Memories are stored in memory_summary table, which holds info from events/
 
                     $buffer = $connectionHandler->fast_request($prompt, [], "summary");
 
-                    $TEST_TEXT = strtr($buffer, ["**" => ""]); // Use the final buffer
-
-                    // if the llm repeats tags we tidy them up
-                    $pattern = '/#Tags:/';
-                    $split   = preg_split($pattern, $TEST_TEXT, 2);
-                    if (isset($split[1])) {
-                        // make data consistent (copied from tagsCol creation below)
-                        $tagsString = strtr($split[1], ["*" => ""]);
-                        $tagsArray  = array_map('trim', explode(',', $tagsString));
-                        $tagsCol    = implode(" ", $tagsArray);
-                        $tagsArray  = array_map('trim', explode(' ', $tagsCol));
-
-                        // Remove duplicates and last tag if duplicates found
-                        $uniqueTagsArray = array_unique($tagsArray);
-                        if (count($uniqueTagsArray) < count($tagsArray)) {
-                            // Duplicates found - remove last tag as it may be truncated
-                            array_pop($uniqueTagsArray);
-                            Logger::debug("Corrected duplicate tags:\nOriginal tags: [" . implode(' ', $tagsArray) . "]\nUnique tags: [" . implode(' ', $uniqueTagsArray) . "]");
-                            $tagsCol = implode(" ", array_values($uniqueTagsArray));
-                            // Reconstruct TEST_TEXT with corrected tags
-                            $TEST_TEXT = trim($split[0]) . "\n#Tags: " . $tagsCol;
-                        }
+                    $episodes = chimParseMemoryEpisodes($buffer);
+                    if (!$episodes) {
+                        $processed_in_loop_counter++;
+                        Logger::warn("Invalid or empty memory summary for source {$row['rowid']}; retained for a later retry.");
+                        continue;
                     }
-
-                    $toUpdate[] = ["rowid" => $row["rowid"], "summary" => $TEST_TEXT];
+                    $TEST_TEXT = $episodes[0]['summary'];
                 }
                 // Summarization logic ends, $TEST_TEXT contains the summary or packed_message
 
@@ -944,50 +954,12 @@ Note: Memories are stored in memory_summary table, which holds info from events/
 
                 Logger::debug("$TEST_TEXT");
 
-                // Original script's embedding logic: if (($argv[2]!="noembed")&& false)
-                // This condition `&& false` means embedding inside compact was effectively disabled.
-                // The "Run a sync later" message aligns with this.
-                // So, no embedding happens here. We'll add a message about 'noembed' argument after the loop.
-
-                $pattern = '/Tags:(.+)/';
-                preg_match($pattern, $TEST_TEXT, $matches);
-                $tagsCol = ''; // Initialize tagsCol
-                if (isset($matches[1])) {
-                    $tagsString = strtr($matches[1], ["*" => ""]);
-                    $tagsArray  = array_map('trim', explode(',', $tagsString));
-                    $tagsCol    = implode(" ", $tagsArray);
-                } else {
-                    Logger::info("No tags found for entry ID {$row["rowid"]}.");
-                    // The original script had 'continue' here. If we continue, the update for this summary won't happen.
-                    // Depending on desired behavior, this might need adjustment.
-                    // For now, keeping it to update summary even if no tags.
+                if ($row['classifier'] === 'diary') {
+                    $episodes = [['summary' => $TEST_TEXT, 'tags' => extractMemoryTagsColumn($TEST_TEXT)]];
                 }
-
-                // Update database for the current item (original script did this for $toUpdate, which would be just one item here)
-                // The original script iterates $toUpdate but $toUpdate is reset at end of loop, effectively processing one by one from $toUpdate array.
-                // Let's simplify to process current $row directly since $toUpdate[] was used to store the current item's summary.
-
-                $current_summary_to_save = $TEST_TEXT; // This is the actual summary content
-                if ($row["classifier"] != "diary") {   // For non-diary, $TEST_TEXT is from LLM
-                                                           // Find the current summary from $toUpdate if it exists
-                    foreach ($toUpdate as $upd_item) {
-                        if ($upd_item["rowid"] == $row["rowid"]) {
-                            $current_summary_to_save = $upd_item["summary"];
-                            break;
-                        }
-                    }
+                if (!chimSaveMemoryEpisodes($db, $row, $episodes)) {
+                    Logger::warn("Memory source {$row['rowid']} was not saved (failed or already handled).");
                 }
-                if ($current_summary_to_save) {
-                    $db->execQuery("update memory_summary set summary='" . $db->escape($current_summary_to_save) . "',tags='" . $db->escape($tagsCol) . "',scope=COALESCE(scope,'global') where rowid={$row["rowid"]}");
-                    $db->execQuery("update memory_summary SET native_vec = setweight(to_tsvector(coalesce(tags, '')),'A')||setweight(to_tsvector(coalesce(summary, '')),'B') where rowid={$row["rowid"]}");
-                }
-
-                // Original embedding call within loop (conditionally for $GLOBALS["FEATURES"]["MEMORY_EMBEDDING"]["USE_TEXT2VEC"])
-                // This was outside the 'noembed' check but was also within the $toUpdate loop which processed one item.
-                // Given the outer "Run a sync later" and the `&& false` on explicit embedding, this part might be redundant or only for `native_vec`.
-                // The `native_vec` is already updated above. Explicit `storeMemory` for full embedding is best left to the `sync` command.
-
-                $toUpdate = []; // Reset for next iteration as in original script
 
                 } // End while loop
 

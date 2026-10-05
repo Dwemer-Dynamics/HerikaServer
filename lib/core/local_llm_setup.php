@@ -357,6 +357,10 @@ function herikaLocalLlmRouteConnector(int $connectorId, string $scope): void
             throw new RuntimeException('Unable to route ' . $field . ' to the Local LLM.');
         }
     }
+    // A local chat model cannot answer decision requests, so scene genre uses Scene Classifier (Legacy).
+    if (!chimSetGeneralSetting('CORE_CONNECTOR_DECISION_ENABLED', false, chimGetSchemaDescription('CORE_CONNECTOR_DECISION_ENABLED'))) {
+        throw new RuntimeException('Unable to turn off the Decision Connector for the Local LLM.');
+    }
 }
 
 function herikaLocalLlmApplySetup(array $raw): array

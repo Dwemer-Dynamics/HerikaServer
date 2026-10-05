@@ -296,6 +296,10 @@ if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext
     error_log($cleaned_player_dialogue);
     if (strpos($gameRequest[3],"**")===0 || strpos($cleaned_player_dialogue,"**")===0 ) {
         // If player speech starts with **
+        if (strpos($cleaned_player_dialogue,"***")===0) {
+            // *** will be a shortcut of **(translate)
+            $cleaned_player_dialogue = str_replace('***','**((translate) ',$cleaned_player_dialogue).")";
+        }
         error_log("Overwritting user prompt $cleaned_player_dialogue");
 
         //$newSpeech=file_get_contents(getBaseUrlForSpeech()."/HerikaServer/player_rewrite.php?speech=".urlencode($cleaned_player_dialogue));
@@ -2825,6 +2829,11 @@ if (!$outputWasValid) {
     if (isset($GLOBALS["LLM_RETRY_FNCT"]) && empty($GLOBALS['CHIM_PROVIDER_RECOVERY_HANDLED'])) {
         $GLOBALS["LLM_RETRY_FNCT"]();
     }
+}
+
+// Let Traditional Quests judge the whole streamed reply if a chunk deferred it; failed or superseded replies are dropped.
+if (function_exists('chimQuestEngineEndLiveDialogueTurn')) {
+    chimQuestEngineEndLiveDialogueTurn($outputWasValid);
 }
 
 

@@ -9,6 +9,7 @@ $enginePath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "runtime_bootstrap.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "logger.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "prisma_settings_catalog.php");
+require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "llm_connector.class.php");
 
 chimRuntimeBootstrap($enginePath, [
     'load_general_settings' => true,
@@ -52,7 +53,13 @@ $connectorAvailabilityToggles = chimGlobalLlmConnectorAvailabilityMap();
 
 // Paired toggles stay beside their connector instead of appearing twice. OGHMA_EXTRACTOR_FALLBACK
 // controls native fallback; multilingual routing can independently use the same connector.
-$pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_EXTRACTOR_FALLBACK']);
+// Decision Connector task switches sit under its dropdown.
+$decisionTaskToggles = [
+    'STT_TARGETING_ENABLED' => 'Choose which nearby NPC answers your voice input. Crosshair targets still take priority.',
+    'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Choose the scene genre for ambient cues. Off does not fall back to Scene Classifier (Legacy).',
+    'DECISION_QUEST_INTENT_ENABLED' => 'Interprets player dialogue for Traditional Quest steps. Uncertainty leaves the quest unchanged.',
+];
+$pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_EXTRACTOR_FALLBACK'], array_keys($decisionTaskToggles));
 foreach ($gsSections as $sectionName => $fields) {
     $gsSections[$sectionName] = array_values(array_filter($fields, static function (array $field) use ($pairedConnectorToggles): bool {
         return !in_array($field['name'] ?? '', $pairedConnectorToggles, true);
@@ -94,8 +101,13 @@ function pretty_label(string $flatName): string
         'CORE_CONNECTOR_PLAYER' => 'Player Respeech',
         'CORE_CONNECTOR_SUMMARY' => 'Summaries',
         'CORE_CONNECTOR_MEDIUMTERM' => 'Background & Memory Tasks',
-        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier',
-        'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
+        'CORE_CONNECTOR_DECISION' => 'Decision Connector',
+        'CORE_CONNECTOR_DECISION_ENABLED' => 'Decision Connector',
+        'STT_TARGETING_ENABLED' => 'STT Targeting',
+        'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
+        'DECISION_QUEST_INTENT_ENABLED' => 'Quest Dialogue Intent',
+        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier (Legacy)',
+        'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier (Legacy)',
         'CORE_CONNECTOR_PROFILES' => 'Profile Tasks',
         'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
         'CORE_CONNECTOR_QUEST_CREATION' => 'Quest Creation Connector',
@@ -165,6 +177,7 @@ function icon_for_field(string $flatName): string
         'END_CONVERSATION_COOLDOWN' => '⏳',
         'CHIM_AI_QUEST_PROGRESSION' => '🗺️',
         'CHIM_PLAYER_ONLY_QUEST_ADVANCEMENT' => '🧍',
+        'STT_TARGETING_ENABLED' => '🎯',
         'SCENE_CLASSIFIER_ENABLED' => '🎭',
         'RELATIONSHIP_SYSTEM_ENABLED' => '💞',
         'RELLLM_CONNECTOR' => '🔗',
@@ -201,6 +214,7 @@ function icon_for_field(string $flatName): string
         if ($u === 'CORE_CONNECTOR_PLAYER') return '🎮';
         if ($u === 'CORE_CONNECTOR_SUMMARY') return '📝';
         if ($u === 'CORE_CONNECTOR_MEDIUMTERM') return '🧠';
+        if ($u === 'CORE_CONNECTOR_DECISION') return '⚖️';
         if ($u === 'CORE_CONNECTOR_SCENECLASSIFIER') return '🎭';
         if ($u === 'CORE_CONNECTOR_PROFILES') return '👥';
         if ($u === 'CORE_CONNECTOR_DIRECTOR') return '🎬';
@@ -359,7 +373,7 @@ $filterBrowseFieldConfigs = filter_browse_field_configs();
 
 $foreignOptions = [];
 try {
-    $foreignOptions['core_llm_connector:id:label'] = $GLOBALS["db"]->fetchAll("SELECT id, label FROM core_llm_connector ORDER BY LOWER(label) ASC, id ASC");
+    $foreignOptions['core_llm_connector:id:label'] = $GLOBALS["db"]->fetchAll("SELECT id, label, driver, model, url FROM core_llm_connector ORDER BY LOWER(label) ASC, id ASC");
 } catch (\Throwable $e) {
     $foreignOptions['core_llm_connector:id:label'] = [];
 }
@@ -408,6 +422,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
                     $saveError = strval($field['label'] ?? pretty_label($name)) . ' was not changed. ' . $e->getMessage();
                     continue;
                 }
+            }
+
+            if ($name === 'CORE_CONNECTOR_DECISION' && intval($value) > 0 && intval($value) !== intval(current_value($name))
+                && !chimIsDecisionConnector((new LLMConnector())->getById(intval($value)))) {
+                $saveError = 'Decision Connector was not changed. Choose an OpenRouter decision model such as Jev.';
+                continue;
             }
 
             $description = current_description($name, $generalSettingRowMap);
@@ -769,6 +789,33 @@ body .settings-tabs .settings-tab.is-active {
     transform: scale(1.6);
     transform-origin: center;
     cursor: pointer;
+}
+
+/* Decision Connector task switches: own card row under its select, wrapping on narrow cards. */
+.decision-task-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    min-width: 0;
+}
+
+.decision-task-toggles label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.decision-task-toggles input[type="checkbox"] {
+    accent-color: #176529;
+    margin: 0;
+    cursor: pointer;
+}
+
+.decision-task-toggles input[type="checkbox"]:focus-visible {
+    outline: 2px solid rgba(242, 124, 17, 0.85);
+    outline-offset: 2px;
 }
 
 /* On/Off switch for a global connector. Its select stays editable while switched off. */
@@ -1875,6 +1922,7 @@ body .settings-tabs .settings-tab.is-active {
                                         </select>
                                     <?php elseif (strpos($fieldType, 'foreign:') === 0): ?>
                                         <?php $parts = explode(':', $fieldType); $fkKey = implode(':', array_slice($parts, 1)); $rows = $foreignOptions[$fkKey] ?? []; ?>
+                                        <?php if ($fieldName === 'CORE_CONNECTOR_DECISION') { $rows = array_filter($rows, static fn($row) => chimIsDecisionConnector($row) || strval($row['id'] ?? '') === strval($current)); } ?>
                                         <select aria-label="<?php echo htmlspecialchars($label); ?>" name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             <option value="" <?php echo (empty($current) ? 'selected' : ''); ?>>None</option>
                                             <?php foreach ($rows as $row): ?>
@@ -1887,6 +1935,14 @@ body .settings-tabs .settings-tab.is-active {
                                         <input type="text" name="<?php echo htmlspecialchars($fieldName); ?>" value="<?php echo htmlspecialchars(strval($current)); ?>"<?php echo isset($field['placeholder']) ? ' placeholder="' . htmlspecialchars(strval($field['placeholder'])) . '"' : ''; ?> <?php echo $readonlyAttr; ?>>
                                     <?php endif; ?>
                                 </div>
+                                <?php if ($fieldName === 'CORE_CONNECTOR_DECISION'): ?>
+                                    <div class="decision-task-toggles">
+                                        <?php foreach ($decisionTaskToggles as $taskName => $taskHint): ?>
+                                            <input type="hidden" name="<?php echo htmlspecialchars($taskName); ?>" value="false">
+                                            <label title="<?php echo htmlspecialchars($taskHint); ?>"><input type="checkbox" name="<?php echo htmlspecialchars($taskName); ?>" value="true" aria-description="<?php echo htmlspecialchars($taskHint); ?>" <?php echo (filter_var(current_value($taskName), FILTER_VALIDATE_BOOLEAN) ? 'checked' : ''); ?>> <?php echo htmlspecialchars(pretty_label($taskName)); ?></label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php endif; ?>
                                 <?php if ($help !== ''): ?>
                                     <div class="provider-help"><?php echo render_provider_help($fieldName, $help, $webRoot); ?></div>
                                 <?php endif; ?>
