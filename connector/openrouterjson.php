@@ -1205,16 +1205,20 @@ class openrouterjson
 
     }
 
-    public function jev_request($state, $instructions, $criteria, $callName = '')
+    // $options (all optional): 'question' names the choice question (default 'genre'). 'timeout_ms' switches
+    // to one cURL call with that total bound, no retry, a 'max_bytes' response cap (default 16384), and
+    // no audit row, response log or provider-body warning. Returns the decoded response or [] on failure.
+    public function jev_request($state, $instructions, $criteria, $callName = '', $options = [])
     {
         $model = trim((string)($GLOBALS['CONNECTOR'][$this->name]['model'] ?? '')) ?: 'typesafe/jev-1.13';
         $this->init_connector(['model' => $model]);
+        $question = (string)($options['question'] ?? 'genre');
 
         $data = [
             'model' => $model,
             'state' => $state,
             'questions' => [
-                'genre' => [
+                $question => [
                     'type' => 'choice',
                     'instructions' => $instructions,
                     'criteria' => $criteria,
@@ -1229,6 +1233,44 @@ class openrouterjson
             'HTTP-Referer: https://dwemerdynamics.com/',
             'X-Title: Dwemer Dynamics',
         ];
+
+        if (isset($options['timeout_ms'])) {
+            $timeoutMs = max(1, intval($options['timeout_ms']));
+            $maxBytes = max(1, intval($options['max_bytes'] ?? 16384));
+            $payload = json_encode($data);
+            if ($payload === false || !function_exists('curl_init')) {
+                return [];
+            }
+            $body = '';
+            $curl = curl_init($url);
+            curl_setopt_array($curl, [
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $payload,
+                CURLOPT_HTTPHEADER => $headers,
+                CURLOPT_CONNECTTIMEOUT_MS => $timeoutMs,
+                // Total bound including connection and transfer.
+                CURLOPT_TIMEOUT_MS => $timeoutMs,
+                CURLOPT_NOSIGNAL => true,
+                CURLOPT_WRITEFUNCTION => static function ($handle, $chunk) use (&$body, $maxBytes) {
+                    if (strlen($body) + strlen($chunk) > $maxBytes) {
+                        return 0;
+                    }
+                    $body .= $chunk;
+                    return strlen($chunk);
+                },
+            ]);
+            $ok = curl_exec($curl);
+            $status = (int)curl_getinfo($curl, CURLINFO_HTTP_CODE);
+            $errno = curl_errno($curl);
+            curl_close($curl);
+            if ($ok === false || $status !== 200) {
+                Logger::warn("[JEV] Bounded decision request failed: curl {$errno}, HTTP {$status}");
+                return [];
+            }
+            $response = json_decode($body, true);
+            return is_array($response) && !isset($response['error']) ? $response : [];
+        }
+
         $timeout = max(intval($GLOBALS['HTTP_TIMEOUT'] ?? 30), $this->_timeout);
         $context = stream_context_create([
             'http' => [

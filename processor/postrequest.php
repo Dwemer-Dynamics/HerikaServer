@@ -60,12 +60,28 @@ if ($minimeEnabled) {
 
         }
 
+        // Scene genre switches are read before the dialogue history so a switched-off classifier makes no
+        // history query or provider request. An enabled Decision Connector owns scene genre: with its Scene
+        // Classifier off, Scene Classifier (Legacy) is not used. scene_status is still updated below.
+        $decisionConnectorEnabled = chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_DECISION');
+        $decisionSceneClassifierEnabled = chimIsDecisionSceneClassifierEnabled();
+        $sceneClassifierEnabled = true;
+        if (array_key_exists("SCENE_CLASSIFIER_ENABLED", $GLOBALS)) {
+            $sceneClassifierEnabledValue = $GLOBALS["SCENE_CLASSIFIER_ENABLED"];
+            if (is_string($sceneClassifierEnabledValue)) {
+                $sceneClassifierEnabled = !in_array(strtolower(trim($sceneClassifierEnabledValue)), ["", "0", "false", "off", "no"], true);
+            } else {
+                $sceneClassifierEnabled = !empty($sceneClassifierEnabledValue);
+            }
+        }
+        $sceneGenreWanted = $decisionConnectorEnabled ? $decisionSceneClassifierEnabled : $sceneClassifierEnabled;
+
         $historyData = "";
         $lastPlace = "";
         $lastListener = "";
         $lastDateTime = "";
 
-        foreach (json_decode(DataSpeechJournal($GLOBALS["HERIKA_NAME"], 10), true) as $element) {
+        foreach (($sceneGenreWanted ? json_decode(DataSpeechJournal($GLOBALS["HERIKA_NAME"], 10), true) : []) as $element) {
             if ($element["listener"] == "The Narrator") {
                 continue;
             }
@@ -99,15 +115,6 @@ if ($minimeEnabled) {
 
         $status = "default";
         //$topic  = json_decode(minimePostScene($historyData), true);// Not working well for now.
-        $sceneClassifierEnabled = true;
-        if (array_key_exists("SCENE_CLASSIFIER_ENABLED", $GLOBALS)) {
-            $sceneClassifierEnabledValue = $GLOBALS["SCENE_CLASSIFIER_ENABLED"];
-            if (is_string($sceneClassifierEnabledValue)) {
-                $sceneClassifierEnabled = !in_array(strtolower(trim($sceneClassifierEnabledValue)), ["", "0", "false", "off", "no"], true);
-            } else {
-                $sceneClassifierEnabled = !empty($sceneClassifierEnabledValue);
-            }
-        }
 
         $genreCriteria = [
             "horror" => "The dialogue is primarily frightening, supernatural, or disturbing.",
@@ -124,7 +131,9 @@ if ($minimeEnabled) {
         // An enabled Decision Connector replaces the legacy classifier. Each path makes at most one
         // request; a failed, missing or uncertain answer keeps the default genre without a retry.
         $topic = ["generated_tags" => "default"];
-        if (chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_DECISION')) {
+        if ($decisionConnectorEnabled && !$decisionSceneClassifierEnabled) {
+            Logger::info("[SCENE CLASSIFIER] Decision Connector Scene Classifier is off, skipping scene genre detection");
+        } else if ($decisionConnectorEnabled) {
             $connector = new LLMConnector();
             $decisionConnectorId = intval($GLOBALS["CORE_CONNECTOR_DECISION"] ?? 0);
             $decisionConnectorData = $decisionConnectorId > 0 ? $connector->getById($decisionConnectorId) : null;

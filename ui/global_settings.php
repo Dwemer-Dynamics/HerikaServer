@@ -53,7 +53,12 @@ $connectorAvailabilityToggles = chimGlobalLlmConnectorAvailabilityMap();
 
 // Paired toggles stay beside their connector instead of appearing twice. OGHMA_EXTRACTOR_FALLBACK
 // controls native fallback; multilingual routing can independently use the same connector.
-$pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_EXTRACTOR_FALLBACK']);
+// Decision Connector task switches sit under its dropdown.
+$decisionTaskToggles = [
+    'STT_TARGETING_ENABLED' => 'Choose which nearby NPC answers your voice input. Crosshair targets still take priority.',
+    'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Choose the scene genre for ambient cues. Off does not fall back to Scene Classifier (Legacy).',
+];
+$pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_EXTRACTOR_FALLBACK'], array_keys($decisionTaskToggles));
 foreach ($gsSections as $sectionName => $fields) {
     $gsSections[$sectionName] = array_values(array_filter($fields, static function (array $field) use ($pairedConnectorToggles): bool {
         return !in_array($field['name'] ?? '', $pairedConnectorToggles, true);
@@ -97,6 +102,8 @@ function pretty_label(string $flatName): string
         'CORE_CONNECTOR_MEDIUMTERM' => 'Background & Memory Tasks',
         'CORE_CONNECTOR_DECISION' => 'Decision Connector',
         'CORE_CONNECTOR_DECISION_ENABLED' => 'Decision Connector',
+        'STT_TARGETING_ENABLED' => 'STT Targeting',
+        'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
         'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier (Legacy)',
         'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier (Legacy)',
         'CORE_CONNECTOR_PROFILES' => 'Profile Tasks',
@@ -168,6 +175,7 @@ function icon_for_field(string $flatName): string
         'END_CONVERSATION_COOLDOWN' => '⏳',
         'CHIM_AI_QUEST_PROGRESSION' => '🗺️',
         'CHIM_PLAYER_ONLY_QUEST_ADVANCEMENT' => '🧍',
+        'STT_TARGETING_ENABLED' => '🎯',
         'SCENE_CLASSIFIER_ENABLED' => '🎭',
         'RELATIONSHIP_SYSTEM_ENABLED' => '💞',
         'RELLLM_CONNECTOR' => '🔗',
@@ -779,6 +787,33 @@ body .settings-tabs .settings-tab.is-active {
     transform: scale(1.6);
     transform-origin: center;
     cursor: pointer;
+}
+
+/* Decision Connector task switches: own card row under its select, wrapping on narrow cards. */
+.decision-task-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    min-width: 0;
+}
+
+.decision-task-toggles label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.decision-task-toggles input[type="checkbox"] {
+    accent-color: #176529;
+    margin: 0;
+    cursor: pointer;
+}
+
+.decision-task-toggles input[type="checkbox"]:focus-visible {
+    outline: 2px solid rgba(242, 124, 17, 0.85);
+    outline-offset: 2px;
 }
 
 /* On/Off switch for a global connector. Its select stays editable while switched off. */
@@ -1898,6 +1933,14 @@ body .settings-tabs .settings-tab.is-active {
                                         <input type="text" name="<?php echo htmlspecialchars($fieldName); ?>" value="<?php echo htmlspecialchars(strval($current)); ?>"<?php echo isset($field['placeholder']) ? ' placeholder="' . htmlspecialchars(strval($field['placeholder'])) . '"' : ''; ?> <?php echo $readonlyAttr; ?>>
                                     <?php endif; ?>
                                 </div>
+                                <?php if ($fieldName === 'CORE_CONNECTOR_DECISION'): ?>
+                                    <div class="decision-task-toggles">
+                                        <?php foreach ($decisionTaskToggles as $taskName => $taskHint): ?>
+                                            <input type="hidden" name="<?php echo htmlspecialchars($taskName); ?>" value="false">
+                                            <label title="<?php echo htmlspecialchars($taskHint); ?>"><input type="checkbox" name="<?php echo htmlspecialchars($taskName); ?>" value="true" aria-description="<?php echo htmlspecialchars($taskHint); ?>" <?php echo (filter_var(current_value($taskName), FILTER_VALIDATE_BOOLEAN) ? 'checked' : ''); ?>> <?php echo htmlspecialchars(pretty_label($taskName)); ?></label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php endif; ?>
                                 <?php if ($help !== ''): ?>
                                     <div class="provider-help"><?php echo render_provider_help($fieldName, $help, $webRoot); ?></div>
                                 <?php endif; ?>
