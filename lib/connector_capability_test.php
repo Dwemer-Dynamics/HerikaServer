@@ -131,6 +131,55 @@ function chimRunConnectorCapabilityTest(object $handler, string $driver): array
         'timings' => $diagnostics, 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000)];
 }
 
+// Decision connectors answer one fixed choice through the shared jev_request instead of writing dialogue.
+function chimRunDecisionCapabilityTest(object $handler): array
+{
+    $criteria = [
+        'comedy' => 'The dialogue is primarily humorous, playful, or intended to amuse.',
+        'horror' => 'The dialogue is primarily frightening, supernatural, or disturbing.',
+        'default' => 'No listed genre clearly describes the dialogue.',
+    ];
+    $started = microtime(true);
+    $failure = '';
+    $response = [];
+    try {
+        $response = $handler->jev_request(
+            ['dialogue' => "Lydia: Why did the mudcrab cross the road? To get to the other tide!\nPlayer: That joke is terrible, Lydia. I love it."],
+            'This is an isolated connection test. Choose the dominant genre of the dialogue.',
+            $criteria,
+            'connector_capability_test'
+        );
+    } catch (Throwable $e) {
+        $failure = $e->getMessage();
+    }
+    $answer = is_array($response) ? ($response['answers']['genre'] ?? null) : null;
+    $choice = is_array($answer) ? ($answer['choice'] ?? null) : null;
+    $confidence = is_array($answer) ? ($answer['confidence'] ?? null) : null;
+    $connected = is_array($response) && $response !== [];
+    $valid = is_string($choice) && array_key_exists($choice, $criteria)
+        && (is_int($confidence) || is_float($confidence)) && is_finite((float) $confidence)
+        && $confidence >= 0 && $confidence <= 1;
+    $connectionMessage = $failure !== '' ? $failure : 'No usable decision response; see the server log';
+    if ($connected) $connectionMessage = 'Decision endpoint returned a response';
+    $decisionStatus = 'fail';
+    $decisionMessage = 'Expected a listed choice with a confidence from 0 to 1';
+    if ($valid) {
+        $decisionStatus = $choice === 'comedy' ? 'pass' : 'warn';
+        $decisionMessage = sprintf('Chose %s with confidence %.2f%s', $choice, $confidence, $choice === 'comedy' ? '' : ' (expected comedy)');
+    }
+    $checks = [
+        'connection' => ['status' => $connected ? 'pass' : 'fail', 'message' => $connectionMessage],
+        'decision' => ['status' => $decisionStatus, 'message' => $decisionMessage],
+        'dialogue' => ['status' => 'skipped', 'message' => 'Decision connectors cannot generate dialogue'],
+    ];
+    $statuses = array_column($checks, 'status');
+    $status = 'pass';
+    if (in_array('fail', $statuses, true)) $status = 'fail';
+    elseif (in_array('warn', $statuses, true)) $status = 'warn';
+    return ['status' => $status, 'checks' => $checks, 'response_preview' => $valid ? $choice : '',
+        'timings' => [], 'elapsed_ms' => (int) round((microtime(true) - $started) * 1000)];
+}
+
 // A semantic vision check is separate from the successful image request itself.
 function chimValidateConnectorVision(string $response): array
 {
