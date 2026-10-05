@@ -51,6 +51,8 @@ function chimGlobalSettingsLabel(string $name): string
         'CORE_CONNECTOR_DIRECTOR_ENABLED' => 'Director Mode Available',
         'CORE_CONNECTOR_BGL_ENABLED' => 'Background Life Available',
         'BGL_TRIGGER_HOURS' => 'Background Life Trigger Time', 'OGHMA_INFINIUM' => 'Enable Oghma',
+        'BGL_AUTO_ENROLL_ENABLED' => 'Background Life Auto Enrollment',
+        'BGL_AUTO_ENROLL_EVENT_THRESHOLD' => 'Background Life Enrollment Events',
         'OGHMA_AMOUNT' => 'Oghma Topic Count', 'OGHMA_RESULT_LIMIT' => 'Oghma Result Limit',
         'OGHMA_EXTRACTOR_FALLBACK' => 'Oghma Extractor Fallback',
         'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Connector',

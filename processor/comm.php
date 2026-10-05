@@ -230,7 +230,15 @@ if ($gameRequest[0] == "init") { // Reset responses if init sent (Think about th
     /* Restore NPCs state */
 
     $npcMaster = new NpcMaster();
-    $npcMaster->restoreNPC($gameRequest[2]);
+    // Restoring an older save replays persisted relationships, rather than changing them anew.
+    if ($db->execQuery("SELECT set_config('chim.relationship_eventlog_suspended','on',false)") === false) {
+        throw new RuntimeException('Could not suspend relationship audit during save restoration');
+    }
+    try {
+        $npcMaster->restoreNPC($gameRequest[2]);
+    } finally {
+        $db->execQuery("SELECT set_config('chim.relationship_eventlog_suspended','off',false)");
+    }
     Logger::trace("POST INIT PROCESSING " . (time() - $now));
 
     // RELATIONSHIP SYSTEM: Clear async queues on game load (Paradox Prevention)
@@ -972,6 +980,15 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                             continue;
                         }
                         $db->update("eventlog", "delivery_state='spoken'", "rowid={$rowIdToUpdate} AND {$nonAbortedChatStateSql}");
+                    }
+
+                    // A delivered reply to the player is the only automatic enrollment check.
+                    if ($isNpcReplyToPlayer && chimGetBackgroundLifeAutoEnrollEnabled()) {
+                        try {
+                            chimBglMaybeAutoEnroll($db, $speechSpeaker, $speechGamets);
+                        } catch (Throwable $e) {
+                            Logger::warn("[BGL] Automatic enrollment check failed for {$speechSpeaker}: " . $e->getMessage());
+                        }
                     }
                 }
             } elseif (!empty($matchedUtteranceRowIds)) {
@@ -2003,24 +2020,32 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
     if ($currentNpcData) {
         $enabled = strpos($gameRequest[0], "enable_bg") === 0;
-        $extendedData = $npcMaster->getExtendedData($currentNpcData);
-        $extendedData['background_life_enabled'] = $enabled;
-        $currentNpcData = $npcMaster->setExtendedData($currentNpcData, $extendedData);
-        if ($refId !== '') {
-            $currentNpcData['refid'] = $refId;
-        }
+        try {
+            chimBglSetEnabled($npcMaster, $currentNpcData, $enabled);
 
-        if ($enabled) {
-            $metadata = $npcMaster->getMetadata($currentNpcData);
-            $metadata['low_process_actors'] = [];
-            $currentNpcData = $npcMaster->setMetadata($currentNpcData, $metadata);
-        }
+            // Update only the remaining fields so the enrollment merge is not overwritten.
+            $remainingUpdate = ['id' => $currentNpcData['id']];
+            if ($refId !== '') {
+                $currentNpcData['refid'] = $refId;
+                $remainingUpdate['refid'] = $refId;
+            }
 
-        $npcMaster->updateByArray($currentNpcData);
-        Logger::info(
-            "Background Life " . ($enabled ? "enabled" : "disabled") .
-            " for {$currentNpcData['npc_name']} ({$currentNpcData['refid']})"
-        );
+            if ($enabled) {
+                $metadata = $npcMaster->getMetadata($currentNpcData);
+                $metadata['low_process_actors'] = [];
+                $remainingUpdate['metadata'] = json_encode($metadata);
+            }
+
+            if (count($remainingUpdate) > 1) {
+                $npcMaster->updateByArray($remainingUpdate);
+            }
+            Logger::info(
+                "Background Life " . ($enabled ? "enabled" : "disabled") .
+                " for {$currentNpcData['npc_name']} ({$currentNpcData['refid']})"
+            );
+        } catch (Throwable $e) {
+            Logger::error("Background Life toggle failed for {$currentNpcData['npc_name']}: " . $e->getMessage());
+        }
     } else {
         Logger::warn("Background Life target not found: {$npcName}/{$refId}");
     }

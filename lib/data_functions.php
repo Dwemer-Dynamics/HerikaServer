@@ -2543,6 +2543,8 @@ function getTimeCategory($hoursAgo) {
 function herikaShouldExcludeEventFromPromptContext(array $row): bool
 {
     $type = strtolower(trim(strval($row['type'] ?? '')));
+    // Relationship audits are visible history, not additional prompt events.
+    if ($type === 'relationship') return true;
     $data = trim(strval($row['data'] ?? ''));
 
     static $csvImportEventTypes = [
@@ -2660,7 +2662,7 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="", int $t
     and type<>'bored' and type<>'init' and type<>'infoloc' and type<>'info' and type<>'funcret' and type<>'book'
     and type<>'addnpc' and type<>'infonpc' and type<>'infoitems'
     and type<>'updateprofile' and type<>'rechat' and type<>'setconf' and  type<>'status_msg'  and type<>'user_input'
-    and type<>'infonpc_close' and type<>'instruction'
+    and type<>'infonpc_close' and type<>'instruction' and type<>'relationship'
     and type<>'request' and type<>'playerinfo' and type<>'im_alive' and type<>'region' and type<>'named_cell'
     AND type<>'narrator_welcome'
     and (type<>'chat' or {$visibleChatStateSql})
@@ -3417,7 +3419,7 @@ function DataLastDataExpandedForBak($actor, $lastNelements = -10,$sqlfilter="")
     FROM  eventlog a WHERE 1=1
     and type<>'combatend'  
     and type<>'bored' and type<>'init' and type<>'infoloc' and type<>'info' and type<>'funcret' and type<>'book' and type<>'addnpc' and type<>'infoitems' 
-    and type<>'updateprofile' and type<>'rechat' and type<>'narration' and type<>'setconf' and type<>'backgroundaction'
+    and type<>'relationship' and type<>'updateprofile' and type<>'rechat' and type<>'narration' and type<>'setconf' and type<>'backgroundaction'
     and type<>'funccall' $removeBooks  and type<>'togglemodel' $sqlfilter  
     and gamets>".($currentGameTs-(60*60*60*60))."
     order by gamets desc,ts desc,rowid desc LIMIT 1000 OFFSET 0");
@@ -5037,7 +5039,8 @@ function dataGetMemoryCompanionConditionSql(
     }
 
     $npcEsc = $GLOBALS['db']->escape($npcName);
-    return "($column LIKE '%|$npcEsc|%' OR $column='$npcEsc')";
+    // Literal token match: LIKE would treat % _ and backslash in names as wildcards/escapes.
+    return "(position('|$npcEsc|' in $column) > 0 OR $column='$npcEsc')";
 }
 
 /**
@@ -5141,7 +5144,7 @@ function DataShortTermMemoryFor($actor, $sqlfilter = "")
                     AND $companionConditionSql
                     AND gamets_truncated > " . intval($mtmHightide) . "
                     AND gamets_truncated <= $boundExpr
-                  ORDER BY gamets_truncated DESC
+                  ORDER BY gamets_truncated DESC, rowid ASC
                   LIMIT " . intval($cap);
 
         $rows = $db->fetchAll($query);

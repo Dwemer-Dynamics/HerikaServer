@@ -8677,4 +8677,27 @@ if ($checkVersion('core_action_retire_drink') < 20260927001) {
     }
 }
 
-?>
+// Store relationship audits atomically without copying them into prompt history.
+if ($checkVersion('relationship_eventlog') < 20261002001) {
+    $db->execQuery('BEGIN');
+    try {
+        $sql = file_get_contents(__DIR__ . '/../lib/core/database_schema/relationship_eventlog.sql');
+        if ($sql === false || $db->execQuery($sql) === false) {
+            throw new RuntimeException('Relationship eventlog migration failed');
+        }
+        $updateVersion('relationship_eventlog', 20261002001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Relationship eventlog migration failed: ' . $e->getMessage());
+    }
+}
+// Derived episodes keep a nullable link to the raw canonical bucket; old rows remain canonical.
+if ($checkVersion("memory_summary_episodes") < 20261004001) {
+    $migrationOk = $db->execQuery("ALTER TABLE public.memory_summary ADD COLUMN IF NOT EXISTS source_rowid integer") !== false;
+    if ($migrationOk) {
+        $migrationOk = $db->execQuery("CREATE INDEX IF NOT EXISTS memory_summary_source_rowid_idx ON public.memory_summary(source_rowid) WHERE source_rowid IS NOT NULL") !== false;
+    }
+    if ($migrationOk) $updateVersion("memory_summary_episodes", 20261004001);
+    else Logger::error("Failed to apply memory episode source linkage migration");
+}
