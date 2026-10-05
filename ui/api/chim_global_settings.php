@@ -42,6 +42,7 @@ function chimGlobalSettingsLabel(string $name): string
         'CORE_CONNECTOR_MEDIUMTERM' => 'Background & Memory Tasks',
         'CORE_CONNECTOR_DECISION' => 'Decision Connector', 'CORE_CONNECTOR_DECISION_ENABLED' => 'Decision Connector Available', 'STT_TARGETING_ENABLED' => 'STT Targeting',
         'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
+        'DECISION_QUEST_INTENT_ENABLED' => 'Quest Dialogue Intent',
         'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier (Legacy)', 'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier (Legacy) Available',
         'CORE_CONNECTOR_PROFILES' => 'Profile Tasks', 'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
         'CORE_CONNECTOR_QUEST_CREATION' => 'Quest Creation Connector',

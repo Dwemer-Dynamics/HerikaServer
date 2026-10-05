@@ -57,6 +57,7 @@ $connectorAvailabilityToggles = chimGlobalLlmConnectorAvailabilityMap();
 $decisionTaskToggles = [
     'STT_TARGETING_ENABLED' => 'Choose which nearby NPC answers your voice input. Crosshair targets still take priority.',
     'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Choose the scene genre for ambient cues. Off does not fall back to Scene Classifier (Legacy).',
+    'DECISION_QUEST_INTENT_ENABLED' => 'Interprets player dialogue for Traditional Quest steps. Uncertainty leaves the quest unchanged.',
 ];
 $pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_EXTRACTOR_FALLBACK'], array_keys($decisionTaskToggles));
 foreach ($gsSections as $sectionName => $fields) {
@@ -104,6 +105,7 @@ function pretty_label(string $flatName): string
         'CORE_CONNECTOR_DECISION_ENABLED' => 'Decision Connector',
         'STT_TARGETING_ENABLED' => 'STT Targeting',
         'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
+        'DECISION_QUEST_INTENT_ENABLED' => 'Quest Dialogue Intent',
         'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier (Legacy)',
         'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier (Legacy)',
         'CORE_CONNECTOR_PROFILES' => 'Profile Tasks',

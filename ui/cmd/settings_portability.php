@@ -98,6 +98,7 @@ function chimPortableGlobalFields(): array
         'CORE_CONNECTOR_DECISION_ENABLED' => 'boolean',
         'STT_TARGETING_ENABLED' => 'boolean',
         'DECISION_SCENE_CLASSIFIER_ENABLED' => 'boolean',
+        'DECISION_QUEST_INTENT_ENABLED' => 'boolean',
         'CORE_CONNECTOR_PROFILES_ENABLED' => 'boolean',
         'CORE_CONNECTOR_DIRECTOR_ENABLED' => 'boolean',
         'CORE_CONNECTOR_QUEST_CREATION_ENABLED' => 'boolean',
