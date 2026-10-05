@@ -9,6 +9,7 @@ $enginePath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "runtime_bootstrap.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "logger.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "prisma_settings_catalog.php");
+require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "llm_connector.class.php");
 
 chimRuntimeBootstrap($enginePath, [
     'load_general_settings' => true,
@@ -94,8 +95,10 @@ function pretty_label(string $flatName): string
         'CORE_CONNECTOR_PLAYER' => 'Player Respeech',
         'CORE_CONNECTOR_SUMMARY' => 'Summaries',
         'CORE_CONNECTOR_MEDIUMTERM' => 'Background & Memory Tasks',
-        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier',
-        'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
+        'CORE_CONNECTOR_DECISION' => 'Decision Connector',
+        'CORE_CONNECTOR_DECISION_ENABLED' => 'Decision Connector',
+        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier (Legacy)',
+        'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier (Legacy)',
         'CORE_CONNECTOR_PROFILES' => 'Profile Tasks',
         'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
         'CORE_CONNECTOR_QUEST_CREATION' => 'Quest Creation Connector',
@@ -201,6 +204,7 @@ function icon_for_field(string $flatName): string
         if ($u === 'CORE_CONNECTOR_PLAYER') return '🎮';
         if ($u === 'CORE_CONNECTOR_SUMMARY') return '📝';
         if ($u === 'CORE_CONNECTOR_MEDIUMTERM') return '🧠';
+        if ($u === 'CORE_CONNECTOR_DECISION') return '⚖️';
         if ($u === 'CORE_CONNECTOR_SCENECLASSIFIER') return '🎭';
         if ($u === 'CORE_CONNECTOR_PROFILES') return '👥';
         if ($u === 'CORE_CONNECTOR_DIRECTOR') return '🎬';
@@ -359,7 +363,7 @@ $filterBrowseFieldConfigs = filter_browse_field_configs();
 
 $foreignOptions = [];
 try {
-    $foreignOptions['core_llm_connector:id:label'] = $GLOBALS["db"]->fetchAll("SELECT id, label FROM core_llm_connector ORDER BY LOWER(label) ASC, id ASC");
+    $foreignOptions['core_llm_connector:id:label'] = $GLOBALS["db"]->fetchAll("SELECT id, label, driver, model, url FROM core_llm_connector ORDER BY LOWER(label) ASC, id ASC");
 } catch (\Throwable $e) {
     $foreignOptions['core_llm_connector:id:label'] = [];
 }
@@ -408,6 +412,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
                     $saveError = strval($field['label'] ?? pretty_label($name)) . ' was not changed. ' . $e->getMessage();
                     continue;
                 }
+            }
+
+            if ($name === 'CORE_CONNECTOR_DECISION' && intval($value) > 0 && intval($value) !== intval(current_value($name))
+                && !chimIsDecisionConnector((new LLMConnector())->getById(intval($value)))) {
+                $saveError = 'Decision Connector was not changed. Choose an OpenRouter decision model such as Jev.';
+                continue;
             }
 
             $description = current_description($name, $generalSettingRowMap);
@@ -1875,6 +1885,7 @@ body .settings-tabs .settings-tab.is-active {
                                         </select>
                                     <?php elseif (strpos($fieldType, 'foreign:') === 0): ?>
                                         <?php $parts = explode(':', $fieldType); $fkKey = implode(':', array_slice($parts, 1)); $rows = $foreignOptions[$fkKey] ?? []; ?>
+                                        <?php if ($fieldName === 'CORE_CONNECTOR_DECISION') { $rows = array_filter($rows, static fn($row) => chimIsDecisionConnector($row) || strval($row['id'] ?? '') === strval($current)); } ?>
                                         <select aria-label="<?php echo htmlspecialchars($label); ?>" name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             <option value="" <?php echo (empty($current) ? 'selected' : ''); ?>>None</option>
                                             <?php foreach ($rows as $row): ?>

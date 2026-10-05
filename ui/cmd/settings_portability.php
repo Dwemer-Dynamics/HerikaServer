@@ -95,6 +95,7 @@ function chimPortableGlobalFields(): array
         'PLAYER_RESPEECH' => 'boolean',
         'CORE_CONNECTOR_SUMMARY_ENABLED' => 'boolean',
         'CORE_CONNECTOR_MEDIUMTERM_ENABLED' => 'boolean',
+        'CORE_CONNECTOR_DECISION_ENABLED' => 'boolean',
         'CORE_CONNECTOR_PROFILES_ENABLED' => 'boolean',
         'CORE_CONNECTOR_DIRECTOR_ENABLED' => 'boolean',
         'CORE_CONNECTOR_QUEST_CREATION_ENABLED' => 'boolean',

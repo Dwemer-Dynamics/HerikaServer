@@ -230,7 +230,8 @@ function herikaQuickstartGetGeneralLlmConnectorSummary($db): array {
     $items = [
         'CORE_CONNECTOR_SUMMARY' => 'Summaries',
         'CORE_CONNECTOR_MEDIUMTERM' => 'Background Life',
-        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier',
+        'CORE_CONNECTOR_DECISION' => 'Decision Connector',
+        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier (Legacy)',
         'CORE_CONNECTOR_PROFILES' => 'Dynamic Profile',
         'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
         'RELLLM_CONNECTOR' => 'Relationship Management',

@@ -92,14 +92,15 @@ INSERT INTO public.core_llm_connector (
     (4, 'DeepSeek V4 Pro',          '{}', 'https://openrouter.ai/api/v1/chat/completions', 'deepseek/deepseek-v4-pro', 'openrouter', 'openrouterjson', NULL, 750, 1, 0, 1, 1, 0.6, 'openrouter'),
     (5, 'Mistral Small 3.2 24B', '{}', 'https://openrouter.ai/api/v1/chat/completions', 'mistralai/mistral-small-3.2-24b-instruct', 'openrouter', 'openrouterjson', NULL, 750, 1, 0, 1, 1, 1, 'openrouter'),
     (6, 'Ministral 8B',   '{}', 'https://openrouter.ai/api/v1/chat/completions', 'mistralai/ministral-8b-2512', 'openrouter', 'openrouterjson', NULL, 750, 1, 0, 1, 1, 1, 'openrouter'),
-    (7, 'Gemma 3 4B', '{}', 'https://openrouter.ai/api/v1/chat/completions', 'google/gemma-3-4b-it', 'openrouter', 'openrouterjson', NULL, 128, 1, 0, 1, 1, 0.2, 'openrouter');
+    (7, 'Gemma 3 4B', '{}', 'https://openrouter.ai/api/v1/chat/completions', 'google/gemma-3-4b-it', 'openrouter', 'openrouterjson', NULL, 128, 1, 0, 1, 1, 0.2, 'openrouter'),
+    (8, 'OpenRouter Jev (Decision)', '{}', 'https://openrouter.ai/api/alpha/decisions', 'typesafe/jev-1.13', 'openrouter', 'openrouterjson', NULL, 128, 0, 0, 1, 0, 0, 'openrouter');
 
 
 --
 -- Name: llm_connector_id_seq; Type: SEQUENCE SET; Schema: public; Owner: dwemer
 --
 
-SELECT pg_catalog.setval('public.llm_connector_id_seq', 7, true);
+SELECT pg_catalog.setval('public.llm_connector_id_seq', 8, true);
 
 
 --
