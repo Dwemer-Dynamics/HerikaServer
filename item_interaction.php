@@ -66,7 +66,7 @@ try {
         $item=$hasItem ? mb_substr((string)($snapshot['item']['name'] ?? ''),0,160) : null;
         $allowed=array_intersect_key(chimInteractCatalog(),array_flip(array_filter($input['capabilities'] ?? [],'is_string')));
         if ($hasItem) unset($allowed['consume_world']);
-        if (!$hasItem) $allowed=array_diff_key($allowed,array_flip(['give','store','consume','equip','magic']));
+        if (!$hasItem) $allowed=array_diff_key($allowed,array_flip(['give','store','consume','equip','magic','heal','restore_stamina','restore_magicka','drop','place']));
         if (!$allowed || $target==='' || ($hasItem && $item==='')) throw new InvalidArgumentException('No supported interaction');
         $location=mb_substr((string)($snapshot['location'] ?? ''),0,160);
         $sceneFilter=$location!=='' && $location!=='unknown' ? " OR location='".$db->escape($location)."'" : '';
@@ -144,6 +144,10 @@ try {
         'unlock'=>'unlock '.$state['target'], 'activate'=>'use '.$state['target'], 'open'=>'open '.$state['target'],
         'close'=>'close '.$state['target'], 'destroy'=>'damage '.$state['target'], 'disable'=>'remove '.$state['target'],
         'resize'=>'change the size of '.$state['target'], 'magic'=>'use '.$state['item'].' on '.$state['target'],
+        'heal'=>'heal '.$state['target'], 'restore_stamina'=>'restore '.$state['target']."'s strength",
+        'restore_magicka'=>'restore '.$state['target']."'s magicka", 'disarm'=>'disarm '.$state['target'],
+        'unequip'=>'remove armor from '.$state['target'], 'drop'=>'drop '.$state['item'],
+        'place'=>'place '.$state['item'].' near '.$state['target'],
         'combat'=>'provoke '.$state['target'].' into a fight'
     ];
     foreach ($state['plan']['steps'] as $index=>$step) {
