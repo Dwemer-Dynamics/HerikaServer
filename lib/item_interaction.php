@@ -45,6 +45,25 @@ function chimInteractValidate(array $plan, array $allowed): array {
     return ['steps'=>$steps,'failure_narration'=>mb_substr($failure,0,500)];
 }
 
+// Fold only the redundant two-step take-then-consume shape; all original fields remain validated.
+function chimInteractAtomicWorldConsume(array $plan, array $allowed): array {
+    $steps=$plan['steps'] ?? null;
+    if (!is_array($steps) || !array_is_list($steps) || count($steps)!==2
+        || ($steps[0]['effect'] ?? null)!=='pickup' || ($steps[1]['effect'] ?? null)!=='consume_world'
+        || ($steps[0]['requires'] ?? null)!==[] || ($steps[1]['requires'] ?? null)!==[0]
+        || ($steps[0]['alive'] ?? null)!==false || ($steps[1]['alive'] ?? null)!==false) return $plan;
+    foreach ($steps as $step) {
+        $step['requires']=[];
+        $single=$plan;
+        $single['steps']=[$step];
+        chimInteractValidate($single,$allowed);
+    }
+    $steps[1]['requires']=[];
+    $plan['steps']=[$steps[1]];
+    error_log('[INTERACT] Folded redundant pickup into atomic world consumption');
+    return $plan;
+}
+
 // Isolate the Interact response shape from normal dialogue and Director scenes.
 function chimInteractGenerate(array $context, array $allowed): array {
     require_once __DIR__.'/core/llm_connector.class.php';
@@ -52,7 +71,6 @@ function chimInteractGenerate(array $context, array $allowed): array {
     $connector = new LLMConnector();
     $data = $connector->getById((int)($GLOBALS['CORE_CONNECTOR_DIRECTOR'] ?? 0));
     if (!$data) throw new RuntimeException('Director connector is not configured');
-    $connection = $connector->getConnector($data);
     $connector->setOldGlobals($data);
     $GLOBALS['CURRENT_CONNECTOR'] = $data['driver'];
     $GLOBALS['CHIM_CORE_CURRENT_CONNECTOR_DATA'] = $data;
@@ -80,6 +98,9 @@ function chimInteractGenerate(array $context, array $allowed): array {
         .'or additional targets. Narration is brief third-person prose using supplied names. Each sentence describes ONLY its own '
         .'verified mechanical effect, never future steps or unsupported visible choreography. No player dialogue or NPC speech. '
         .'consume_world makes the PLAYER eat or drink the single crosshair world food/potion, transferring its real reference and consuming it through the engine. It requires no selected inventory item; never use NPC consume for this. '
+        .'consume_world is ONE ATOMIC ACTION: it already picks up the target and consumes it. NEVER add pickup before or after consume_world. '
+        .'For an intent to eat/drink a supported world item, use consume_world directly, not pickup-only and not a failure saying it must be picked up first. '
+        .'Use pickup alone only when the intended result is taking/keeping the item without consuming it. '
         .'pickup takes one actual selected world food reference into the player inventory; it does not use the selected inventory item. '
         .'Use pickup for taking eligible food, not activate. Never repeat pickup; target effects after pickup may be skipped when it leaves the world. '
         .'activate only requests activation; never narrate pickup or other unverified scripted consequences for activate. '
@@ -103,12 +124,29 @@ function chimInteractGenerate(array $context, array $allowed): array {
     if (!empty($GLOBALS['CONNECTOR'][$data['driver']]['json_schema'])) $format=['type'=>'json_schema','json_schema'=>[
         'name'=>'chim_interact','strict'=>true,'schema'=>$schema]];
     $GLOBALS['structuredOutputTemplate']=['type'=>'json_schema','json_schema'=>['name'=>'chim_interact','strict'=>true,'schema'=>$schema]];
-    $connection->open($prompt, ['response_format'=>$format,'MAX_TOKENS'=>1800]);
-    do { $connection->process(); } while (!$connection->isDone());
-    $raw = trim($connection->close('item_interaction'));
-    if (preg_match('/\A```(?:json)?\s*\R(.*)\R```\s*\z/s',$raw,$m)) $raw=trim($m[1]);
-    $decoded=json_decode($raw,true,32,JSON_THROW_ON_ERROR);
-    return chimInteractValidate($decoded,$allowed);
+    for ($attempt=0; $attempt<2; ++$attempt) {
+        $connection=$connector->getConnector($data);
+        $connection->open($prompt, ['response_format'=>$format,'MAX_TOKENS'=>1800]);
+        do { $connection->process(); } while (!$connection->isDone());
+        $raw = trim($connection->close('item_interaction'));
+        if (preg_match('/\A```(?:json)?\s*\R(.*)\R```\s*\z/s',$raw,$m)) $raw=trim($m[1]);
+        $decoded=json_decode($raw,true,32,JSON_THROW_ON_ERROR);
+        $plan=chimInteractValidate(chimInteractAtomicWorldConsume($decoded,$allowed),$allowed);
+        // A pickup plus failure explanation can reflect the obsolete "take before eating" assumption.
+        // Ask once using the original intent; never infer consumption from an English keyword or force it.
+        if ($attempt===0 && isset($allowed['consume_world']) && count($plan['steps'])===1
+            && $plan['steps'][0]['effect']==='pickup' && $plan['failure_narration']!=='') {
+            error_log('[INTERACT] Rechecking pickup-only plan with failure explanation');
+            $prompt[]=['role'=>'assistant','content'=>$raw];
+            $prompt[]=['role'=>'user','content'=>'Recheck the original intent against the supported effects. '
+                .'consume_world already transfers and eats/drinks the world item in one atomic action; pickup is not a prerequisite. '
+                .'If the intent is consumption, use consume_world directly. If the intent is only taking/keeping it, retain pickup. '
+                .'Do not invent an intent. Return the complete corrected JSON plan.'];
+            continue;
+        }
+        return $plan;
+    }
+    throw new RuntimeException('Interaction plan could not be resolved');
 }
 
 // Claim a single post-playback reaction using only the saved verified interaction, never client prose.
