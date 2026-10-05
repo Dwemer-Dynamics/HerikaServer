@@ -204,6 +204,22 @@ Rules:
 
     if ($action) {
         $actionTextDescription = [];
+        $npcMetadata = json_decode($currentNpcData['metadata'] ?? '{}', true);
+        if (!is_array($npcMetadata)) {
+            $npcMetadata = [];
+        }
+        $inventoryCounts = [];
+        $npcInventory = $npcMetadata['inventory'] ?? [];
+        if (!is_array($npcInventory)) {
+            $npcInventory = [];
+        }
+        foreach ($npcInventory as $inventoryItem) {
+            $inventoryItemId = strtolower(preg_replace('/^0x/i', '', trim((string) ($inventoryItem['baseid'] ?? ''))));
+            if ($inventoryItemId !== '') {
+                $inventoryCounts[$inventoryItemId] = ($inventoryCounts[$inventoryItemId] ?? 0) + max(0, (int) ($inventoryItem['count'] ?? 0));
+            }
+        }
+
         foreach ($action as $singleAction) {
             if ($singleAction === 'DoNothing') {
                 continue;
@@ -224,6 +240,11 @@ Rules:
                     error_log("[BGL RUN] $npcNameEsc — Ignoring malformed Consume action: $singleAction");
                     continue;
                 }
+                if (($inventoryCounts[$itemId] ?? 0) < $count) {
+                    error_log("[BGL RUN] $npcNameEsc — Skipping Consume action; inventory has " . ($inventoryCounts[$itemId] ?? 0) . " of $itemId, requested $count");
+                    continue;
+                }
+                $inventoryCounts[$itemId] -= $count;
                 $json = $skyrimCmd->ObjectReference->RemoveItem($sourceRefHexString, "0x$itemId", $count, true);
                 $skyrimCmd->send(cmd: $json);
             } elseif ($actionType === 'Produced') {
@@ -241,6 +262,11 @@ Rules:
                     error_log("[BGL RUN] $npcNameEsc — Ignoring malformed Manufactured action: $singleAction");
                     continue;
                 }
+                if (($inventoryCounts[$itemId] ?? 0) < $count) {
+                    error_log("[BGL RUN] $npcNameEsc — Skipping Manufactured action; inventory has " . ($inventoryCounts[$itemId] ?? 0) . " of $itemId, requested $count");
+                    continue;
+                }
+                $inventoryCounts[$itemId] -= $count;
 
                 $json = $skyrimCmd->ObjectReference->RemoveItem($sourceRefHexString, "0x$itemId", $count, true);
                 $skyrimCmd->send(cmd: $json);
@@ -266,6 +292,10 @@ Rules:
 
             $actionText[] = $singleAction;
             $actionTextDescription[] = $itemNameResolved;
+        }
+
+        if (empty($actionText)) {
+            return "";
         }
 
         $actionTextFinal = implode(', ', $actionText);
@@ -343,6 +373,8 @@ function requestForInnerThought(
     $currentConnectorData,
     &$recordInnerThoughts,
     &$recordDiaryEntry,
+    $last_gamets,
+    $startGamets,
 ): string {
 
     $systemPrompts = [
@@ -387,10 +419,22 @@ in first person.
 
 PROMPT_EN,
     ];
+    
+    $npcNameEsc=$GLOBALS["db"]->escape($GLOBALS['HERIKA_NAME']);
 
+    $lastActions = $GLOBALS["db"]->fetchAll("SELECT fullcall,gamets FROM actions_issued where actorname='$npcNameEsc' and gamets>$startGamets and original='backgroundaction' order by gamets desc limit 20");
+    $lastActionsSummary = [];
+    foreach ($lastActions as $action) {
+        $actionParts = explode(':', $action['fullcall']);
+        $hoursAgo = number_format(($last_gamets - $action['gamets']) * GAMETS_TO_HOURS, 2);
+        $lastActionsSummary[$action['gamets']] = "$actionParts[0] $actionParts[1] ($hoursAgo hours ago)";
+    }
+    
+    $last_actions_reminder = "<last_actions_history>\nLast actions issued:\n" . implode("\n", array_reverse($lastActionsSummary)) . "\n</last_actions_history>\n\n";
+  
     $step1Prompt = array_merge($systemPrompts[$lang], [
         ['role' => 'user', 'content' => "<character_sheet>\n{$GLOBALS['HERIKA_NAME']}:\n$dynamicBiography\n</character_sheet>", "cache_control" => ["type" => "ephemeral"]],
-        ['role' => 'user', 'content' => "<context_history>\nContext History (chronological order)\n$history\n</context_history>{$postHistory}\n{$lastMinuteNotes}", "cache_control" => ["type" => "ephemeral"]],
+        ['role' => 'user', 'content' => "<context_history>\nContext History (chronological order)\n$history\n</context_history>{$postHistory}\n{$last_actions_reminder}\n{$lastMinuteNotes}", "cache_control" => ["type" => "ephemeral"]],
         ['role' => 'user', 'content' => $userPrompts[$lang], "cache_control" => ["type" => "ephemeral"]],
     ]);
 
@@ -537,11 +581,13 @@ BuyItem:<NPC name>:<itemid>:<count>:<total_gold_spent>,<NPC name>:<itemid>:<coun
 - Buy items from another NPC.
 - Required after a previously agreed trade so inventories can be updated.
 - total_gold_spent is <item price>*<count>, the total amount of gold spent for that item, including any haggling or discounts.
+- E.G. Buy 3 apples from John Doe for 30 gold (10 gold each one) => BuyItem:John Doe:apple:3:30
 
 SellItem:<NPC name>:<itemid>:<count>:<total_gold_amount>,<NPC name>:<itemid>:<count>:<total_gold_amount>,...
 - Sell items to another NPC.
 - Required after a previously agreed trade so inventories can be updated.
 - total_gold_amount is <item price>*<count>, the total amount of gold received for that item, including any haggling or discounts (price*count).
+- E.G. Sell 3 apples to John Doe for 30 gold (10 gold each one) => SellItem:John Doe:apple:3:30
 
 GiveItemTo:<NPC name>:<itemid>:<count>,<NPC name>:<itemid>:<count>
 - Give items directly to one or more NPCs with no gold exchange.
@@ -552,11 +598,13 @@ GiveItemTo:<NPC name>:<itemid>:<count>,<NPC name>:<itemid>:<count>
 GiveGoldTo:<NPC name>:<gold_amount>,<NPC name>:<gold_amount>
 - Give gold directly to one or more NPCs.
 - Use this for gifts, donations, payments, or helping allies where only gold should be transferred.
+- E.G. Give 50 gold to John Doe => GiveGoldTo:John Doe:50
 
 SellService:<NPC name>:<service_description>:<total_gold_amount>,<NPC name>:<service_description>:<total_gold_amount>
 - Sell a service to another NPC. No inventory item is moved; only gold changes hands.
 - The service_description is a short label (e.g. 'healing', 'repair', 'lockpicking', 'mercenary work') describing what was provided.
 - total_gold_amount is the full price paid by the buyer for the service.
+- E.G. Sell a healing service to John Doe for 50 gold => SellService:John Doe:healing:50
 PROMPT;
     }
     $step2Content .= <<<PROMPT2
