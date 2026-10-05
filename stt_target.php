@@ -26,16 +26,4 @@ require_once __DIR__ . '/lib/stt_target_jev.php';
 $input = chimSttTargetParseRequest(json_decode($raw, true, 8));
 if ($input === null) { http_response_code(400); echo '{"ok":false}'; exit; }
 
-// not_configured means the Decision Connector is unset, disabled or not a decision connector right now; the client
-// keeps asking, so enabling it applies to the next voice turn.
-try {
-    $connector = chimSttTargetJevConnector();
-} catch (Throwable $error) {
-    echo '{"ok":true,"decision":"abstain","reason":"connector_error"}';
-    exit;
-}
-if ($connector === null) {
-    echo '{"ok":true,"decision":"abstain","reason":"not_configured"}';
-    exit;
-}
-echo json_encode(['ok' => true] + chimSttTargetDecide($connector, $input, chimSttTargetRecentDialogue($GLOBALS['db'])));
+echo json_encode(['ok' => true] + chimSttTargetRespond($input, $GLOBALS['db'] ?? null));

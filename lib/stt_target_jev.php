@@ -72,6 +72,13 @@ function chimSttTargetParseRequest($request): ?array
     return ['transcript' => $transcript, 'baseline_id' => $request['baseline_id'], 'candidates' => $candidates];
 }
 
+// STT Targeting switch, read from this request's loaded settings; a missing setting means on.
+function chimSttTargetEnabled(): bool
+{
+    $value = chimReadLegacyGlobalValue('STT_TARGETING_ENABLED', true);
+    return is_string($value) ? in_array(strtolower(trim($value)), ['1', 'true', 'yes', 'on'], true) : (bool)$value;
+}
+
 // The dedicated Decision Connector, only while it is enabled and is an OpenRouter decision connector.
 function chimSttTargetJevConnector(): ?array
 {
@@ -107,6 +114,26 @@ function chimSttTargetRecentDialogue($db): array
         ];
     }
     return array_reverse($lines);
+}
+
+// The endpoint's answer for a validated request. The decision is optional, so every failure is an abstention
+// and the client keeps its ordinary routing. Both switches are read per request before any connector lookup,
+// history query or provider call; the client keeps asking, so turning either on applies to the next voice turn.
+// not_configured means the Decision Connector is unset, unavailable or not a decision connector right now.
+function chimSttTargetRespond(array $input, $db, $handler = null): array
+{
+    try {
+        if (!chimSttTargetEnabled()) {
+            return ['decision' => 'abstain', 'reason' => 'disabled'];
+        }
+        $connector = chimSttTargetJevConnector();
+        if ($connector === null) {
+            return ['decision' => 'abstain', 'reason' => 'not_configured'];
+        }
+        return chimSttTargetDecide($connector, $input, chimSttTargetRecentDialogue($db), $handler);
+    } catch (Throwable $error) {
+        return ['decision' => 'abstain', 'reason' => 'connector_error'];
+    }
 }
 
 // Never throws: missing keys, transport errors, malformed or uncertain answers become an abstention. The call
