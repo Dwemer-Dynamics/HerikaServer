@@ -109,6 +109,8 @@ The four actor effects are also selectable voice-filter presets in the PHP NPC e
 
 ## CHIM Interact protocol
 
+The snapshot carries `item: null` for itemless attempts. The client defaults to **No item**; the server excludes give, store, consume, equip and magic for that snapshot and records the attempt/outcome without claiming an item was used. Existing item snapshots remain objects.
+
 `item_interaction.php` is a game-client JSON endpoint paired with CHIM's ItemInteraction module. It uses the existing Director connector, playthrough barrier, `rolemaster` request records, and visible `infoaction` Event Log entries; no connector setting or database table is added. Browser-origin submissions are rejected, payloads are bounded, and resolution is capped at six attempts per minute per runtime.
 
 `resolve` requires a random 32-hex request ID, intent, current game snapshot, valid capabilities and game timestamp. It records the attempt before generation. The response contains at most five allowlisted effects with typed values, earlier-step dependencies, alive conditions and conditional narration. The model supplies no reference IDs or executable code. Only one inventory operation is allowed in a sequence. Director JSON schema settings are honored; all outputs are validated independently of provider support.

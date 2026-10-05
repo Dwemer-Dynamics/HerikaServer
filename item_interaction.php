@@ -60,11 +60,13 @@ try {
         $intent=trim((string)($input['intent'] ?? ''));
         if ($intent==='' || mb_strlen($intent)>1000) throw new InvalidArgumentException('Describe the attempt in 1000 characters or fewer');
         $snapshot=$input['snapshot'] ?? null;
-        if (!is_array($snapshot) || !is_array($snapshot['item'] ?? null) || !is_array($snapshot['target'] ?? null)) throw new InvalidArgumentException('Missing current game snapshot');
+        if (!is_array($snapshot) || !array_key_exists('item',$snapshot) || ($snapshot['item']!==null && !is_array($snapshot['item'])) || !is_array($snapshot['target'] ?? null)) throw new InvalidArgumentException('Missing current game snapshot');
         $target=mb_substr((string)($snapshot['target']['name'] ?? ''),0,160);
-        $item=mb_substr((string)($snapshot['item']['name'] ?? ''),0,160);
+        $hasItem=$snapshot['item']!==null;
+        $item=$hasItem ? mb_substr((string)($snapshot['item']['name'] ?? ''),0,160) : null;
         $allowed=array_intersect_key(chimInteractCatalog(),array_flip(array_filter($input['capabilities'] ?? [],'is_string')));
-        if (!$allowed || $target==='' || $item==='') throw new InvalidArgumentException('No supported interaction');
+        if (!$hasItem) $allowed=array_diff_key($allowed,array_flip(['give','store','consume','equip','magic']));
+        if (!$allowed || $target==='' || ($hasItem && $item==='')) throw new InvalidArgumentException('No supported interaction');
         $location=mb_substr((string)($snapshot['location'] ?? ''),0,160);
         $sceneFilter=$location!=='' && $location!=='unknown' ? " OR location='".$db->escape($location)."'" : '';
         $history=$db->fetchAll("SELECT type,data FROM eventlog WHERE type IN ('chat','infoaction','death','itemfound','itemremoved')
@@ -80,7 +82,7 @@ try {
             'gamets'=>$gamets,'allowed'=>$allowed,'intent'=>$intent];
         $rowid=$db->insertReturningId('rolemaster',['type'=>'item_interaction','localts'=>time(),'ttl'=>600,'data'=>json_encode($state)],'rowid');
         if (!$rowid || !$db->insertReturningId('eventlog',['type'=>'infoaction','ts'=>time(),'localts'=>time(),'gamets'=>$gamets,
-            'data'=>"[Interact {$id} attempt] {$player} attempts to use {$item} on {$target}: {$intent}",
+            'data'=>"[Interact {$id} attempt] {$player} ".($hasItem ? "attempts to use {$item} on {$target}" : "attempts to interact with {$target} without an item").": {$intent}",
             'people'=>"|{$player}|{$target}|",'location'=>(string)($snapshot['location'] ?? ''),'party'=>'','sess'=>''], 'rowid')) throw new RuntimeException('Could not record attempt');
         if ($db->query('COMMIT')===false) throw new RuntimeException('Could not save attempt');
         $plan=chimInteractGenerate(['player'=>$player,'intent'=>$intent,'current_game'=>$snapshot,'target_profile'=>$profile,'recent_context'=>$history],$allowed);
@@ -130,7 +132,7 @@ try {
     $encoded=$db->escape(json_encode($state,JSON_THROW_ON_ERROR));
     if ($db->query("UPDATE rolemaster SET data='{$encoded}' WHERE rowid=".(int)$row['rowid'])===false
         || !$db->insertReturningId('eventlog',['type'=>'infoaction','ts'=>time(),'localts'=>time(),'gamets'=>$gamets,
-            'data'=>"[Interact {$id} outcome] ".$state['player'].' used '.$state['item'].' on '.$state['target'].': '.implode('; ',$facts).'. '.$text,
+            'data'=>"[Interact {$id} outcome] ".$state['player'].($state['item']!==null ? ' used '.$state['item'].' on ' : ' interacted without an item with ').$state['target'].': '.implode('; ',$facts).'. '.$text,
             'people'=>'|'.$state['player'].'|'.$state['target'].'|','location'=>'','party'=>'','sess'=>'',
             'utterance_id'=>$utterance,'delivery_state'=>'pending'],'rowid')) throw new RuntimeException('Could not save outcome');
     if ($db->query('COMMIT')===false) throw new RuntimeException('Could not commit outcome');
