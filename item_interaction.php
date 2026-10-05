@@ -65,6 +65,7 @@ try {
         $hasItem=$snapshot['item']!==null;
         $item=$hasItem ? mb_substr((string)($snapshot['item']['name'] ?? ''),0,160) : null;
         $allowed=array_intersect_key(chimInteractCatalog(),array_flip(array_filter($input['capabilities'] ?? [],'is_string')));
+        if ($hasItem) unset($allowed['consume_world']);
         if (!$hasItem) $allowed=array_diff_key($allowed,array_flip(['give','store','consume','equip','magic']));
         if (!$allowed || $target==='' || ($hasItem && $item==='')) throw new InvalidArgumentException('No supported interaction');
         $location=mb_substr((string)($snapshot['location'] ?? ''),0,160);
@@ -79,12 +80,15 @@ try {
         $profile=[];
         foreach (['personality','occupation','goals','npc_static_bio'] as $field) $profile[$field]=mb_substr((string)($npc[$field] ?? ''),0,500);
         $state=['id'=>$id,'session'=>$session,'status'=>'resolving','player'=>$player,'target'=>$target,'item'=>$item,
-            'gamets'=>$gamets,'allowed'=>$allowed,'intent'=>$intent];
+            'gamets'=>$gamets,'allowed'=>$allowed,'intent'=>$intent,
+            'target_ref'=>(string)($snapshot['target']['ref_id'] ?? ''),
+            'target_speaker'=>(string)($snapshot['target']['speaker'] ?? '')];
         $rowid=$db->insertReturningId('rolemaster',['type'=>'item_interaction','localts'=>time(),'ttl'=>600,'data'=>json_encode($state)],'rowid');
         if (!$rowid || !$db->insertReturningId('eventlog',['type'=>'infoaction','ts'=>time(),'localts'=>time(),'gamets'=>$gamets,
             'data'=>"[Interact {$id} attempt] {$player} ".($hasItem ? "attempts to use {$item} on {$target}" : "attempts to interact with {$target} without an item").": {$intent}",
             'people'=>"|{$player}|{$target}|",'location'=>(string)($snapshot['location'] ?? ''),'party'=>'','sess'=>''], 'rowid')) throw new RuntimeException('Could not record attempt');
         if ($db->query('COMMIT')===false) throw new RuntimeException('Could not save attempt');
+        unset($snapshot['target']['ref_id'],$snapshot['target']['speaker']);
         $plan=chimInteractGenerate(['player'=>$player,'intent'=>$intent,'current_game'=>$snapshot,'target_profile'=>$profile,'recent_context'=>$history],$allowed);
         $state['plan']=$plan; $state['status']='ready';
         $encoded=$db->escape(json_encode($state,JSON_THROW_ON_ERROR));
@@ -117,10 +121,12 @@ try {
         $detail=mb_substr((string)($receipt['detail'] ?? ''),0,300);
         $facts[]=$step['effect'].': '.$status.($detail!=='' ? ' ('.$detail.')' : '');
         if ($status==='succeeded' && $step['effect']==='activate') $sentences[]=$state['player'].' activates '.$state['target'].'.';
+        elseif ($status==='succeeded' && $step['effect']==='consume_world') $sentences[]=$state['player'].' consumes '.$state['target'].'.';
         elseif ($status==='succeeded' && $step['effect']==='consume') $sentences[]=$state['target'].' consumes '.$state['item'].'.';
         elseif ($status==='succeeded' && $step['narration']!=='') $sentences[]=$step['narration'];
         elseif ($status==='unknown' || $status==='failed') {
-            if (str_starts_with($detail,'Item transferred')) $sentences[]=$state['target'].' receives '.$state['item'].', but the rest of that action does not complete.';
+            if (str_starts_with($detail,'World item transferred')) $sentences[]=$state['player'].' takes '.$state['target'].', but consumption could not be confirmed.';
+            elseif (str_starts_with($detail,'Item transferred')) $sentences[]=$state['target'].' receives '.$state['item'].', but the rest of that action does not complete.';
             elseif (str_starts_with($detail,'Scroll consumed')) $sentences[]=$state['player'].' uses up the scroll, but its effect could not be confirmed.';
             else $sentences[]=$state['player']."'s attempt to ".$step['effect'].' '.$state['target'].($status==='failed' ? ' does not succeed.' : ' has an uncertain result.');
         }

@@ -109,6 +109,10 @@ The four actor effects are also selectable voice-filter presets in the PHP NPC e
 
 ## CHIM Interact protocol
 
+`consume_world` (value zero) requires `item: null` and consumes a single eligible world food/potion as the player; it cannot be combined with another pickup/world-consumption step. Successful narration confirms consumption, without promising a measured healing effect.
+
+`chatnf_interact_reaction` enters the normal NPC dialogue/voice pipeline only after the native Narrator playback-completion hook. The server atomically claims a completed interaction once, matching playthrough session, captured target reference and NPC speaker. It builds the prompt from stored receipt effects/statuses and outcome, never client-supplied prose. No new table or connector is required. The native client suppresses stale, cancelled or interrupted replies and requires the exact actor active in CHIM.
+
 `pickup` (value zero, at most one step) takes one eligible loose food reference into player inventory. It is independent of the optional selected inventory item. `activate` alone does not establish pickup. Native receipts canonicalize the bounded status enum from Papyrus; unrecognized statuses stay uncertain rather than becoming success.
 
 The snapshot carries `item: null` for itemless attempts. The client defaults to **No item**; the server excludes give, store, consume, equip and magic for that snapshot and records the attempt/outcome without claiming an item was used. Existing item snapshots remain objects.

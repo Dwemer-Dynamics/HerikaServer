@@ -8,6 +8,19 @@ require_once($GLOBALS["ENGINE_PATH"] . "/lib/core/game_plugins.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/background_life_encounters.php");
 
 $MUST_END = false;
+if (($gameRequest[0] ?? '') === 'chatnf_interact_reaction') {
+    require_once $GLOBALS['ENGINE_PATH'].'/lib/item_interaction.php';
+    $context=chimInteractClaimReaction((string)($gameRequest[3] ?? ''),(string)$GLOBALS['HERIKA_NAME']);
+    if (!$context) {
+        $MUST_END=true;
+        return;
+    }
+    $GLOBALS['CHIM_INTERACT_REACTION']=$context;
+    $gameRequest[3]=$context['target'].' responds after the narrated interaction with '.$context['player'].'.';
+    $GLOBALS['FUNCTIONS_ARE_ENABLED']=false;
+    return;
+}
+
 if (($gameRequest[0] ?? '') === 'util_npc_schedule') {
     require_once $GLOBALS['ENGINE_PATH'] . '/lib/core/npc_schedules.php';
     chimScheduleReply((string)($gameRequest[3] ?? ''));
