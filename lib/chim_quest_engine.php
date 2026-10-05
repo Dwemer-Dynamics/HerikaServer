@@ -2490,7 +2490,7 @@ if (!function_exists('chimQuestEngineSelectDialogueBeatByIntent')) {
         $intentBudgetKey = md5(implode('|', array(
             strtolower(trim((string)($payload['npc_name'] ?? ''))),
             strtolower($playerTextCn),
-            strval(intval($payload['gamets'] ?? 0)),
+            strval(intval($payload['request_gamets'] ?? ($payload['gamets'] ?? 0))),
             strval(intval($payload['ts'] ?? 0)),
         )));
         $intentFallbackLimit = max(1, intval($GLOBALS['CHIM_QUEST_DIALOGUE_INTENT_MAX_CALLS'] ?? 3));
@@ -3549,7 +3549,21 @@ if (!function_exists('chimQuestEngineHandleEvent')) {
         }
 
         chimQuestEngineMaybeBootstrapBundledDefinitions();
-        $rollback = chimQuestEngineRollbackRuntimeToGamets($payload['gamets'] ?? null);
+        if (strtolower(trim((string)$eventType)) === 'dialogue_turn') {
+            // A dialogue turn carries the game time of the request that produced it, so it is normally older than
+            // reports that arrived while the reply was generated. Only game reports may signal an older save. Record
+            // the turn no earlier than the history it is evaluated against, so a later rollback removes its beats
+            // together with the reports they relied on.
+            $rollback = array('rolled_back' => false, 'reason' => 'request_gamets');
+            $requestGamets = chimQuestEngineNormalizeGamets($payload['gamets'] ?? null);
+            $currentMaxGamets = ($requestGamets === null) ? null : chimQuestEngineFetchMaxRuntimeGamets();
+            if ($currentMaxGamets !== null && $requestGamets < $currentMaxGamets) {
+                $payload['request_gamets'] = $requestGamets;
+                $payload['gamets'] = $currentMaxGamets;
+            }
+        } else {
+            $rollback = chimQuestEngineRollbackRuntimeToGamets($payload['gamets'] ?? null);
+        }
         $definitions = chimQuestEngineExpandRadiantDefinitionsForEvent(chimQuestEngineFetchDefinitions(true), $eventType, $payload);
         $definitions = chimQuestEngineFilterDefinitionsForEvent($definitions, $eventType, $payload);
         $results = array();
@@ -3598,6 +3612,36 @@ if (!function_exists('chimQuestEngineExtractPlayerUtterance')) {
     }
 }
 
+if (!function_exists('chimQuestEngineRequestPrecedesSaveLoad')) {
+    // Each save load sends init, which main.php marks as a user_input row before waiting for the MAIN lock and
+    // comm.php replaces with an init row when it resets this runtime. Their client ts uses the same clock as the
+    // request ts, so a later one shows the reply was produced for the save that was replaced. Only the latest
+    // processed init and markers after it are compared, because older rows may come from before that clock restarted.
+    function chimQuestEngineRequestPrecedesSaveLoad($requestTs)
+    {
+        $requestTs = trim((string)$requestTs);
+        if (!preg_match('/^\d{1,18}$/', $requestTs)) {
+            return false;
+        }
+
+        try {
+            $row = $GLOBALS["db"]->fetchOne("
+                SELECT 1 AS superseded
+                FROM public.eventlog
+                WHERE ts > {$requestTs}
+                  AND (type = 'init' OR (type = 'user_input' AND data = 'init'))
+                  AND rowid >= COALESCE((SELECT MAX(rowid) FROM public.eventlog WHERE type = 'init'), 0)
+                LIMIT 1
+            ");
+        } catch (Throwable $e) {
+            chimQuestEngineLog('warn', 'Quest dialogue save-load check unavailable: ' . $e->getMessage());
+            return false;
+        }
+
+        return is_array($row) && !empty($row['superseded']);
+    }
+}
+
 if (!function_exists('chimQuestEngineHandleLiveDialogueTurn')) {
     function chimQuestEngineHandleLiveDialogueTurn($npcName, $npcResponseText, array $gameRequest)
     {
@@ -3641,6 +3685,10 @@ if (!function_exists('chimQuestEngineHandleLiveDialogueTurn')) {
         $playerText = chimQuestEngineExtractPlayerUtterance($gameRequest);
         if ($playerText === '') {
             return array('ok' => false, 'error' => 'missing player text');
+        }
+        if (chimQuestEngineRequestPrecedesSaveLoad($gameRequest[1] ?? '')) {
+            chimQuestEngineLog('info', 'Ignored a quest dialogue turn from a request sent before the latest save load.');
+            return array('ok' => false, 'error' => 'request precedes save load');
         }
 
         $payload = array(
