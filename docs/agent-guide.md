@@ -30,6 +30,7 @@ An HTTP success does not prove that an actor spoke or an action completed. Corre
 | Saved playthroughs | `lib/playthrough_policy.php` and the detailed rules in `AGENTS.md` |
 | Browser and paired Prisma settings | `ui/`, `lib/core/prisma_settings_catalog.php`, CHIM's `config_manager.*` |
 | Extension installation | `lib/plugin_package_manager.php`, `ui/api/plugin_packages.php`, `ext/generic_installer.php` |
+| Player voice responder decision | `stt_target.php`, `lib/stt_target_jev.php` |
 
 HerikaServer, StobeServer, DialecticServer and LorkhanServer are independent products. Shared ancestry does not make their schemas, hooks or request formats interchangeable. Inspect each requested product before porting code.
 
@@ -106,3 +107,11 @@ The setting is reusable general_settings configuration and stays global across p
 Automatic effects use the existing FFmpeg WAV path. Filter failure preserves the generated audio. Filtered requests keep the existing TTS-cache bypass, so default-on combat/sneaking effects can increase synthesis work and latency. No new provider request, polling or model prompt is introduced by effect selection itself. A small .wav.ttsfilter marker prevents a normal voice from reusing previously filtered audio at the same dialogue-text hash; fresh unfiltered generation removes the marker. If a marker cannot be created, filtering is skipped and speech stays available.
 
 The four actor effects are also selectable voice-filter presets in the PHP NPC editor and Prisma, through the shared preset catalog. Werewolf lowers pitch by about six semitones and adds rough modulation; Vampire Lord lowers pitch by about three semitones with chorus and echo; Combat increases pace, presence and loudness; Sneaking reduces brightness and loudness with slightly slower delivery. These are audio effects, not new expressive TTS performances: Sneaking does not synthesize a true whisper. Existing Deep, Sinister, Commanding and Soft-Spoken presets are unchanged.
+
+## Player voice responder decision
+
+CHIM posts to `stt_target.php` only for voice input whose own router would otherwise use its nearest-eligible fallback among two or more NPCs. The endpoint requires the game's JSON transport and playthrough tag, honours the CHIM interaction switch, and accepts at most 8 candidates and a 600-byte transcript. It is enabled only when the configured Scene Classifier connector is `openrouterjson` with a supported Jev model; it never takes URLs, models or keys from the caller. The state sent to Jev holds the transcript, the candidates' names, distances and view/follower cues, and up to 8 recent `speech` lines with speaker and listener.
+
+The request goes through that connector's shared `jev_request` (also used by the scene classifier), which sends model `typesafe/jev-1.13` with the connector's configured key. Its optional bounded mode makes one cURL call with a 1500 ms total bound, a 16 KB response cap and no retry, and writes no `audit_request` row, response log or provider-body warning. Called with its original four arguments, `jev_request` keeps its previous timeout, audit rows and response log.
+
+The reply is `select` with one offered form ID, or `abstain` with a reason. Only `not_configured` (no Jev Scene Classifier connector) is a definite configuration answer; `connector_error`, `missing_key`, `no_answer` (transport, HTTP or provider failure), `malformed_answer`, `low_confidence` and `model_abstained` are per-request outcomes. Logs contain only the outcome, form ID, reason, latency and, for transport failures, cURL and HTTP codes; never the transcript, dialogue, provider body or key.
