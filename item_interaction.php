@@ -116,7 +116,9 @@ try {
         }
         $detail=mb_substr((string)($receipt['detail'] ?? ''),0,300);
         $facts[]=$step['effect'].': '.$status.($detail!=='' ? ' ('.$detail.')' : '');
-        if ($status==='succeeded' && $step['narration']!=='') $sentences[]=$step['narration'];
+        if ($status==='succeeded' && $step['effect']==='activate') $sentences[]=$state['player'].' activates '.$state['target'].'.';
+        elseif ($status==='succeeded' && $step['effect']==='consume') $sentences[]=$state['target'].' consumes '.$state['item'].'.';
+        elseif ($status==='succeeded' && $step['narration']!=='') $sentences[]=$step['narration'];
         elseif ($status==='unknown' || $status==='failed') {
             if (str_starts_with($detail,'Item transferred')) $sentences[]=$state['target'].' receives '.$state['item'].', but the rest of that action does not complete.';
             elseif (str_starts_with($detail,'Scroll consumed')) $sentences[]=$state['player'].' uses up the scroll, but its effect could not be confirmed.';
