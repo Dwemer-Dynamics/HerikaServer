@@ -2,7 +2,7 @@
 // Bounded contract shared by generation and receipt validation. No model text is executable.
 function chimInteractCatalog(): array {
     return [
-        'observe'=>[0,0], 'give'=>[1,100], 'store'=>[1,100], 'consume'=>[1,1], 'equip'=>[1,1],
+        'pickup'=>[0,0], 'observe'=>[0,0], 'give'=>[1,100], 'store'=>[1,100], 'consume'=>[1,1], 'equip'=>[1,1],
         'injure'=>[1,100], 'kill'=>[0,0], 'push'=>[1,10], 'lock'=>[0,100], 'unlock'=>[0,0],
         'activate'=>[0,0], 'open'=>[0,0], 'close'=>[0,0], 'destroy'=>[1,100], 'disable'=>[0,0],
         'resize'=>[0.25,2], 'magic'=>[0,0], 'combat'=>[0,0]
@@ -14,12 +14,14 @@ function chimInteractValidate(array $plan, array $allowed): array {
         throw new InvalidArgumentException('Invalid interaction sequence');
     $steps = [];
     $inventorySteps=0;
+    $pickupSteps=0;
     if (array_diff(array_keys($plan), ['steps','failure_narration'])) throw new InvalidArgumentException('Unknown resolution fields');
     foreach ($plan['steps'] as $index=>$step) {
         if (!is_array($step) || array_diff(['effect','value','requires','alive','narration'],array_keys($step)) || array_diff(array_keys($step),['effect','value','requires','alive','narration'])) throw new InvalidArgumentException('Unknown effect fields');
         if (!is_bool($step['alive'] ?? null) || !is_string($step['narration'] ?? null)) throw new InvalidArgumentException('Invalid effect types');
         $effect = $step['effect'] ?? '';
         if (!is_string($effect) || !isset($allowed[$effect])) throw new InvalidArgumentException('Unsupported effect');
+        if ($effect==='pickup' && ++$pickupSteps>1) throw new InvalidArgumentException('Repeated pickup');
         $value = $step['value'] ?? 0;
         [$min,$max] = $allowed[$effect];
         if ((!is_int($value) && !is_float($value)) || !is_finite((float)$value) || $value < $min || $value > $max)
@@ -77,6 +79,9 @@ function chimInteractGenerate(array $context, array $allowed): array {
         .'step indices which must succeed), alive (whether target must remain alive), narration. No identifiers, scripts, commands, '
         .'or additional targets. Narration is brief third-person prose using supplied names. Each sentence describes ONLY its own '
         .'verified mechanical effect, never future steps or unsupported visible choreography. No player dialogue or NPC speech. '
+        .'pickup takes one actual selected world food reference into the player inventory; it does not use the selected inventory item. '
+        .'Use pickup for taking eligible food, not activate. Never repeat pickup; target effects after pickup may be skipped when it leaves the world. '
+        .'activate only requests activation; never narrate pickup or other unverified scripted consequences for activate. '
         .'observe has no physical effect. give/store transfer the selected exact item; consume transfers then administers its REAL '
         .'consumable effects; equip transfers and equips. Quantities use value. injure is resolved health loss, not a simulated weapon '
         .'hit. kill/disable require confirmation. push uses bounded force. lock uses lock level. destroy requires authored destruction; '
