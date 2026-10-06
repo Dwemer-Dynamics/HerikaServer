@@ -8817,3 +8817,16 @@ if ($checkVersion('interact_prompts') >= 20261005003 && $checkVersion('interact_
         $updateVersion('interact_prompts', 20261005004);
     } else Logger::error('Failed to refresh Interact action selection guidance');
 }
+
+// Synthetic effects use props as narrative context; preserve user-edited mode/narration guidance.
+if ($checkVersion('interact_prompts') >= 20261005004 && $checkVersion('interact_prompts') < 20261005005) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (['interact_rules_normal','interact_narration'] as $key) {
+        $text = $db->escape(chimInteractPromptDefaults()[$key]);
+        $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
+            WHERE prompt_key='{$key}'") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005005);
+    else Logger::error('Failed to refresh Interact synthetic effect guidance');
+}
