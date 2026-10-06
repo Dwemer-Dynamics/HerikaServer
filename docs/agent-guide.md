@@ -112,7 +112,7 @@ The four actor effects are also selectable voice-filter presets in the PHP NPC e
 
 **Cheat Mode** starts off when the menu opens. Turning it on asks the Director to grant supported effects without plausibility refusals. Actual engine eligibility, execution failures and kill/disable confirmations still apply; it cannot fabricate success.
 
-In **Prompt Manager**, search `interact_` to edit normal-mode rules, cheat-mode rules, narration guidance or individual action descriptions. Clear a custom prompt to restore its default. Eligible actions, numeric limits and receipt validation remain enforced.
+In **Prompt Manager**, search `interact_` to edit normal-mode rules, cheat-mode rules or narration guidance. Action descriptions remain code-owned. Clear a custom prompt to restore its default. Eligible actions, numeric limits and receipt validation remain enforced.
 
 
 `consume_world` (value zero) requires `item: null` and consumes a single eligible world food/potion as the player; it cannot be combined with another pickup/world-consumption step. Successful narration confirms consumption, without promising a measured healing effect.

@@ -8786,3 +8786,14 @@ if ($checkVersion('interact_prompts') < 20261005001) {
     if ($ok) $updateVersion('interact_prompts', 20261005001);
     else Logger::error('Failed to register Interact prompts');
 }
+
+// Retire only the previously registered action entries; retain editable guidance and unrelated prompts.
+if ($checkVersion('interact_prompts') >= 20261005001 && $checkVersion('interact_prompts') < 20261005002) {
+    $retiredActions = ['observe','pickup','consume_world','give','store','consume','equip','heal',
+        'restore_stamina','restore_magicka','disarm','unequip','drop','place','injure','kill','push',
+        'lock','unlock','activate','open','close','destroy','disable','resize','magic','combat'];
+    $keys = array_map(static fn(string $effect): string => "'interact_action_{$effect}'", $retiredActions);
+    if ($db->execQuery('DELETE FROM public.prompts WHERE prompt_key IN ('.implode(',', $keys).')') !== false) {
+        $updateVersion('interact_prompts', 20261005002);
+    } else Logger::error('Failed to retire Interact action prompts');
+}

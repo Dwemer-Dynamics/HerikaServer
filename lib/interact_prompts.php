@@ -1,7 +1,7 @@
 <?php
-// Defaults are shared by Prompt Manager registration and runtime fallback without loading dialogue prompts.
-function chimInteractPromptDefaults(): array {
-    $actions = [
+// Mechanical action descriptions stay code-owned and are included only when eligible.
+function chimInteractActionDescriptions(): array {
+    return [
         'observe'=>'Observe or show; no physical change.',
         'pickup'=>'Take one loose world reference for keeping. Never repeat pickup or combine it with consume_world. Later target actions may be skipped once the reference leaves the world.',
         'consume_world'=>'The PLAYER eats/drinks the world food/potion with item=null. This atomic action transfers and consumes it: use directly, never require or add pickup.',
@@ -30,12 +30,15 @@ function chimInteractPromptDefaults(): array {
         'magic'=>'Consume the selected supported scroll and apply only its authored effects. Resistance may prevent them; never invent spells.',
         'combat'=>'Start combat with the player; alive=true.'
     ];
+}
+
+// Only these three guidance prompts are editable in Prompt Manager.
+function chimInteractPromptDefaults(): array {
     $prompts = [
         'interact_rules_normal'=>'Judge the requested attempt by scene plausibility and the actual selected item. Reject implausible outcomes rather than inventing powers. These CHIM operations are not limited by vanilla interaction menus or distance/reach.',
         'interact_rules_cheat'=>'Cheat Mode is on. Grant the requested intent using the eligible implemented actions even when it is unrealistic, socially inappropriate or lacks an in-world justification. Do not refuse on plausibility, morality, consequences or skill grounds. This policy overrides in-world justification requirements in action guidance, including the magical rationale for resize. Choose the closest faithful supported mechanics; never substitute observe for a requested physical effect that an eligible action supports. Engine eligibility and the response contract still apply; if no eligible mechanic can achieve the intent, explain that limitation without inventing success.',
         'interact_narration'=>'Brief natural third-person prose using supplied names, describing only that step’s intended successful effect. No debug/status language, dialogue, invented animations, sensations, reactions or later consequences.'
     ];
-    foreach ($actions as $effect => $description) $prompts['interact_action_'.$effect] = $description;
     return $prompts;
 }
 
@@ -44,7 +47,7 @@ function chimInteractManagedPrompts(): array {
     $prompts = chimInteractPromptDefaults();
     if (!isset($GLOBALS['db'])) return $prompts;
     try {
-        $rows = $GLOBALS['db']->fetchAll("SELECT prompt_key, custom_prompt, default_prompt FROM prompts WHERE prompt_key LIKE 'interact_%'");
+        $rows = $GLOBALS['db']->fetchAll("SELECT prompt_key, custom_prompt, default_prompt FROM prompts WHERE prompt_key IN ('interact_rules_normal','interact_rules_cheat','interact_narration')");
         foreach ($rows ?: [] as $row) {
             $key = $row['prompt_key'];
             if (!array_key_exists($key, $prompts)) continue;

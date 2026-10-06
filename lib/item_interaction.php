@@ -135,9 +135,10 @@ function chimInteractGenerate(array $context, array $allowed): array {
 PROMPT;
     $rules .= "\n\n## Interaction mode\n\n".$managed[$cheatMode ? 'interact_rules_cheat' : 'interact_rules_normal'];
     $rules .= "\n\n## Narration\n\n".$managed['interact_narration']."\n\n## Eligible actions";
+    $descriptions = chimInteractActionDescriptions();
     foreach ($allowed as $effect => [$min, $max]) {
-        if (!isset($managed['interact_action_'.$effect])) throw new InvalidArgumentException('Unsupported effect');
-        $rules .= "\n\n### {$effect}\n\n- ".$managed['interact_action_'.$effect]."\n- Value limits: {$min} to {$max}.";
+        if (!isset($descriptions[$effect])) throw new InvalidArgumentException('Unsupported effect');
+        $rules .= "\n\n### {$effect}\n\n- ".$descriptions[$effect]."\n- Value limits: {$min} to {$max}.";
     }
     require_once __DIR__.'/compact_context_history.php';
     // Use regular chat formatting without its broader retrieval, memories or extension hooks.
