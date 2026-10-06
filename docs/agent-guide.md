@@ -110,6 +110,8 @@ The four actor effects are also selectable voice-filter presets in the PHP NPC e
 
 ## CHIM Interact protocol
 
+Only nonempty validated plans enter the gameplay Event Log. Empty or invalid plans return a failure without narration, NPC reaction or world effects; internal request state still prevents retries from replaying work.
+
 **Cheat Mode** starts off when the menu opens. Turning it on asks the Director to grant supported effects without plausibility refusals. Actual engine eligibility and execution failures still apply; it cannot fabricate success.
 
 In **Prompt Manager**, search `interact_` to edit normal-mode rules, cheat-mode rules or narration guidance. Action descriptions remain code-owned. Clear a custom prompt to restore its default. Eligible actions, numeric limits and receipt validation remain enforced.

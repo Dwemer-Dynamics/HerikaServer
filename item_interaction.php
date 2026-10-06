@@ -104,18 +104,24 @@ try {
             'target_ref'=>(string)($snapshot['target']['ref_id'] ?? ''),
             'target_speaker'=>(string)($snapshot['target']['speaker'] ?? '')];
         $rowid=$db->insertReturningId('rolemaster',['type'=>'item_interaction','localts'=>time(),'ttl'=>600,'data'=>json_encode($state)],'rowid');
-        if (!$rowid || !$db->insertReturningId('eventlog',['type'=>'infoaction','ts'=>time(),'localts'=>time(),'gamets'=>$gamets,
-            'data'=>"[Interact {$id} attempt] {$player} ".($hasItem ? "attempts to use {$item} on {$target}" : "attempts to interact with {$target} without an item").": {$intent}",
-            'people'=>"|{$player}|{$target}|",'location'=>(string)($snapshot['location'] ?? ''),'party'=>'','sess'=>''], 'rowid')) throw new RuntimeException('Could not record attempt');
+        if (!$rowid) throw new RuntimeException('Could not save request');
         if ($db->query('COMMIT')===false) throw new RuntimeException('Could not save attempt');
         unset($snapshot['target']['ref_id'],$snapshot['target']['speaker']);
         $plan=chimInteractGenerate(['player'=>$player,'intent'=>$intent,'cheat_mode'=>$cheatMode,'current_game'=>$snapshot,'target_profile'=>$profile,'recent_context'=>$history],$allowed);
+        if (!$plan['steps']) throw new InvalidArgumentException('No supported action matches this attempt');
+        if ($db->query('BEGIN')===false) throw new RuntimeException('Could not begin resolution');
         $state['plan']=$plan; $state['status']='ready';
         $encoded=$db->escape(json_encode($state,JSON_THROW_ON_ERROR));
         if (!$db->fetchOne("UPDATE rolemaster SET data='{$encoded}' WHERE rowid=".(int)$rowid." AND data::jsonb->>'status'='resolving' RETURNING rowid")) throw new RuntimeException('Could not save resolution');
+        if (!$db->insertReturningId('eventlog',['type'=>'infoaction','ts'=>time(),'localts'=>time(),'gamets'=>$gamets,
+            'data'=>"[Interact {$id} attempt] {$player} ".($hasItem ? "attempts to use {$item} on {$target}" : "attempts to interact with {$target} without an item").": {$intent}",
+            'people'=>"|{$player}|{$target}|",'location'=>(string)($snapshot['location'] ?? ''),'party'=>'','sess'=>''], 'rowid')) throw new RuntimeException('Could not record attempt');
+        if ($db->query('COMMIT')===false) throw new RuntimeException('Could not commit resolution');
         echo json_encode(['ok'=>true,'id'=>$id,'plan'=>$plan],JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
+    if (in_array($op,['audio','receipt'],true) && $state && empty($state['plan']['steps']))
+        throw new InvalidArgumentException('No action was authorized');
     if ($op==='audio' && $state && hash_equals($state['session'],$session) && $state['status']==='completed') {
         $db->query('COMMIT');
         echo json_encode(['ok'=>true,'id'=>$id,'narration'=>chimInteractSpeech($state)],JSON_INVALID_UTF8_SUBSTITUTE);
@@ -174,7 +180,6 @@ try {
                 .($status==='failed' ? ', but the attempt falls short.' : '.');
         }
     }
-    if (!$state['plan']['steps']) $sentences[]=$state['plan']['failure_narration'];
     if (!$sentences) $sentences[]=$state['player']."'s attempt ends before it can get underway.";
     $text=implode(' ',$sentences);
     $state['status']='completed'; $state['receipts']=$input['receipts'];
@@ -191,16 +196,14 @@ try {
 } catch (Throwable $error) {
     if (isset($db)) {
         $db->query('ROLLBACK');
-        if (isset($rowid,$state) && ($state['status'] ?? '')==='resolving') {
+        if (isset($rowid,$state) && in_array($state['status'] ?? '', ['resolving','ready'], true)) {
             $state['status']='failed';
             $encoded=$db->escape(json_encode($state,JSON_INVALID_UTF8_SUBSTITUTE));
-            $changed=$db->fetchOne("UPDATE rolemaster SET data='{$encoded}' WHERE rowid=".(int)$rowid." AND data::jsonb->>'status'='resolving' RETURNING rowid");
-            if ($changed) $db->insert('eventlog',['type'=>'infoaction','ts'=>time(),'localts'=>time(),'gamets'=>$gamets,
-                'data'=>"[Interact {$id} outcome] Resolution failed. No game effects were authorized.",
-                'people'=>"|{$player}|{$target}|",'location'=>'','party'=>'','sess'=>'']);
+            $db->fetchOne("UPDATE rolemaster SET data='{$encoded}' WHERE rowid=".(int)$rowid." AND data::jsonb->>'status'='resolving' RETURNING rowid");
         }
     }
     error_log('[INTERACT] '.$error->getMessage());
     http_response_code(409);
-    echo json_encode(['ok'=>false,'message'=>'The interaction could not be completed. No uncertain effects will be repeated.']);
+    echo json_encode(['ok'=>false,'code'=>($op ?? 'resolve')==='resolve' ? 'no_action' : 'interaction_failed',
+        'message'=>'The interaction could not be completed. No uncertain effects will be repeated.']);
 }

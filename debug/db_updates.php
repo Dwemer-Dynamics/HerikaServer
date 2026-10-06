@@ -8807,3 +8807,13 @@ if ($checkVersion('interact_prompts') >= 20261005002 && $checkVersion('interact_
         $updateVersion('interact_prompts', 20261005003);
     } else Logger::error('Failed to refresh Interact narration guidance');
 }
+
+// Refresh normal action selection guidance while preserving custom rules.
+if ($checkVersion('interact_prompts') >= 20261005003 && $checkVersion('interact_prompts') < 20261005004) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $normalDefault = $db->escape(chimInteractPromptDefaults()['interact_rules_normal']);
+    if ($db->execQuery("UPDATE public.prompts SET default_prompt='{$normalDefault}', updated_at=CURRENT_TIMESTAMP
+        WHERE prompt_key='interact_rules_normal'") !== false) {
+        $updateVersion('interact_prompts', 20261005004);
+    } else Logger::error('Failed to refresh Interact action selection guidance');
+}
