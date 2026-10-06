@@ -87,7 +87,11 @@ try {
         $hasItem=$snapshot['item']!==null;
         $item=$hasItem ? mb_substr((string)($snapshot['item']['name'] ?? ''),0,160) : null;
         $allowed=array_intersect_key(chimInteractCatalog(),array_flip(array_filter($input['capabilities'] ?? [],'is_string')));
-        if (($snapshot['target']['actor'] ?? false)===true) unset($allowed['burning_visual']);
+        if (($snapshot['target']['actor'] ?? false)===true) $allowed=array_diff_key($allowed,array_flip(['burning_visual','frost_visual','shock_visual','impact_burst','directional_throw','rotate','move']));
+        $dispellable=$snapshot['target']['dispellable_spells'] ?? [];
+        if (!is_array($dispellable) || !array_is_list($dispellable) || count($dispellable)>8) throw new InvalidArgumentException('Invalid captured dispel choices');
+        if (!$dispellable) unset($allowed['dispel']);
+        elseif (isset($allowed['dispel'])) $allowed['dispel']=[0,count($dispellable)-1];
         if ($selectedMagic===null) unset($allowed['cast_selected_magic']);
         if ($hasItem) unset($allowed['consume_world']);
         if (!$hasItem) $allowed=array_diff_key($allowed,array_flip(['give','store','consume','equip','magic','drop','place']));
@@ -173,6 +177,35 @@ try {
     $sentences=[]; $facts=[];
     // Spoken attempts use ordinary verbs; receipt facts retain the exact effect identifiers below.
     $attempts=[
+        'frost'=>'chill '.$state['target'],
+        'shock'=>'shock '.$state['target'],
+        'drain_stamina'=>'drain the stamina of '.$state['target'],
+        'drain_magicka'=>'drain the magicka of '.$state['target'],
+        'slow'=>'slow '.$state['target'],
+        'haste'=>'quicken '.$state['target'],
+        'weaken_armor'=>'weaken the armor of '.$state['target'],
+        'fortify_armor'=>'strengthen the armor of '.$state['target'],
+        'weaken_weapon'=>'weaken the weapon damage of '.$state['target'],
+        'fortify_weapon'=>'strengthen the weapon damage of '.$state['target'],
+        'stagger'=>'stagger '.$state['target'],
+        'absorb_health'=>'draw health from '.$state['target'],
+        'absorb_stamina'=>'draw stamina from '.$state['target'],
+        'absorb_magicka'=>'draw magicka from '.$state['target'],
+        'ethereal'=>'make '.$state['target'].' ethereal',
+        'soul_trap'=>'place a soul trap on '.$state['target'],
+        'reanimate'=>'reanimate '.$state['target'],
+        'banish'=>'banish '.$state['target'],
+        'turn_undead'=>'turn away '.$state['target'],
+        'extinguish'=>'extinguish the flames on '.$state['target'],
+        'neutralize_poison'=>'neutralize the poison in '.$state['target'],
+        'release_paralysis'=>'release the paralysis of '.$state['target'],
+        'dispel'=>'dispel an effect on '.$state['target'],
+        'directional_throw'=>'throw '.$state['target'],
+        'rotate'=>'rotate '.$state['target'],
+        'move'=>'move '.$state['target'],
+        'frost_visual'=>'cover '.$state['target'].' with frost',
+        'shock_visual'=>'wreathe '.$state['target'].' in sparks',
+        'impact_burst'=>'create a burst of light at '.$state['target'],
         'observe'=>'examine '.$state['target'], 'pickup'=>'pick up '.$state['target'],
         'give'=>'give '.$state['item'].' to '.$state['target'], 'store'=>'put '.$state['item'].' in '.$state['target'],
         'consume'=>'give '.$state['item'].' to '.$state['target'], 'consume_world'=>'consume '.$state['target'],
@@ -186,6 +219,7 @@ try {
         'restore_magicka'=>'restore '.$state['target']."'s magicka", 'disarm'=>'disarm '.$state['target'],
         'unequip'=>'remove armor from '.$state['target'], 'drop'=>'drop '.$state['item'],
         'place'=>'place '.$state['item'].' near '.$state['target'],
+        'burning_visual'=>'wreathe '.$state['target'].' in flames',
         'poison'=>'poison '.$state['target'], 'burning'=>'set '.$state['target'].' alight',
         'paralysis'=>'paralyze '.$state['target'], 'calm'=>'calm '.$state['target'],
         'fear'=>'frighten '.$state['target'], 'frenzy'=>'enrage '.$state['target'],

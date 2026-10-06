@@ -2,6 +2,14 @@
 // Bounded contract shared by generation and receipt validation. No model text is executable.
 function chimInteractCatalog(): array {
     return [
+        'frost'=>[1,10], 'shock'=>[1,10], 'drain_stamina'=>[1,10], 'drain_magicka'=>[1,10],
+        'slow'=>[1,50], 'haste'=>[1,50], 'weaken_armor'=>[1,100], 'fortify_armor'=>[1,100],
+        'weaken_weapon'=>[1,50], 'fortify_weapon'=>[1,50], 'stagger'=>[0,1],
+        'absorb_health'=>[1,10], 'absorb_stamina'=>[1,10], 'absorb_magicka'=>[1,10],
+        'ethereal'=>[1,1], 'soul_trap'=>[1,1], 'reanimate'=>[1,100], 'banish'=>[1,100], 'turn_undead'=>[1,100],
+        'extinguish'=>[0,0], 'neutralize_poison'=>[0,0], 'release_paralysis'=>[0,0], 'dispel'=>[0,7],
+        'directional_throw'=>[1,100], 'rotate'=>[-180,180], 'move'=>[1,256],
+        'frost_visual'=>[1,1], 'shock_visual'=>[1,1], 'impact_burst'=>[1,1],
         'heal'=>[1,100], 'restore_stamina'=>[1,100], 'restore_magicka'=>[1,100],
         'burning_visual'=>[1,1], 'poison'=>[1,10], 'burning'=>[1,10], 'paralysis'=>[1,1],
         'calm'=>[1,100], 'fear'=>[1,100], 'frenzy'=>[1,100],
@@ -22,7 +30,7 @@ function chimInteractValidate(array $plan, array $allowed): array {
     $magicSteps=0;
     if (array_diff(array_keys($plan), ['steps','failure_narration'])) throw new InvalidArgumentException('Unknown resolution fields');
     foreach ($plan['steps'] as $index=>$step) {
-        if (!is_array($step) || array_diff(['effect','value','requires','alive','narration'],array_keys($step)) || array_diff(array_keys($step),['effect','value','requires','alive','narration','duration','failure_narration'])) throw new InvalidArgumentException('Unknown effect fields');
+        if (!is_array($step) || array_diff(['effect','value','requires','alive','narration'],array_keys($step)) || array_diff(array_keys($step),['effect','value','requires','alive','narration','duration','failure_narration','direction','axis'])) throw new InvalidArgumentException('Unknown effect fields');
         if (!is_bool($step['alive'] ?? null) || !is_string($step['narration'] ?? null)) throw new InvalidArgumentException('Invalid effect types');
         $effect = $step['effect'] ?? '';
         if (!is_string($effect) || !isset($allowed[$effect])) throw new InvalidArgumentException('Unsupported effect');
@@ -33,10 +41,21 @@ function chimInteractValidate(array $plan, array $allowed): array {
         if ((!is_int($value) && !is_float($value)) || !is_finite((float)$value) || $value < $min || $value > $max)
             throw new InvalidArgumentException('Effect outside limits');
         if (in_array($effect,['give','store','consume','equip','magic','drop','place'],true) && ++$inventorySteps>1) throw new InvalidArgumentException('Conflicting inventory effects');
-        if (in_array($effect,['give','store','consume','equip','lock','disarm','unequip','drop','place'],true) && floor($value)!=(float)$value) throw new InvalidArgumentException('Whole number required');
-        if (in_array($effect,['combat','heal','restore_stamina','restore_magicka','disarm','unequip','poison','burning','paralysis','calm','fear','frenzy'],true) && !$step['alive']) throw new InvalidArgumentException('Effect requires a living target');
-        if ($effect==='burning_visual' && $step['alive']) throw new InvalidArgumentException('Scenery fire requires a non-actor target');
-        $timed = in_array($effect,['burning_visual','poison','burning','paralysis','calm','fear','frenzy'],true);
+        if (in_array($effect,['give','store','consume','equip','lock','disarm','unequip','drop','place','dispel'],true) && floor($value)!=(float)$value) throw new InvalidArgumentException('Whole number required');
+        if (in_array($effect,['combat','heal','restore_stamina','restore_magicka','disarm','unequip','poison','burning','paralysis','calm','fear','frenzy',
+            'frost','shock','drain_stamina','drain_magicka','slow','haste','weaken_armor','fortify_armor',
+            'weaken_weapon','fortify_weapon','stagger','absorb_health','absorb_stamina','absorb_magicka',
+            'ethereal','soul_trap','banish','turn_undead','neutralize_poison','release_paralysis','dispel'],true) && !$step['alive']) throw new InvalidArgumentException('Effect requires a living target');
+        if (in_array($effect,['burning_visual','frost_visual','shock_visual','impact_burst','directional_throw','rotate','move','reanimate'],true) && $step['alive']) throw new InvalidArgumentException('Effect does not require a living target');
+        $direction=$step['direction'] ?? '';
+        $axis=$step['axis'] ?? '';
+        if (!is_string($direction) || !is_string($axis)) throw new InvalidArgumentException('Invalid movement selector');
+        $directions=$effect==='directional_throw' ? ['toward','away','up'] : ($effect==='move' ? ['forward','backward','left','right','up','down'] : ['']);
+        if (!in_array($direction,$directions,true) || !in_array($axis,$effect==='rotate' ? ['x','y','z'] : [''],true)) throw new InvalidArgumentException('Unsupported movement selector');
+        $timed = in_array($effect,['burning_visual','frost_visual','shock_visual','poison','burning','paralysis','calm','fear','frenzy',
+            'frost','shock','drain_stamina','drain_magicka','slow','haste','weaken_armor','fortify_armor',
+            'weaken_weapon','fortify_weapon','absorb_health','absorb_stamina','absorb_magicka',
+            'ethereal','soul_trap','reanimate','turn_undead'],true);
         $duration = array_key_exists('duration',$step) ? $step['duration'] : ($timed ? 10 : 0);
         if (!is_int($duration) || ($timed ? !in_array($duration,[5,10,20,30],true) : $duration!==0))
             throw new InvalidArgumentException('Unsupported effect duration');
@@ -50,7 +69,7 @@ function chimInteractValidate(array $plan, array $allowed): array {
         $text = trim((string)($step['narration'] ?? ''));
         if ($text === '' || mb_strlen($text) > 500) throw new InvalidArgumentException('Narration too long');
         $steps[] = ['effect'=>$effect,'value'=>(float)$value,'requires'=>array_values(array_unique($requires)),
-            'alive'=>!empty($step['alive']), 'narration'=>$text, 'duration'=>$duration, 'failure_narration'=>trim($failureText)];
+            'alive'=>!empty($step['alive']), 'narration'=>$text, 'duration'=>$duration, 'failure_narration'=>trim($failureText),'direction'=>$direction,'axis'=>$axis];
     }
     if (!is_string($plan['failure_narration'] ?? null)) throw new InvalidArgumentException('Missing failure narration');
     $failure = trim($plan['failure_narration']);
@@ -116,7 +135,7 @@ function chimInteractGenerate(array $context, array $allowed): array {
         'value'=>'A number within that effect’s limits','requires'=>[],
         'alive'=>'Boolean: whether this effect requires a living target before execution',
         'duration'=>'Allowed duration in seconds, or 0 for an untimed effect',
-        'failure_narration'=>'',
+        'failure_narration'=>'','direction'=>'','axis'=>'',
         'narration'=>'Draft the successful effect in third-person prose; execution receipts determine whether it is spoken.']],
         'failure_narration'=>''];
     $GLOBALS['CONNECTOR'][$data['driver']]['PREFILL_JSON'] = false;
@@ -154,11 +173,13 @@ function chimInteractGenerate(array $context, array $allowed): array {
 
 - Return JSON only: steps (at most five) and failure_narration.
 - Each step contains effect, numeric value within its limits, requires (zero-based earlier steps that must succeed), alive (whether the target must be alive before execution), narration, failure_narration (a generic alternative for confirmed failure, not a prediction of why), and duration (seconds: 5, 10, 20 or 30 for timed statuses, otherwise 0).
-- Quantities and equipment/lock slots are whole numbers. No scripts, commands, identifiers or additional targets.
+- Quantities, equipment/lock slots and dispel indices are whole numbers. No scripts, commands, identifiers or additional targets.
+- Every step includes direction and axis, empty strings unless applicable. directional_throw requires direction toward/away/up; move requires forward/backward/left/right/up/down and positive distance; rotate requires axis x/y/z. Movement uses captured eligible non-actor objects only, never arbitrary coordinates.
+- dispel value selects only an index in current target.dispellable_spells, never an arbitrary spell. Cleanup effects remove only their own CHIM status family; they cannot cure unrelated authored effects.
 - An impossible attempt may return empty steps with truthful failure_narration.
 
 - Narration uses story prose, never numeric statistics, health points, damage per second, timers or receipt language. Do not invent a wince, gesture or other animation.
-- For scenery, use burning_visual for timed fire appearance only, never actor health damage or fire spread. Use destroy to remove non-destructible scenery without debris only for explicit destruction, never as a substitute for minor injury. Actor emotions and poison have no scenery equivalent; return a failure scene when nothing meaningful applies.
+- For scenery, use burning_visual, frost_visual or shock_visual for timed appearance only, or impact_burst for a brief visual; never actor health damage, spreading elements or collision effects. Only captured movable references permit directional_throw, rotate or move. Use destroy to remove non-destructible scenery without debris only for explicit destruction, never as a substitute for minor injury. Actor emotions and poison have no scenery equivalent; return a failure scene when nothing meaningful applies.
 - Timed-status narration may describe initial application only, not guaranteed duration, future total damage, or subsequent behavior.
 - Draft success narration now for the planned effect; confirmation is not a prerequisite for choosing it. The runtime speaks that draft only after a successful execution receipt. Failure prose describes only an attempted effect, with optional gentle dry humor; never invent a cause, animation, injury, consumed item or NPC reaction. Unknown receipts retain uncertainty and partial changes retain their facts. Never claim an unsupported effect.
 - Atomic consume_world already transfers and consumes; never combine with pickup.
@@ -198,9 +219,11 @@ PROMPT;
     $prompt[] = ['role'=>'user','content'=>$scene];
     $schema=['type'=>'object','additionalProperties'=>false,'required'=>['steps','failure_narration'],'properties'=>[
         'steps'=>['type'=>'array','maxItems'=>5,'items'=>['type'=>'object','additionalProperties'=>false,
-            'required'=>['effect','value','requires','alive','narration','duration','failure_narration'],'properties'=>[
+            'required'=>['effect','value','requires','alive','narration','duration','failure_narration','direction','axis'],'properties'=>[
                 'effect'=>['type'=>'string','enum'=>array_keys($allowed)],'value'=>['type'=>'number'],
                 'requires'=>['type'=>'array','items'=>['type'=>'integer','minimum'=>0,'maximum'=>4]],
+                'direction'=>['type'=>'string','enum'=>['','toward','away','up','forward','backward','left','right','down']],
+                'axis'=>['type'=>'string','enum'=>['','x','y','z']],
                 'alive'=>['type'=>'boolean'],'narration'=>['type'=>'string'], 'failure_narration'=>['type'=>'string'], 'duration'=>['type'=>'integer','enum'=>[0,5,10,20,30]]]]],
         'failure_narration'=>['type'=>'string']]];
     $format=['type'=>'json_object'];
