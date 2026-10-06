@@ -108,7 +108,8 @@ try {
         if ($db->query('COMMIT')===false) throw new RuntimeException('Could not save attempt');
         unset($snapshot['target']['ref_id'],$snapshot['target']['speaker']);
         $plan=chimInteractGenerate(['player'=>$player,'intent'=>$intent,'cheat_mode'=>$cheatMode,'current_game'=>$snapshot,'target_profile'=>$profile,'recent_context'=>$history],$allowed);
-        if (!$plan['steps']) throw new InvalidArgumentException('No supported action matches this attempt');
+        $state['failure_scene']=empty($plan['steps']);
+        $state['failure_scene_token']=$state['failure_scene'] ? bin2hex(random_bytes(16)) : '';
         if ($db->query('BEGIN')===false) throw new RuntimeException('Could not begin resolution');
         $state['plan']=$plan; $state['status']='ready';
         $encoded=$db->escape(json_encode($state,JSON_THROW_ON_ERROR));
@@ -117,11 +118,16 @@ try {
             'data'=>"[Interact {$id} attempt] {$player} ".($hasItem ? "attempts to use {$item} on {$target}" : "attempts to interact with {$target} without an item").": {$intent}",
             'people'=>"|{$player}|{$target}|",'location'=>(string)($snapshot['location'] ?? ''),'party'=>'','sess'=>''], 'rowid')) throw new RuntimeException('Could not record attempt');
         if ($db->query('COMMIT')===false) throw new RuntimeException('Could not commit resolution');
-        echo json_encode(['ok'=>true,'id'=>$id,'plan'=>$plan],JSON_INVALID_UTF8_SUBSTITUTE);
+        echo json_encode(['ok'=>true,'id'=>$id,'plan'=>$plan,'failure_scene_token'=>$state['failure_scene_token']],JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
-    if (in_array($op,['audio','receipt'],true) && $state && empty($state['plan']['steps']))
-        throw new InvalidArgumentException('No action was authorized');
+    if (in_array($op,['audio','receipt'],true) && $state && empty($state['plan']['steps'])) {
+        if (($state['failure_scene'] ?? false)!==true || !is_string($state['failure_scene_token'] ?? null)
+            || !preg_match('/^[a-f0-9]{32}$/D',$state['failure_scene_token'])
+            || ($op==='receipt' && (!is_string($input['failure_scene_token'] ?? null)
+                || !hash_equals($state['failure_scene_token'],$input['failure_scene_token']))))
+            throw new InvalidArgumentException('No failure scene was authorized');
+    }
     if ($op==='audio' && $state && hash_equals($state['session'],$session) && $state['status']==='completed') {
         $db->query('COMMIT');
         echo json_encode(['ok'=>true,'id'=>$id,'narration'=>chimInteractSpeech($state)],JSON_INVALID_UTF8_SUBSTITUTE);
@@ -179,9 +185,14 @@ try {
             elseif (str_starts_with($detail,'Item transferred')) $sentences[]=$state['target'].' receives '.$state['item']
                 .($status==='failed' ? ', but the attempt goes no further.' : '.');
             elseif (str_starts_with($detail,'Scroll consumed')) $sentences[]=$state['player'].' uses up the scroll.';
+            elseif ($status==='failed' && !empty($step['failure_narration'])) $sentences[]=$step['failure_narration'];
             else $sentences[]=$state['player'].' tries to '.($attempts[$step['effect']] ?? 'act on '.$state['target'])
-                .($status==='failed' ? ', but the attempt falls short.' : '.');
+                .($status==='failed' ? ', but the attempt falls short. Confidence, alas, is not quite enough.' : '.');
         }
+    }
+    if (!empty($state['failure_scene'])) {
+        $sentences[]=$state['plan']['failure_narration'];
+        $facts[]='failed attempt: no game effects executed';
     }
     if (!$sentences) $sentences[]=$state['player']."'s attempt ends before it can get underway.";
     $text=implode(' ',$sentences);
@@ -191,7 +202,7 @@ try {
     $encoded=$db->escape(json_encode($state,JSON_THROW_ON_ERROR));
     if ($db->query("UPDATE rolemaster SET data='{$encoded}' WHERE rowid=".(int)$row['rowid'])===false
         || !$db->insertReturningId('eventlog',['type'=>'infoaction','ts'=>time(),'localts'=>time(),'gamets'=>$gamets,
-            'data'=>"[Interact {$id} outcome] ".$state['player'].($state['item']!==null ? ' used '.$state['item'].' on ' : ' interacted without an item with ').$state['target'].': '.implode('; ',$facts).'. '.$text,
+            'data'=>"[Interact {$id} outcome] ".$state['player'].(!empty($state['failure_scene']) ? ' attempted to interact with ' : ($state['item']!==null ? ' used '.$state['item'].' on ' : ' interacted without an item with ')).$state['target'].': '.implode('; ',$facts).'. '.$text,
             'people'=>'|'.$state['player'].'|'.$state['target'].'|','location'=>'','party'=>'','sess'=>'',
             'utterance_id'=>$utterance,'delivery_state'=>'pending'],'rowid')) throw new RuntimeException('Could not save outcome');
     if ($db->query('COMMIT')===false) throw new RuntimeException('Could not commit outcome');

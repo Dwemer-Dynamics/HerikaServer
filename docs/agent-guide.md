@@ -112,7 +112,7 @@ The four actor effects are also selectable voice-filter presets in the PHP NPC e
 
 Synthetic effects accept any selected item as a narrative prop, or no item. Up to five effects execute sequentially with explicit dependencies. Actor-only `poison`/`burning` use value 1–10 damage per second; `paralysis` uses value 1; `calm`/`fear`/`frenzy` use value 1–100 as the affected level limit. Optional `duration` is 5, 10, 20 or 30 seconds (default 10 for statuses, 0 for other actions). Refresh replaces only the same CHIM status family on that actor. Engine-managed active effects own expiry and save persistence; cancellation stops pending work but does not undo an applied effect. Receipts confirm active application, not guaranteed total damage or full duration. Resistance and immunity may prevent application.
 
-Only nonempty validated plans enter the gameplay Event Log. Empty or invalid plans return a failure without narration, NPC reaction or world effects; internal request state still prevents retries from replaying work.
+A validated empty plan with nonempty failure narration creates a marked failure scene: attempt/outcome history, narration and an eligible NPC response, but no game effects. The server issues a scene token that the native receipt must echo; unmarked legacy empty plans and invalid/transport/stale requests cannot create scenes. Per-step failure prose is used only for confirmed failure; unknown and partial outcomes remain factual.
 
 **Cheat Mode** starts off when the menu opens. Turning it on asks the Director to grant supported effects without plausibility refusals. Actual engine eligibility and execution failures still apply; it cannot fabricate success.
 

@@ -8830,3 +8830,16 @@ if ($checkVersion('interact_prompts') >= 20261005004 && $checkVersion('interact_
     if ($ok) $updateVersion('interact_prompts', 20261005005);
     else Logger::error('Failed to refresh Interact synthetic effect guidance');
 }
+
+// Refresh scene guidance, preserving all three user-customized Interact prompts.
+if ($checkVersion('interact_prompts') >= 20261005005 && $checkVersion('interact_prompts') < 20261005006) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (chimInteractPromptDefaults() as $key => $text) {
+        $text = $db->escape($text);
+        $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
+            WHERE prompt_key='{$key}'") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005006);
+    else Logger::error('Failed to refresh Interact failure scene guidance');
+}
