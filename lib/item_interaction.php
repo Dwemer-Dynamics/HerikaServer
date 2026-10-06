@@ -102,7 +102,7 @@ function chimInteractGenerate(array $context, array $allowed): array {
     $GLOBALS['TTSFUNCTION'] = '';
     require_once __DIR__.'/../functions/json_response.php';
     $GLOBALS['responseTemplate'] = ['steps'=>[['effect'=>'observe','value'=>0,'requires'=>[], 'alive'=>false,
-        'narration'=>'One short third-person sentence describing only this verified effect.']],
+        'narration'=>'Usually two flowing descriptive third-person sentences about this effect, within 500 characters.']],
         'failure_narration'=>'A short plausible account if no effects are proposed.'];
     $GLOBALS['CONNECTOR'][$data['driver']]['PREFILL_JSON'] = false;
     $GLOBALS['CONNECTOR'][$data['driver']]['ENFORCE_JSON'] = true;

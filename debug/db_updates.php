@@ -8797,3 +8797,13 @@ if ($checkVersion('interact_prompts') >= 20261005001 && $checkVersion('interact_
         $updateVersion('interact_prompts', 20261005002);
     } else Logger::error('Failed to retire Interact action prompts');
 }
+
+// Refresh narration guidance only; preserve custom text and every other managed prompt.
+if ($checkVersion('interact_prompts') >= 20261005002 && $checkVersion('interact_prompts') < 20261005003) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $narrationDefault = $db->escape(chimInteractPromptDefaults()['interact_narration']);
+    if ($db->execQuery("UPDATE public.prompts SET default_prompt='{$narrationDefault}', updated_at=CURRENT_TIMESTAMP
+        WHERE prompt_key='interact_narration'") !== false) {
+        $updateVersion('interact_prompts', 20261005003);
+    } else Logger::error('Failed to refresh Interact narration guidance');
+}
