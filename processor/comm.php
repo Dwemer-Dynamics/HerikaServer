@@ -8,6 +8,19 @@ require_once($GLOBALS["ENGINE_PATH"] . "/lib/core/game_plugins.php");
 require_once($GLOBALS["ENGINE_PATH"] . "/lib/background_life_encounters.php");
 
 $MUST_END = false;
+if (($gameRequest[0] ?? '') === 'chatnf_interact_reaction') {
+    require_once $GLOBALS['ENGINE_PATH'].'/lib/item_interaction.php';
+    $context=chimInteractClaimReaction((string)($gameRequest[3] ?? ''),(string)$GLOBALS['HERIKA_NAME']);
+    if (!$context) {
+        $MUST_END=true;
+        return;
+    }
+    $GLOBALS['CHIM_INTERACT_REACTION']=$context;
+    $gameRequest[3]=$context['target'].' responds after the narrated interaction with '.$context['player'].'.';
+    $GLOBALS['FUNCTIONS_ARE_ENABLED']=false;
+    return;
+}
+
 if (($gameRequest[0] ?? '') === 'util_npc_schedule') {
     require_once $GLOBALS['ENGINE_PATH'] . '/lib/core/npc_schedules.php';
     chimScheduleReply((string)($gameRequest[3] ?? ''));
@@ -669,6 +682,20 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
         $speechListener = isset($speech["listener"]) ? trim((string) $speech["listener"]) : "";
         $speechUtteranceId = isset($speech["utterance_id"]) ? trim((string) $speech["utterance_id"]) : "";
         chimSpeechTrace('client_acknowledged', [], $speechUtteranceId);
+        // Individual Interact chunks are not separate history events or full-scene completion.
+        if (preg_match('/^interact-[a-f0-9]{32}-[0-9]+$/D', $speechUtteranceId)) {
+            $MUST_END=true;
+            return;
+        }
+        // Interact already recorded the physical outcome. Correlate delivery exactly rather than
+        // matching this Narrator line against unrelated recent chat or adding another history entry.
+        if (preg_match('/^interact-[a-f0-9]{32}$/D', $speechUtteranceId)) {
+            $utterance=$db->escape($speechUtteranceId);
+            $db->query("UPDATE eventlog SET delivery_state='spoken' WHERE type='infoaction' AND utterance_id='{$utterance}'");
+            $MUST_END=true;
+            return;
+        }
+
         $audiblePeople = [];
         if (isset($speech["companions"]) && is_array($speech["companions"])) {
             foreach ($speech["companions"] as $companionName) {

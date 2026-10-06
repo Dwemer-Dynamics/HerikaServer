@@ -8770,3 +8770,140 @@ if ($checkVersion("memory_summary_episodes") < 20261004001) {
     if ($migrationOk) $updateVersion("memory_summary_episodes", 20261004001);
     else Logger::error("Failed to apply memory episode source linkage migration");
 }
+
+// Register editable Interact guidance without changing existing custom overrides.
+if ($checkVersion('interact_prompts') < 20261005001) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (chimInteractPromptDefaults() as $key => $text) {
+        $key = $db->escape($key);
+        $text = $db->escape($text);
+        $ok = $db->execQuery("INSERT INTO public.prompts (prompt_key, default_prompt, description)
+            VALUES ('{$key}', '{$text}', 'CHIM Interact guidance. Engine eligibility and JSON response constraints remain enforced.')
+            ON CONFLICT (prompt_key) DO UPDATE SET default_prompt=EXCLUDED.default_prompt,
+            description=EXCLUDED.description, updated_at=CURRENT_TIMESTAMP") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005001);
+    else Logger::error('Failed to register Interact prompts');
+}
+
+// Retire only the previously registered action entries; retain editable guidance and unrelated prompts.
+if ($checkVersion('interact_prompts') >= 20261005001 && $checkVersion('interact_prompts') < 20261005002) {
+    $retiredActions = ['observe','pickup','consume_world','give','store','consume','equip','heal',
+        'restore_stamina','restore_magicka','disarm','unequip','drop','place','injure','kill','push',
+        'lock','unlock','activate','open','close','destroy','disable','resize','magic','combat'];
+    $keys = array_map(static fn(string $effect): string => "'interact_action_{$effect}'", $retiredActions);
+    if ($db->execQuery('DELETE FROM public.prompts WHERE prompt_key IN ('.implode(',', $keys).')') !== false) {
+        $updateVersion('interact_prompts', 20261005002);
+    } else Logger::error('Failed to retire Interact action prompts');
+}
+
+// Refresh narration guidance only; preserve custom text and every other managed prompt.
+if ($checkVersion('interact_prompts') >= 20261005002 && $checkVersion('interact_prompts') < 20261005003) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $narrationDefault = $db->escape(chimInteractPromptDefaults()['interact_narration']);
+    if ($db->execQuery("UPDATE public.prompts SET default_prompt='{$narrationDefault}', updated_at=CURRENT_TIMESTAMP
+        WHERE prompt_key='interact_narration'") !== false) {
+        $updateVersion('interact_prompts', 20261005003);
+    } else Logger::error('Failed to refresh Interact narration guidance');
+}
+
+// Refresh normal action selection guidance while preserving custom rules.
+if ($checkVersion('interact_prompts') >= 20261005003 && $checkVersion('interact_prompts') < 20261005004) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $normalDefault = $db->escape(chimInteractPromptDefaults()['interact_rules']);
+    if ($db->execQuery("UPDATE public.prompts SET default_prompt='{$normalDefault}', updated_at=CURRENT_TIMESTAMP
+        WHERE prompt_key='interact_rules_normal'") !== false) {
+        $updateVersion('interact_prompts', 20261005004);
+    } else Logger::error('Failed to refresh Interact action selection guidance');
+}
+
+// Synthetic effects use props as narrative context; preserve user-edited mode/narration guidance.
+if ($checkVersion('interact_prompts') >= 20261005004 && $checkVersion('interact_prompts') < 20261005005) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (['interact_rules','interact_narration'] as $key) {
+        $text = $db->escape(chimInteractPromptDefaults()[$key]);
+        $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
+            WHERE prompt_key='{$key}'") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005005);
+    else Logger::error('Failed to refresh Interact synthetic effect guidance');
+}
+
+// Refresh scene guidance, preserving all three user-customized Interact prompts.
+if ($checkVersion('interact_prompts') >= 20261005005 && $checkVersion('interact_prompts') < 20261005006) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (chimInteractPromptDefaults() as $key => $text) {
+        $text = $db->escape($text);
+        $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
+            WHERE prompt_key='{$key}'") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005006);
+    else Logger::error('Failed to refresh Interact failure scene guidance');
+}
+
+// Refresh intent-first planning defaults without changing custom guidance.
+if ($checkVersion('interact_prompts') >= 20261005006 && $checkVersion('interact_prompts') < 20261005007) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (['interact_rules','interact_narration'] as $key) {
+        $text = $db->escape(chimInteractPromptDefaults()[$key]);
+        $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
+            WHERE prompt_key='{$key}'") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005007);
+    else Logger::error('Failed to refresh Interact intent-first guidance');
+}
+
+// Consolidate modes atomically; keep applicable custom rules and archive retired overrides in the description.
+if ($checkVersion('interact_prompts') >= 20261005007 && $checkVersion('interact_prompts') < 20261005008) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $db->execQuery('BEGIN');
+    try {
+        $text=$db->escape(chimInteractPromptDefaults()['interact_rules']);
+        $sql="INSERT INTO public.prompts (prompt_key,default_prompt,custom_prompt,description)
+            VALUES ('interact_rules','{$text}',
+                (SELECT custom_prompt FROM public.prompts WHERE prompt_key='interact_rules_cheat'),
+                'CHIM Interact rules. Engine eligibility and response constraints remain enforced.')
+            ON CONFLICT (prompt_key) DO UPDATE SET default_prompt=EXCLUDED.default_prompt,
+                custom_prompt=COALESCE(NULLIF(prompts.custom_prompt,''),EXCLUDED.custom_prompt), updated_at=CURRENT_TIMESTAMP";
+        if ($db->execQuery($sql)===false) throw new RuntimeException('Could not consolidate Interact rules');
+        // Archive both overrides before deleting their exposed mode entries, even when they differ.
+        if ($db->execQuery("UPDATE public.prompts SET description=COALESCE(description,'CHIM Interact rules.') || COALESCE((
+            SELECT E'\\n\\nRetired mode customizations (archive only; not active rules):\\n' ||
+                string_agg(prompt_key || E':\\n' || custom_prompt,E'\\n\\n' ORDER BY prompt_key)
+            FROM public.prompts WHERE prompt_key IN ('interact_rules_normal','interact_rules_cheat')
+                AND NULLIF(trim(custom_prompt),'') IS NOT NULL),'')
+            WHERE prompt_key='interact_rules'")===false
+            || $db->execQuery("DELETE FROM public.prompts WHERE prompt_key IN ('interact_rules_normal','interact_rules_cheat')")===false)
+            throw new RuntimeException('Could not preserve retired Interact customizations');
+        $updateVersion('interact_prompts',20261005008);
+        if ($db->execQuery('COMMIT')===false) throw new RuntimeException('Could not commit Interact rules');
+    } catch (Throwable $error) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Failed to consolidate Interact rules: '.$error->getMessage());
+    }
+}
+
+// Refresh universal Interact guidance without replacing user customizations or their migration archive.
+if ($checkVersion('interact_prompts') >= 20261005008 && $checkVersion('interact_prompts') < 20261005009) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $db->execQuery('BEGIN');
+    try {
+        foreach (chimInteractPromptDefaults() as $key=>$text) {
+            $key=$db->escape($key);
+            $text=$db->escape($text);
+            if ($db->execQuery("INSERT INTO public.prompts (prompt_key,default_prompt,description)
+                VALUES ('{$key}','{$text}','CHIM Interact guidance. Engine and response constraints remain enforced.')
+                ON CONFLICT (prompt_key) DO UPDATE SET default_prompt=EXCLUDED.default_prompt,
+                    updated_at=CURRENT_TIMESTAMP")===false) throw new RuntimeException('Could not refresh Interact guidance');
+        }
+        $updateVersion('interact_prompts',20261005009);
+        if ($db->execQuery('COMMIT')===false) throw new RuntimeException('Could not commit Interact guidance');
+    } catch (Throwable $error) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Failed to refresh universal Interact guidance: '.$error->getMessage());
+    }
+}

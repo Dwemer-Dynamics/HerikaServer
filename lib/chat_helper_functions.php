@@ -5544,10 +5544,14 @@ function filterHistoricContextForNarratorVisibility(array $contextDataHistoric, 
 
 function chimGenerateUtteranceId()
 {
+    // Correlate every prefetched Interact sentence with its client playback gate.
+    $reactionId=$GLOBALS['CHIM_INTERACT_REACTION']['id'] ?? '';
+    $prefix=is_string($reactionId) && preg_match('/^[a-f0-9]{32}$/D',$reactionId)
+        ? 'interact-reply-'.$reactionId.'-' : 'utt_';
     try {
-        return "utt_" . bin2hex(random_bytes(10));
+        return $prefix . bin2hex(random_bytes(10));
     } catch (Exception $e) {
-        return "utt_" . substr(md5(uniqid((string)mt_rand(), true)), 0, 20);
+        return $prefix . substr(md5(uniqid((string)mt_rand(), true)), 0, 20);
     }
 }
 
