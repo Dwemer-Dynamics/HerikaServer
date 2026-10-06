@@ -17,6 +17,7 @@ require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPA
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_fallback.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "tts_studio_provider_detection.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "tts_pronunciation_preview.php");
+require_once($enginePath . "tts" . DIRECTORY_SEPARATOR . "audio_cpp_voice_ref.php");
 
 require_once(__DIR__.DIRECTORY_SEPARATOR."profile_loader.php");
 
@@ -285,8 +286,8 @@ if (!function_exists('chimTtsStudioFetchSpeakersList')) {
         }
 
         if ($driver === 'higgs') {
-            $host = strtolower(strval(parse_url($endpoint, PHP_URL_HOST)));
-            $voices = in_array($host, ['localhost', '127.0.0.1', '::1', '[::1]'], true) ? getLocalVoices() : [];
+            // Local uploads are sent with each request when Higgs runs on another host.
+            $voices = getLocalVoices();
             $metadata = chimTtsStudioResolveConnectorMetadata('higgs');
             $model = trim(strval($metadata['model'] ?? 'higgs-v3')) ?: 'higgs-v3';
             $probe = chimTtsStudioProbeJson(chimTtsStudioAudioCppBaseEndpoint($endpoint) . '/v1/audio/voices?model=' . rawurlencode($model));
@@ -993,6 +994,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'test_pockettts' && isset($_GE
             exit;
         }
 
+        unset($GLOBALS['CHIM_AUDIO_CPP_VOICE_REF_ERROR']);
         returnLines([$testText], false);
 
         $capturedOutput = ob_get_clean();
@@ -1003,7 +1005,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'test_pockettts' && isset($_GE
         $file = isset($GLOBALS["TRACK"]["FILES_GENERATED"][0]) ? basename((string)$GLOBALS["TRACK"]["FILES_GENERATED"][0]) : '';
         $testError = 'Failed to generate audio file';
 
-        if ($file === '') {
+        if ($file === '' && isset($GLOBALS['CHIM_AUDIO_CPP_VOICE_REF_ERROR'])) {
+            $testError = $GLOBALS['CHIM_AUDIO_CPP_VOICE_REF_ERROR'];
+        } elseif ($file === '' && chimTtsStudioIsAudioCppPocketTts('pockettts', chimTtsStudioResolveEndpointForDriver('pockettts'))) {
+            // audio.cpp has no /upload_sample; samples are read locally or sent with the request.
+            $testError = 'audio.cpp PocketTTS could not generate speech. Check that the service is running and up to date, '
+                . 'and that the selected voice exists as an upload or on the audio.cpp host.';
+        } elseif ($file === '') {
             @file_put_contents($logFile, "No PocketTTS test file generated; attempting automatic voice sync and retry.\n", FILE_APPEND);
             $syncResult = chimTtsStudioSyncVoiceSampleForTest('pockettts', $voice, $logFile);
             if ($syncResult['success']) {
@@ -1056,13 +1064,15 @@ if (($_GET['action'] ?? '') === 'test_higgs') {
     }
     @set_time_limit(150);
     chimTtsStudioConfigureCompatibleTestGlobals('higgs', 'higgs', $voice);
+    unset($GLOBALS['CHIM_AUDIO_CPP_VOICE_REF_ERROR']);
     require($enginePath . 'tts/tts-higgs.php');
     $file = $GLOBALS['TTS_IN_USE']('Welcome, traveler. Let us hear how this voice sounds.', 'neutral', 'higgs-studio-' . $voice);
     if (is_string($file) && $file !== '' && is_file($enginePath . $file)) {
         echo json_encode(['url' => $webRoot . '/' . $file . '?ts=' . time()]);
     } else {
         http_response_code(502);
-        echo json_encode(['error' => 'Higgs could not generate speech. Check the service, connector, and selected voice sample.']);
+        echo json_encode(['error' => $GLOBALS['CHIM_AUDIO_CPP_VOICE_REF_ERROR']
+            ?? 'Higgs could not generate speech. Check the service, connector, and selected voice sample.']);
     }
     exit;
 }
@@ -1389,7 +1399,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'batch_process' && isset($_GET
             if (chimTtsStudioIsAudioCppPocketTts($driver, $endpoint)) {
                 chimTtsStudioStoreSpeakersList($driver, chimTtsStudioFetchSpeakersList($driver));
                 $response['success'] = true;
-                $response['message'] = 'Voice is available locally for audio.cpp PocketTTS';
+                $response['message'] = chimAudioCppIsLoopback($endpoint)
+                    ? 'Voice is available locally for audio.cpp PocketTTS'
+                    : 'Voice stays on this server and is sent with each remote audio.cpp PocketTTS request';
                 echo json_encode($response);
                 exit;
             }
@@ -2795,6 +2807,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ? 'saved for'
                 : ($submitDriver === 'omnivoice' ? 'imported into' : 'uploaded and cached to');
             $message .= "<p style='color:rgb(247, 231, 16);'><strong>Successfully {$verb} {$submitProviderLabel}: {$uploadedCount} voice(s).</strong></p>";
+            if ($verb === 'saved for' && !chimAudioCppIsLoopback($submitEndpoint)) {
+                $message .= "<p style='color:rgb(247, 231, 16);'>The remote service receives each sample with every request; samples must fit about 16 seconds of mono audio.</p>";
+            }
         }
     } elseif (isset($_POST["upload_all"])) {
         $uploadAllDriver = chimTtsStudioTabToDriver($activeTab);
@@ -4409,6 +4424,7 @@ $ttsPronunciationPreviewEndpoint = $webRoot . '/ui/api/tts_pronunciation_preview
         <div class="content-section full-width-section">
             <h1>PocketTTS Voice Cache</h1>
             <p>Manage voice samples for PocketTTS. Current mode: <strong><?php echo htmlspecialchars($pocketTtsModeLabel); ?></strong>.</p>
+            <p>With audio.cpp PocketTTS on another host, uploads stay on this mod server and are sent with each request, like Higgs. For audio.cpp on a custom port, set the connector endpoint to the full <code>/v1/audio/speech</code> URL.</p>
 
             <?php
             $localVoices = getLocalVoices();
@@ -4523,7 +4539,7 @@ $ttsPronunciationPreviewEndpoint = $webRoot . '/ui/api/tts_pronunciation_preview
         <div class="content-section full-width-section">
             <h1>Higgs TTS 3 Voices</h1>
             <p>Upload a WAV sample, then preview its voice. Previewing does not change your active TTS connector.</p>
-            <p>For a remote Higgs service, place samples on that host and refresh its named voices here. Local uploads stay on this mod server.</p>
+            <p>Uploads stay on this mod server and are sent with each request to a remote Higgs service. Named voices on that host also appear here after refresh.</p>
             <form action="<?php echo $webRoot; ?>/ui/xtts_clone.php?tab=higgs" method="post" enctype="multipart/form-data">
                 <label for="higgs-samples">Voice samples (.wav or .zip)</label>
                 <input type="file" name="file[]" id="higgs-samples" accept=".wav,.zip" multiple required>
