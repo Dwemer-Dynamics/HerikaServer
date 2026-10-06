@@ -23,29 +23,40 @@ $GLOBALS['TTS_IN_USE'] = function ($textString, $mood, $stringforhash) {
     $output = $cache . $hash . '.wav';
     if (($GLOBALS['AVOID_TTS_CACHE'] ?? true) === false && is_file($output) && filesize($output) > 44) return 'soundcache/' . $hash . '.wav';
     $request = ['model' => $model, 'input' => $text, 'voice' => $voice];
-    $host = strtolower(strval(parse_url($endpoint, PHP_URL_HOST)));
     if (!in_array(strtolower(strval(parse_url($endpoint, PHP_URL_SCHEME))), ['http', 'https'], true)) return false;
-    // Filesystem references are valid only when inference shares this machine.
-    if (in_array($host, ['localhost', '127.0.0.1', '::1', '[::1]'], true)) {
-        foreach ([dirname(__DIR__) . '/data/voices/', '/home/dwemer/higgs-tts/voices/'] as $directory) {
-            $sample = $directory . $voice . '.wav';
-            if (is_readable($sample)) {
-                unset($request['voice']);
-                $request['voice_ref'] = $sample;
-                break;
-            }
-        }
+    // Uploaded samples travel with the request to remote services; named voices remain the fallback.
+    require_once __DIR__ . '/audio_cpp_voice_ref.php';
+    $reference = chimAudioCppVoiceReference($endpoint, $voice, $request, ['/home/dwemer/higgs-tts/voices/']);
+    if ($reference['status'] === 'error') {
+        Logger::warn('Higgs: ' . $reference['error']);
+        return false;
+    }
+    if (isset($reference['voice_ref'])) {
+        unset($request['voice']);
+        $request['voice_ref'] = $reference['voice_ref'];
+    }
+    $body = json_encode($request, CHIM_AUDIO_CPP_JSON_FLAGS);
+    if (!is_string($body)) {
+        Logger::warn('Higgs: the speech request could not be encoded as JSON.');
+        return false;
     }
     $url = str_ends_with($endpoint, '/v1/audio/speech') ? $endpoint : $endpoint . '/v1/audio/speech';
     $curl = curl_init($url);
     curl_setopt_array($curl, [CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true,
         CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_TIMEOUT => 120,
         CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: audio/wav'],
-        CURLOPT_POSTFIELDS => json_encode($request)]);
+        CURLOPT_POSTFIELDS => $body]);
     $start = microtime(true);
     $audio = curl_exec($curl);
     $status = intval(curl_getinfo($curl, CURLINFO_HTTP_CODE));
     curl_close($curl);
+    unset($request, $body);
+    $rejection = ($reference['status'] ?? '') === 'inline' ? chimAudioCppInlineRejection('Higgs', $status) : null;
+    if ($rejection !== null) {
+        $GLOBALS['CHIM_AUDIO_CPP_VOICE_REF_ERROR'] = $rejection;
+        Logger::warn($rejection);
+        return false;
+    }
     if ($status !== 200 || !is_string($audio) || strlen($audio) <= 44 || substr($audio, 0, 4) !== 'RIFF' || substr($audio, 8, 4) !== 'WAVE') {
         Logger::warn('Higgs speech generation failed (HTTP ' . $status . '). Check the service and selected voice.');
         return false;
