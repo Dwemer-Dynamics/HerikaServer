@@ -3,7 +3,7 @@
 function chimInteractCatalog(): array {
     return [
         'heal'=>[1,100], 'restore_stamina'=>[1,100], 'restore_magicka'=>[1,100],
-        'poison'=>[1,10], 'burning'=>[1,10], 'paralysis'=>[1,1],
+        'burning_visual'=>[1,1], 'poison'=>[1,10], 'burning'=>[1,10], 'paralysis'=>[1,1],
         'calm'=>[1,100], 'fear'=>[1,100], 'frenzy'=>[1,100],
         'disarm'=>[0,1], 'unequip'=>[30,61], 'drop'=>[1,100], 'place'=>[1,100],
         'consume_world'=>[0,0], 'pickup'=>[0,0], 'observe'=>[0,0], 'give'=>[1,100], 'store'=>[1,100], 'consume'=>[1,1], 'equip'=>[1,1],
@@ -33,7 +33,8 @@ function chimInteractValidate(array $plan, array $allowed): array {
         if (in_array($effect,['give','store','consume','equip','magic','drop','place'],true) && ++$inventorySteps>1) throw new InvalidArgumentException('Conflicting inventory effects');
         if (in_array($effect,['give','store','consume','equip','lock','disarm','unequip','drop','place'],true) && floor($value)!=(float)$value) throw new InvalidArgumentException('Whole number required');
         if (in_array($effect,['combat','heal','restore_stamina','restore_magicka','disarm','unequip','poison','burning','paralysis','calm','fear','frenzy'],true) && !$step['alive']) throw new InvalidArgumentException('Effect requires a living target');
-        $timed = in_array($effect,['poison','burning','paralysis','calm','fear','frenzy'],true);
+        if ($effect==='burning_visual' && $step['alive']) throw new InvalidArgumentException('Scenery fire requires a non-actor target');
+        $timed = in_array($effect,['burning_visual','poison','burning','paralysis','calm','fear','frenzy'],true);
         $duration = array_key_exists('duration',$step) ? $step['duration'] : ($timed ? 10 : 0);
         if (!is_int($duration) || ($timed ? !in_array($duration,[5,10,20,30],true) : $duration!==0))
             throw new InvalidArgumentException('Unsupported effect duration');
@@ -156,6 +157,7 @@ function chimInteractGenerate(array $context, array $allowed): array {
 - An impossible attempt may return empty steps with truthful failure_narration.
 
 - Narration uses story prose, never numeric statistics, health points, damage per second, timers or receipt language. Do not invent a wince, gesture or other animation.
+- For scenery, use burning_visual for timed fire appearance only, never actor health damage or fire spread. Use destroy to remove non-destructible scenery without debris only for explicit destruction, never as a substitute for minor injury. Actor emotions and poison have no scenery equivalent; return a failure scene when nothing meaningful applies.
 - Timed-status narration may describe initial application only, not guaranteed duration, future total damage, or subsequent behavior.
 - Draft success narration now for the planned effect; confirmation is not a prerequisite for choosing it. The runtime speaks that draft only after a successful execution receipt. Failure prose describes only an attempted effect, with optional gentle dry humor; never invent a cause, animation, injury, consumed item or NPC reaction. Unknown receipts retain uncertainty and partial changes retain their facts. Never claim an unsupported effect.
 - Atomic consume_world already transfers and consumes; never combine with pickup.

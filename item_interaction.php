@@ -67,6 +67,7 @@ try {
         $hasItem=$snapshot['item']!==null;
         $item=$hasItem ? mb_substr((string)($snapshot['item']['name'] ?? ''),0,160) : null;
         $allowed=array_intersect_key(chimInteractCatalog(),array_flip(array_filter($input['capabilities'] ?? [],'is_string')));
+        if (($snapshot['target']['actor'] ?? false)===true) unset($allowed['burning_visual']);
         if ($hasItem) unset($allowed['consume_world']);
         if (!$hasItem) $allowed=array_diff_key($allowed,array_flip(['give','store','consume','equip','magic','drop','place']));
         if (!$allowed || $target==='' || ($hasItem && $item==='')) throw new InvalidArgumentException('No supported interaction');

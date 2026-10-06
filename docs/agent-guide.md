@@ -110,6 +110,8 @@ The four actor effects are also selectable voice-filter presets in the PHP NPC e
 
 ## CHIM Interact protocol
 
+Scenery uses the exact loaded camera-ray reference only when no valid normal crosshair target exists. `burning_visual` applies timed fire appearance without actor damage or spread; non-destructible `destroy` disables that reference without debris. Actor emotions and poison remain unsupported on scenery.
+
 Synthetic effects accept any selected item as a narrative prop, or no item. Up to five effects execute sequentially with explicit dependencies. Actor-only `poison`/`burning` use value 1–10 damage per second; `paralysis` uses value 1; `calm`/`fear`/`frenzy` use value 1–100 as the affected level limit. Optional `duration` is 5, 10, 20 or 30 seconds (default 10 for statuses, 0 for other actions). Refresh replaces only the same CHIM status family on that actor. Engine-managed active effects own expiry and save persistence; cancellation stops pending work but does not undo an applied effect. Receipts confirm active application, not guaranteed total damage or full duration. Resistance and immunity may prevent application.
 
 A validated empty plan with nonempty failure narration creates a marked failure scene: attempt/outcome history, narration and an eligible NPC response, but no game effects. The server issues a scene token that the native receipt must echo; unmarked legacy empty plans and invalid/transport/stale requests cannot create scenes. Per-step failure prose is used only for confirmed failure; unknown and partial outcomes remain factual.
