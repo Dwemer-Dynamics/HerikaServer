@@ -110,7 +110,7 @@ The four actor effects are also selectable voice-filter presets in the PHP NPC e
 
 ## CHIM Interact protocol
 
-**Cheat Mode** starts off when the menu opens. Turning it on asks the Director to grant supported effects without plausibility refusals. Actual engine eligibility, execution failures and kill/disable confirmations still apply; it cannot fabricate success.
+**Cheat Mode** starts off when the menu opens. Turning it on asks the Director to grant supported effects without plausibility refusals. Actual engine eligibility and execution failures still apply; it cannot fabricate success.
 
 In **Prompt Manager**, search `interact_` to edit normal-mode rules, cheat-mode rules or narration guidance. Action descriptions remain code-owned. Clear a custom prompt to restore its default. Eligible actions, numeric limits and receipt validation remain enforced.
 

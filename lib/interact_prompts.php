@@ -17,7 +17,7 @@ function chimInteractActionDescriptions(): array {
         'drop'=>'Drop value copies of the selected inventory instance at the PLAYER.',
         'place'=>'Place value copies directly near the captured target in the same cell. No prerequisite drop; no guarantee of tabletop or stable physics positioning.',
         'injure'=>'Apply value health loss, not a simulated weapon hit.',
-        'kill'=>'Kill the target; requires explicit confirmation.',
+        'kill'=>'Kill the captured target.',
         'push'=>'Push with bounded force value.',
         'lock'=>'Lock using value as the lock level.',
         'unlock'=>'Unlock the target.',
@@ -25,7 +25,7 @@ function chimInteractActionDescriptions(): array {
         'open'=>'Open the target.',
         'close'=>'Close the target.',
         'destroy'=>'Use the target’s authored destruction; no invented destruction behavior.',
-        'disable'=>'Remove the reference without debris; requires explicit confirmation.',
+        'disable'=>'Remove the captured reference without debris.',
         'resize'=>'Set absolute scale value; requires plausible magic, not invented powers for ordinary objects.',
         'magic'=>'Consume the selected supported scroll and apply only its authored effects. Resistance may prevent them; never invent spells.',
         'combat'=>'Start combat with the player; alive=true.'
