@@ -8886,3 +8886,24 @@ if ($checkVersion('interact_prompts') >= 20261005007 && $checkVersion('interact_
         Logger::error('Failed to consolidate Interact rules: '.$error->getMessage());
     }
 }
+
+// Refresh universal Interact guidance without replacing user customizations or their migration archive.
+if ($checkVersion('interact_prompts') >= 20261005008 && $checkVersion('interact_prompts') < 20261005009) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $db->execQuery('BEGIN');
+    try {
+        foreach (chimInteractPromptDefaults() as $key=>$text) {
+            $key=$db->escape($key);
+            $text=$db->escape($text);
+            if ($db->execQuery("INSERT INTO public.prompts (prompt_key,default_prompt,description)
+                VALUES ('{$key}','{$text}','CHIM Interact guidance. Engine and response constraints remain enforced.')
+                ON CONFLICT (prompt_key) DO UPDATE SET default_prompt=EXCLUDED.default_prompt,
+                    updated_at=CURRENT_TIMESTAMP")===false) throw new RuntimeException('Could not refresh Interact guidance');
+        }
+        $updateVersion('interact_prompts',20261005009);
+        if ($db->execQuery('COMMIT')===false) throw new RuntimeException('Could not commit Interact guidance');
+    } catch (Throwable $error) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Failed to refresh universal Interact guidance: '.$error->getMessage());
+    }
+}

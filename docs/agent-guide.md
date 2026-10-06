@@ -126,7 +126,9 @@ A validated empty plan with nonempty failure narration creates a marked failure 
 
 Interact asks the Director to grant supported effects without plausibility refusals. Actual engine eligibility and execution failures still apply; it cannot fabricate success. There is no mode toggle.
 
-In **Prompt Manager**, search `interact_` to edit `interact_rules` or `interact_narration`. The upgrade keeps the former unrestricted custom rules active and archives retired mode customizations in the rules description. Action descriptions remain code-owned. Clear a custom prompt to restore its default. Eligible actions, numeric limits and receipt validation remain enforced.
+In **Prompt Manager**, search `interact_` to edit `interact_rules` or `interact_narration`. The upgrade keeps the former unrestricted custom rules active and archives retired mode customizations in the rules description. Action descriptions remain code-owned. Clear a custom prompt to restore its default. Eligible actions, numeric limits and receipt validation remain enforced. The universal planning prompt maps intent to the smallest faithful eligible sequence, uses observed properties without inferring traits from names, and keeps execution receipts authoritative. Numeric action limits come from the validated catalog. Guidance refreshes preserve custom prompts and archived mode customizations.
+
+Item data uses explicit units and limits: base weapon damage is not final hit damage, per-item gold value is not barter price, and base armor rating is not final protection. Weight, weapon/armor class, tempering, charge, enchantments and applied poison describe the captured instance. Authored ingredient effects may be undiscovered and are not active effects. Item and selected magic remain independent.
 
 
 `consume_world` (value zero) requires `item: null` and consumes a single eligible world food/potion as the player; it cannot be combined with another pickup/world-consumption step. Successful narration confirms consumption, without promising a measured healing effect.
