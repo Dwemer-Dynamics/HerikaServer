@@ -59,6 +59,8 @@ try {
         if ((int)($recent['count'] ?? 0)>=6) throw new RuntimeException('Please wait before another attempt');
         $intent=trim((string)($input['intent'] ?? ''));
         if ($intent==='' || mb_strlen($intent)>1000) throw new InvalidArgumentException('Describe the attempt in 1000 characters or fewer');
+        $cheatMode=array_key_exists('cheat_mode', $input) ? $input['cheat_mode'] : false;
+        if (!is_bool($cheatMode)) throw new InvalidArgumentException('Cheat mode must be boolean');
         $snapshot=$input['snapshot'] ?? null;
         if (!is_array($snapshot) || !array_key_exists('item',$snapshot) || ($snapshot['item']!==null && !is_array($snapshot['item'])) || !is_array($snapshot['target'] ?? null)) throw new InvalidArgumentException('Missing current game snapshot');
         $target=mb_substr((string)($snapshot['target']['name'] ?? ''),0,160);
@@ -98,7 +100,7 @@ try {
         $profile=[];
         foreach (['personality','occupation','goals','npc_static_bio'] as $field) $profile[$field]=mb_substr((string)($npc[$field] ?? ''),0,500);
         $state=['id'=>$id,'session'=>$session,'status'=>'resolving','player'=>$player,'target'=>$target,'item'=>$item,
-            'gamets'=>$gamets,'allowed'=>$allowed,'intent'=>$intent,
+            'gamets'=>$gamets,'allowed'=>$allowed,'intent'=>$intent,'cheat_mode'=>$cheatMode,
             'target_ref'=>(string)($snapshot['target']['ref_id'] ?? ''),
             'target_speaker'=>(string)($snapshot['target']['speaker'] ?? '')];
         $rowid=$db->insertReturningId('rolemaster',['type'=>'item_interaction','localts'=>time(),'ttl'=>600,'data'=>json_encode($state)],'rowid');
@@ -107,7 +109,7 @@ try {
             'people'=>"|{$player}|{$target}|",'location'=>(string)($snapshot['location'] ?? ''),'party'=>'','sess'=>''], 'rowid')) throw new RuntimeException('Could not record attempt');
         if ($db->query('COMMIT')===false) throw new RuntimeException('Could not save attempt');
         unset($snapshot['target']['ref_id'],$snapshot['target']['speaker']);
-        $plan=chimInteractGenerate(['player'=>$player,'intent'=>$intent,'current_game'=>$snapshot,'target_profile'=>$profile,'recent_context'=>$history],$allowed);
+        $plan=chimInteractGenerate(['player'=>$player,'intent'=>$intent,'cheat_mode'=>$cheatMode,'current_game'=>$snapshot,'target_profile'=>$profile,'recent_context'=>$history],$allowed);
         $state['plan']=$plan; $state['status']='ready';
         $encoded=$db->escape(json_encode($state,JSON_THROW_ON_ERROR));
         if (!$db->fetchOne("UPDATE rolemaster SET data='{$encoded}' WHERE rowid=".(int)$rowid." AND data::jsonb->>'status'='resolving' RETURNING rowid")) throw new RuntimeException('Could not save resolution');

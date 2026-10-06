@@ -110,6 +110,11 @@ The four actor effects are also selectable voice-filter presets in the PHP NPC e
 
 ## CHIM Interact protocol
 
+**Cheat Mode** starts off when the menu opens. Turning it on asks the Director to grant supported effects without plausibility refusals. Actual engine eligibility, execution failures and kill/disable confirmations still apply; it cannot fabricate success.
+
+In **Prompt Manager**, search `interact_` to edit normal-mode rules, cheat-mode rules, narration guidance or individual action descriptions. Clear a custom prompt to restore its default. Eligible actions, numeric limits and receipt validation remain enforced.
+
+
 `consume_world` (value zero) requires `item: null` and consumes a single eligible world food/potion as the player; it cannot be combined with another pickup/world-consumption step. Successful narration confirms consumption, without promising a measured healing effect.
 
 `chatnf_interact_reaction` generates through the normal NPC dialogue/voice pipeline as soon as the receipt is committed, alongside Narrator audio preparation. Request-tagged reply chunks remain held in the native client until its Narrator playback-completion hook confirms completion. The server atomically claims a completed interaction once, matching playthrough session, captured target reference and NPC speaker. It builds the prompt from stored receipt effects/statuses and outcome, never client-supplied prose. No new table or connector is required. The native client suppresses stale, cancelled or interrupted replies and requires the exact actor active in CHIM.

@@ -8770,3 +8770,19 @@ if ($checkVersion("memory_summary_episodes") < 20261004001) {
     if ($migrationOk) $updateVersion("memory_summary_episodes", 20261004001);
     else Logger::error("Failed to apply memory episode source linkage migration");
 }
+
+// Register editable Interact guidance without changing existing custom overrides.
+if ($checkVersion('interact_prompts') < 20261005001) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (chimInteractPromptDefaults() as $key => $text) {
+        $key = $db->escape($key);
+        $text = $db->escape($text);
+        $ok = $db->execQuery("INSERT INTO public.prompts (prompt_key, default_prompt, description)
+            VALUES ('{$key}', '{$text}', 'CHIM Interact guidance. Engine eligibility and JSON response constraints remain enforced.')
+            ON CONFLICT (prompt_key) DO UPDATE SET default_prompt=EXCLUDED.default_prompt,
+            description=EXCLUDED.description, updated_at=CURRENT_TIMESTAMP") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005001);
+    else Logger::error('Failed to register Interact prompts');
+}
