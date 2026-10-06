@@ -16,7 +16,7 @@ function chimInteractActionDescriptions(): array {
         'unequip'=>'Remove the exact captured target armor slot (30..61), leaving it in NPC inventory. No player item needed; alive=true.',
         'drop'=>'Drop value copies of the selected inventory instance at the PLAYER.',
         'place'=>'Place value copies directly near the captured target in the same cell. No prerequisite drop; no guarantee of tabletop or stable physics positioning.',
-        'injure'=>'Apply value health loss, not a simulated weapon hit.',
+        'injure'=>'Apply value health loss and signal a player assault through Skyrim’s assault response. Also request a stagger on a surviving actor; animation or immunity may block it. This is not a full weapon hit: no weapon enchantment procs. Narrate injury, not guaranteed stagger, crime, bounty or NPC behavior.',
         'kill'=>'Kill the captured target.',
         'push'=>'Push with bounded force value.',
         'lock'=>'Lock using value as the lock level.',
