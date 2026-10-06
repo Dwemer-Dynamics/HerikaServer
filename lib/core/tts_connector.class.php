@@ -134,6 +134,7 @@ class TTSConnector
             'model_id' => 'inworld-tts-2',
             'temperature' => 1.0,
             'speed' => 1.0,
+            'PARALINGUISTIC_TAGS_ENABLED' => false,
         ],
         'mimic3' => [
             'rate' => 1,
@@ -798,6 +799,12 @@ class TTSConnector
                 continue;
             }
             $GLOBALS["TTS"][$providerKey][$key] = $value;
+        }
+
+        if ($providerKey === 'INWORLD') {
+            // Build the paralinguistic tag list and LLM instruction for the Inworld model in use.
+            require_once(__DIR__ . DIRECTORY_SEPARATOR . 'inworld_tags.php');
+            chimInworldApplyTagSettings();
         }
 
         if (!empty($GLOBALS["TTS"][$providerKey]['language']) && !empty($GLOBALS["LANG_LLM_XTTS"])) {

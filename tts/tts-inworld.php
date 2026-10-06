@@ -1336,9 +1336,61 @@ $GLOBALS["TTS_IN_USE"] = function($textString, $mood, $stringforhash) {
         $textString
     );
     
+    // Paralinguistic tags (see lib/core/inworld_tags.php):
+    // CHIM sends every sentence to Inworld separately, so a direction tag written at the start of a reply
+    // would only reach the first sentence. Carry it over to the next sentences of the same reply and limit
+    // how many different directions one reply may use. Only a tag at the start of a sentence counts as a
+    // direction; sound tags ([laugh] etc.) and tags in the middle of a sentence are left alone.
+    $chimLeadTag = false;
+    $chimSpeaker = strval($GLOBALS["HERIKA_NAME"] ?? '');
+    if (!isset($GLOBALS["CHIM_INWORLD_TAG_STATE"]) || !is_array($GLOBALS["CHIM_INWORLD_TAG_STATE"])
+        || ($GLOBALS["CHIM_INWORLD_TAG_STATE"]["npc"] ?? null) !== $chimSpeaker) {
+        $GLOBALS["CHIM_INWORLD_TAG_STATE"] = ["npc" => $chimSpeaker, "last" => "", "used" => []];
+    }
+    if (!empty($GLOBALS["TTS"]["INWORLD"]["PARALINGUISTIC_TAGS_ENABLED"])) {
+        $chimSoundList = strval($GLOBALS["TTS"]["INWORLD"]["PARALINGUISTIC_TAGS_SOUNDS"] ?? '[laugh],[chuckle],[growl],[sigh],[breathe],[cough],[yawn],[clear throat],[hmm]');
+        $chimSounds = array_filter(array_map(function ($t) { return strtolower(trim($t)); }, explode(',', $chimSoundList)));
+        $chimMax = intval($GLOBALS["TTS"]["INWORLD"]["PARALINGUISTIC_TAGS_MAX_STYLE"] ?? 2);
+        $chimState = &$GLOBALS["CHIM_INWORLD_TAG_STATE"];
+
+        // Split the sentence into its leading tags and the rest.
+        $chimRest = ltrim($textString);
+        $chimLeadSounds = [];
+        $chimDirection = '';
+        while (preg_match('/^\[[^\[\]]{1,60}\]\s*/', $chimRest, $chimM)) {
+            $chimTag = trim($chimM[0]);
+            $chimRest = substr($chimRest, strlen($chimM[0]));
+            if (in_array(strtolower($chimTag), $chimSounds, true)) {
+                $chimLeadSounds[] = $chimTag;
+            } elseif ($chimDirection === '') {
+                $chimDirection = $chimTag;
+            } // a second direction at the same spot is dropped
+        }
+
+        if ($chimDirection !== '') {
+            $chimKey = strtolower($chimDirection);
+            if (!in_array($chimKey, $chimState["used"], true)) {
+                if ($chimMax > 0 && count($chimState["used"]) >= $chimMax) {
+                    $chimDirection = ''; // over the limit for this reply: keep the previous direction
+                } else {
+                    $chimState["used"][] = $chimKey;
+                }
+            }
+        }
+        if ($chimDirection !== '') {
+            $chimState["last"] = $chimDirection;
+        } elseif ($chimState["last"] !== '') {
+            $chimDirection = $chimState["last"]; // carry the direction to this sentence
+        }
+
+        $textString = trim(implode(' ', array_filter([$chimDirection, implode(' ', $chimLeadSounds), $chimRest], 'strlen')));
+        $chimLeadTag = $chimDirection !== '';
+        unset($chimState);
+    }
+
     // emotions:
     $b_emotions = isset($GLOBALS["LAST_LLM_RESPONSE"]) && ($GLOBALS['use_emotions_expression'] ?? false);
-    if (isEmotionCapable() && $b_emotions) {
+    if (isEmotionCapable() && $b_emotions && !$chimLeadTag) { // no emotion tag when the sentence already has a direction
         $s_mood = strtolower(extractFirstEmoteMood($GLOBALS["LAST_LLM_RESPONSE"]["mood"] ?? ""));
         if (isset($GLOBALS["FORCE_MOOD"]) && (strlen($GLOBALS["FORCE_MOOD"]) > 0)) {
             $s_mood = strtolower(extractFirstEmoteMood($GLOBALS["FORCE_MOOD"]));
