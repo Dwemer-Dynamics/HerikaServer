@@ -8843,3 +8843,16 @@ if ($checkVersion('interact_prompts') >= 20261005005 && $checkVersion('interact_
     if ($ok) $updateVersion('interact_prompts', 20261005006);
     else Logger::error('Failed to refresh Interact failure scene guidance');
 }
+
+// Refresh intent-first planning defaults without changing custom guidance.
+if ($checkVersion('interact_prompts') >= 20261005006 && $checkVersion('interact_prompts') < 20261005007) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (['interact_rules_normal','interact_narration'] as $key) {
+        $text = $db->escape(chimInteractPromptDefaults()[$key]);
+        $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
+            WHERE prompt_key='{$key}'") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005007);
+    else Logger::error('Failed to refresh Interact intent-first guidance');
+}
