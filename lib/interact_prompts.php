@@ -26,7 +26,8 @@ function chimInteractActionDescriptions(): array {
         'close'=>'Close the target.',
         'destroy'=>'Use authored destruction when available. Non-actor scenery without destruction data is removed by disabling its exact reference, with no debris or destruction animation. Only for requested destruction, never minor injury.',
         'disable'=>'Remove the captured reference without debris.',
-        'resize'=>'Set absolute scale value; requires plausible magic, not invented powers for ordinary objects.',
+        'resize'=>'Set absolute scale value.',
+        'cast_selected_magic'=>'Cast only the exact selected known spell, power or unlocked shout using its captured authored effects and rank. No selected item is consumed. Never invent spells, effects or shout words; eligibility and execution receipts determine success.',
         'magic'=>'Consume the selected supported scroll and apply only its authored effects. Resistance may prevent them; never invent spells.',
         'poison'=>'Apply actual poison-resisted health damage over time: value 1..10 points per second, duration 5/10/20/30 seconds, alive=true. Refresh this CHIM poison rather than stack.',
         'burning_visual'=>'For non-actor scenery only: apply a timed fire shader, value=1, duration 5/10/20/30 seconds, alive=false. Appearance only: no health damage, spreading fire or destruction. Narrate only the fire effect, not guaranteed rendered animation or structural consequences.',
@@ -39,11 +40,10 @@ function chimInteractActionDescriptions(): array {
     ];
 }
 
-// Only these three guidance prompts are editable in Prompt Manager.
+// Only these guidance prompts are editable in Prompt Manager.
 function chimInteractPromptDefaults(): array {
     $prompts = [
-        'interact_rules_normal'=>'Fulfill the player’s intent with the closest eligible mechanics and default to success. An exact animation match is unnecessary. Use scene plausibility to scale magnitude or choose meaningful partial success, not to invent a refusal based on armor, alertness, level, skill, hostility or morality. The selected item is a narrative prop for synthetic effects. Use only effects motivated by the intent; do not turn a simple stab into a kill or invent additional magic. Failure is reserved for concrete engine obstacles or an intent with no meaningful eligible equivalent.',
-        'interact_rules_cheat'=>'Cheat Mode is on. Grant the requested intent using the eligible implemented actions even when it is unrealistic, socially inappropriate or lacks an in-world justification. Do not refuse on plausibility, morality, consequences or skill grounds. This policy overrides in-world justification requirements in action guidance, including the magical rationale for resize. Choose the closest faithful supported mechanics; never substitute observe for a requested physical effect that an eligible action supports. Engine eligibility and the response contract still apply; if no eligible mechanic can achieve the intent, explain that limitation without inventing success.',
+        'interact_rules'=>'Grant the requested intent using the eligible implemented actions even when it is unrealistic, socially inappropriate or lacks an in-world justification. Do not refuse on plausibility, morality, consequences or skill grounds. Choose the closest faithful supported mechanics; never substitute observe for a requested physical effect that an eligible action supports. Engine eligibility and the response contract still apply; if no eligible mechanic can achieve the intent, explain that limitation without inventing success.',
         'interact_narration'=>'Write flowing, descriptive third-person narration using supplied names. Usually use two sentences per effect, up to three when useful, within 500 characters. Describe the intended successful effect and concrete physical details supported by the captured scene and that effect; vary the phrasing instead of repeating the action. Do not pad a simple effect with invented detail. Describe each effect separately; a timed status receipt confirms initial application, not guaranteed full duration or total damage. Choose the mechanical outcome first; never select failure to set up a joke. Leave top-level failure_narration empty on successful plans. Only for a genuine failure, describe the attempt with a small touch of dry humor about ambition outpacing results. Do not invent the cause, an animation, an NPC reaction, injury or item consumption. Keep uncertainty and any confirmed partial effects intact. No debug/status language, dialogue, unperformed animations, imagined sensations, NPC reactions, new events or later consequences.'
     ];
     return $prompts;
@@ -54,7 +54,7 @@ function chimInteractManagedPrompts(): array {
     $prompts = chimInteractPromptDefaults();
     if (!isset($GLOBALS['db'])) return $prompts;
     try {
-        $rows = $GLOBALS['db']->fetchAll("SELECT prompt_key, custom_prompt, default_prompt FROM prompts WHERE prompt_key IN ('interact_rules_normal','interact_rules_cheat','interact_narration')");
+        $rows = $GLOBALS['db']->fetchAll("SELECT prompt_key, custom_prompt, default_prompt FROM prompts WHERE prompt_key IN ('interact_rules','interact_narration')");
         foreach ($rows ?: [] as $row) {
             $key = $row['prompt_key'];
             if (!array_key_exists($key, $prompts)) continue;

@@ -8811,7 +8811,7 @@ if ($checkVersion('interact_prompts') >= 20261005002 && $checkVersion('interact_
 // Refresh normal action selection guidance while preserving custom rules.
 if ($checkVersion('interact_prompts') >= 20261005003 && $checkVersion('interact_prompts') < 20261005004) {
     require_once __DIR__.'/../lib/interact_prompts.php';
-    $normalDefault = $db->escape(chimInteractPromptDefaults()['interact_rules_normal']);
+    $normalDefault = $db->escape(chimInteractPromptDefaults()['interact_rules']);
     if ($db->execQuery("UPDATE public.prompts SET default_prompt='{$normalDefault}', updated_at=CURRENT_TIMESTAMP
         WHERE prompt_key='interact_rules_normal'") !== false) {
         $updateVersion('interact_prompts', 20261005004);
@@ -8822,7 +8822,7 @@ if ($checkVersion('interact_prompts') >= 20261005003 && $checkVersion('interact_
 if ($checkVersion('interact_prompts') >= 20261005004 && $checkVersion('interact_prompts') < 20261005005) {
     require_once __DIR__.'/../lib/interact_prompts.php';
     $ok = true;
-    foreach (['interact_rules_normal','interact_narration'] as $key) {
+    foreach (['interact_rules','interact_narration'] as $key) {
         $text = $db->escape(chimInteractPromptDefaults()[$key]);
         $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
             WHERE prompt_key='{$key}'") !== false && $ok;
@@ -8848,11 +8848,41 @@ if ($checkVersion('interact_prompts') >= 20261005005 && $checkVersion('interact_
 if ($checkVersion('interact_prompts') >= 20261005006 && $checkVersion('interact_prompts') < 20261005007) {
     require_once __DIR__.'/../lib/interact_prompts.php';
     $ok = true;
-    foreach (['interact_rules_normal','interact_narration'] as $key) {
+    foreach (['interact_rules','interact_narration'] as $key) {
         $text = $db->escape(chimInteractPromptDefaults()[$key]);
         $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
             WHERE prompt_key='{$key}'") !== false && $ok;
     }
     if ($ok) $updateVersion('interact_prompts', 20261005007);
     else Logger::error('Failed to refresh Interact intent-first guidance');
+}
+
+// Consolidate modes atomically; keep applicable custom rules and archive retired overrides in the description.
+if ($checkVersion('interact_prompts') >= 20261005007 && $checkVersion('interact_prompts') < 20261005008) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $db->execQuery('BEGIN');
+    try {
+        $text=$db->escape(chimInteractPromptDefaults()['interact_rules']);
+        $sql="INSERT INTO public.prompts (prompt_key,default_prompt,custom_prompt,description)
+            VALUES ('interact_rules','{$text}',
+                (SELECT custom_prompt FROM public.prompts WHERE prompt_key='interact_rules_cheat'),
+                'CHIM Interact rules. Engine eligibility and response constraints remain enforced.')
+            ON CONFLICT (prompt_key) DO UPDATE SET default_prompt=EXCLUDED.default_prompt,
+                custom_prompt=COALESCE(NULLIF(prompts.custom_prompt,''),EXCLUDED.custom_prompt), updated_at=CURRENT_TIMESTAMP";
+        if ($db->execQuery($sql)===false) throw new RuntimeException('Could not consolidate Interact rules');
+        // Archive both overrides before deleting their exposed mode entries, even when they differ.
+        if ($db->execQuery("UPDATE public.prompts SET description=COALESCE(description,'CHIM Interact rules.') || COALESCE((
+            SELECT E'\\n\\nRetired mode customizations (archive only; not active rules):\\n' ||
+                string_agg(prompt_key || E':\\n' || custom_prompt,E'\\n\\n' ORDER BY prompt_key)
+            FROM public.prompts WHERE prompt_key IN ('interact_rules_normal','interact_rules_cheat')
+                AND NULLIF(trim(custom_prompt),'') IS NOT NULL),'')
+            WHERE prompt_key='interact_rules'")===false
+            || $db->execQuery("DELETE FROM public.prompts WHERE prompt_key IN ('interact_rules_normal','interact_rules_cheat')")===false)
+            throw new RuntimeException('Could not preserve retired Interact customizations');
+        $updateVersion('interact_prompts',20261005008);
+        if ($db->execQuery('COMMIT')===false) throw new RuntimeException('Could not commit Interact rules');
+    } catch (Throwable $error) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Failed to consolidate Interact rules: '.$error->getMessage());
+    }
 }

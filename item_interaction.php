@@ -6,20 +6,39 @@ require_once __DIR__.'/lib/chim_interaction.php';
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
 
-// Generate missing audio after committing the receipt; identical retries reuse its cache key.
-function chimInteractSpeech(array $state): array {
+// Deliver each ordinary dialogue chunk as soon as its speech is ready; retries keep stable IDs.
+function chimInteractSpeech(array $state, bool $stream = false): array {
     $narration=$state['narration'];
-    $audio=__DIR__.'/soundcache/'.$narration['tts_cache_key'].'.wav';
-    if (!is_file($audio) || filesize($audio)<=44) {
-        $narrator=(new Narrator())->getNarratorData();
-        chimDirectorActorGlobals($narrator);
-        $GLOBALS['DIRECT_NARRATOR_DIALOGUE']=true;
-        $GLOBALS['CHIM_SPEECH_TRACE_ID']=$narration['utterance_id'];
-        try {
-            callNpcTtsWithFallback($narration['text'],'default',$narration['utterance_id']);
-        } catch (Throwable $error) {
-            Logger::warn('[INTERACT] Narrator audio unavailable; subtitles remain available');
+    $chunks=$narration['chunks'] ?? [$narration];
+    $narrator=(new Narrator())->getNarratorData();
+    chimDirectorActorGlobals($narrator);
+    $GLOBALS['DIRECT_NARRATOR_DIALOGUE']=true;
+    if ($stream) {
+        header('Content-Type: application/x-ndjson');
+        header('X-Accel-Buffering: no');
+        ini_set('zlib.output_compression','0');
+        while (ob_get_level()>0) ob_end_flush();
+    }
+    foreach ($chunks as $index=>$chunk) {
+        $audio=__DIR__.'/soundcache/'.$chunk['tts_cache_key'].'.wav';
+        if (!is_file($audio) || filesize($audio)<=44) {
+            $GLOBALS['CHIM_SPEECH_TRACE_ID']=$chunk['utterance_id'];
+            try {
+                callNpcTtsWithFallback($chunk['text'],'default',$chunk['utterance_id']);
+            } catch (Throwable $error) {
+                Logger::warn('[INTERACT] Narrator audio unavailable; subtitles remain available');
+            }
         }
+        clearstatcache(true,$audio);
+        $chunk['audio_ready']=is_file($audio) && filesize($audio)>44;
+        if ($stream) {
+            echo json_encode(['ok'=>true,'id'=>$state['id'],'narration'=>$chunk,'chunk_index'=>$index],JSON_INVALID_UTF8_SUBSTITUTE)."\n";
+            flush();
+        }
+    }
+    if ($stream) {
+        echo json_encode(['ok'=>true,'id'=>$state['id'],'done'=>true,'chunk_count'=>count($chunks)])."\n";
+        flush();
     }
     return $narration;
 }
@@ -59,15 +78,17 @@ try {
         if ((int)($recent['count'] ?? 0)>=6) throw new RuntimeException('Please wait before another attempt');
         $intent=trim((string)($input['intent'] ?? ''));
         if ($intent==='' || mb_strlen($intent)>1000) throw new InvalidArgumentException('Describe the attempt in 1000 characters or fewer');
-        $cheatMode=array_key_exists('cheat_mode', $input) ? $input['cheat_mode'] : false;
-        if (!is_bool($cheatMode)) throw new InvalidArgumentException('Cheat mode must be boolean');
         $snapshot=$input['snapshot'] ?? null;
         if (!is_array($snapshot) || !array_key_exists('item',$snapshot) || ($snapshot['item']!==null && !is_array($snapshot['item'])) || !is_array($snapshot['target'] ?? null)) throw new InvalidArgumentException('Missing current game snapshot');
+        if (isset($snapshot['selected_magic']) && !is_array($snapshot['selected_magic'])) throw new InvalidArgumentException('Invalid selected magic');
+        $selectedMagic=$snapshot['selected_magic'] ?? null;
+        if ($selectedMagic!==null && (trim((string)($selectedMagic['name'] ?? ''))==='' || !in_array($selectedMagic['kind'] ?? '',['spell','power','shout'],true))) throw new InvalidArgumentException('Invalid selected magic');
         $target=mb_substr((string)($snapshot['target']['name'] ?? ''),0,160);
         $hasItem=$snapshot['item']!==null;
         $item=$hasItem ? mb_substr((string)($snapshot['item']['name'] ?? ''),0,160) : null;
         $allowed=array_intersect_key(chimInteractCatalog(),array_flip(array_filter($input['capabilities'] ?? [],'is_string')));
         if (($snapshot['target']['actor'] ?? false)===true) unset($allowed['burning_visual']);
+        if ($selectedMagic===null) unset($allowed['cast_selected_magic']);
         if ($hasItem) unset($allowed['consume_world']);
         if (!$hasItem) $allowed=array_diff_key($allowed,array_flip(['give','store','consume','equip','magic','drop','place']));
         if (!$allowed || $target==='' || ($hasItem && $item==='')) throw new InvalidArgumentException('No supported interaction');
@@ -101,14 +122,14 @@ try {
         $profile=[];
         foreach (['personality','occupation','goals','npc_static_bio'] as $field) $profile[$field]=mb_substr((string)($npc[$field] ?? ''),0,500);
         $state=['id'=>$id,'session'=>$session,'status'=>'resolving','player'=>$player,'target'=>$target,'item'=>$item,
-            'gamets'=>$gamets,'allowed'=>$allowed,'intent'=>$intent,'cheat_mode'=>$cheatMode,
+            'gamets'=>$gamets,'allowed'=>$allowed,'intent'=>$intent,'selected_magic'=>$selectedMagic,
             'target_ref'=>(string)($snapshot['target']['ref_id'] ?? ''),
             'target_speaker'=>(string)($snapshot['target']['speaker'] ?? '')];
         $rowid=$db->insertReturningId('rolemaster',['type'=>'item_interaction','localts'=>time(),'ttl'=>600,'data'=>json_encode($state)],'rowid');
         if (!$rowid) throw new RuntimeException('Could not save request');
         if ($db->query('COMMIT')===false) throw new RuntimeException('Could not save attempt');
         unset($snapshot['target']['ref_id'],$snapshot['target']['speaker']);
-        $plan=chimInteractGenerate(['player'=>$player,'intent'=>$intent,'cheat_mode'=>$cheatMode,'current_game'=>$snapshot,'target_profile'=>$profile,'recent_context'=>$history],$allowed);
+        $plan=chimInteractGenerate(['player'=>$player,'intent'=>$intent,'current_game'=>$snapshot,'target_profile'=>$profile,'recent_context'=>$history],$allowed);
         $state['failure_scene']=empty($plan['steps']);
         $state['failure_scene_token']=$state['failure_scene'] ? bin2hex(random_bytes(16)) : '';
         if ($db->query('BEGIN')===false) throw new RuntimeException('Could not begin resolution');
@@ -131,7 +152,8 @@ try {
     }
     if ($op==='audio' && $state && hash_equals($state['session'],$session) && $state['status']==='completed') {
         $db->query('COMMIT');
-        echo json_encode(['ok'=>true,'id'=>$id,'narration'=>chimInteractSpeech($state)],JSON_INVALID_UTF8_SUBSTITUTE);
+        if (($input['stream'] ?? false)===true) chimInteractSpeech($state,true);
+        else echo json_encode(['ok'=>true,'id'=>$id,'narration'=>chimInteractSpeech($state)],JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
     if ($op==='receipt' && $state && hash_equals($state['session'],$session) && $state['status']==='completed') {
@@ -159,6 +181,7 @@ try {
         'unlock'=>'unlock '.$state['target'], 'activate'=>'use '.$state['target'], 'open'=>'open '.$state['target'],
         'close'=>'close '.$state['target'], 'destroy'=>'damage '.$state['target'], 'disable'=>'remove '.$state['target'],
         'resize'=>'change the size of '.$state['target'], 'magic'=>'use '.$state['item'].' on '.$state['target'],
+        'cast_selected_magic'=>'use '.($state['selected_magic']['name'] ?? 'magic').' on '.$state['target'],
         'heal'=>'heal '.$state['target'], 'restore_stamina'=>'restore '.$state['target']."'s strength",
         'restore_magicka'=>'restore '.$state['target']."'s magicka", 'disarm'=>'disarm '.$state['target'],
         'unequip'=>'remove armor from '.$state['target'], 'drop'=>'drop '.$state['item'],
@@ -177,7 +200,8 @@ try {
         }
         $detail=mb_substr((string)($receipt['detail'] ?? ''),0,300);
         $facts[]=$step['effect'].': '.$status.($detail!=='' ? ' ('.$detail.')' : '');
-        if ($status==='succeeded' && $step['effect']==='activate') $sentences[]=$state['player'].' uses '.$state['target'].'.';
+        if ($status==='succeeded' && $step['effect']==='cast_selected_magic') $sentences[]=$state['player'].' casts '.($state['selected_magic']['name'] ?? 'the selected magic').'.';
+        elseif ($status==='succeeded' && $step['effect']==='activate') $sentences[]=$state['player'].' uses '.$state['target'].'.';
         elseif ($status==='succeeded' && $step['effect']==='consume_world') $sentences[]=$state['player'].' finishes '.$state['target'].'.';
         elseif ($status==='succeeded' && $step['effect']==='consume') $sentences[]=$state['target'].' finishes '.$state['item'].'.';
         elseif ($status==='succeeded' && $step['narration']!=='') $sentences[]=$step['narration'];
@@ -200,6 +224,11 @@ try {
     $state['status']='completed'; $state['receipts']=$input['receipts'];
     $utterance='interact-'.$id;
     $state['narration']=['text'=>$text,'utterance_id'=>$utterance,'tts_cache_key'=>md5($utterance)];
+    $state['narration']['chunks']=[];
+    foreach (split_sentences_stream(cleanResponse($text)) as $index=>$chunkText) {
+        $chunkId=$utterance.'-'.$index;
+        $state['narration']['chunks'][]=['text'=>$chunkText,'utterance_id'=>$chunkId,'tts_cache_key'=>md5($chunkId)];
+    }
     $encoded=$db->escape(json_encode($state,JSON_THROW_ON_ERROR));
     if ($db->query("UPDATE rolemaster SET data='{$encoded}' WHERE rowid=".(int)$row['rowid'])===false
         || !$db->insertReturningId('eventlog',['type'=>'infoaction','ts'=>time(),'localts'=>time(),'gamets'=>$gamets,
