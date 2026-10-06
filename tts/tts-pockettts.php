@@ -59,22 +59,27 @@ function pockettts_audio_cpp_url($endpoint) {
 	return $endpoint . '/v1/audio/speech';
 }
 
-function pockettts_backend_voice_payload($voice) {
-	$cleanName = basename((string)$voice, '.wav');
-	if ($cleanName !== '') {
-		$paths = [
-			dirname(__FILE__) . '/../data/voices/' . $cleanName . '.wav',
-			'/home/dwemer/pocket-tts/speakers/' . $cleanName . '.wav',
-			'/home/dwemer/audio.cpp/speakers/' . $cleanName . '.wav',
-		];
-		foreach ($paths as $path) {
-			if (is_readable($path)) {
-				return ['voice_ref' => $path];
-			}
-		}
+function pockettts_backend_voice_payload($voice, $endpoint = '', array $request = []) {
+	require_once __DIR__ . '/audio_cpp_voice_ref.php';
+	$reference = chimAudioCppVoiceReference(strval($endpoint), strval($voice), $request, [
+		'/home/dwemer/pocket-tts/speakers/',
+		'/home/dwemer/audio.cpp/speakers/',
+	]);
+	if ($reference['status'] === 'error') {
+		return ['error' => $reference['error']];
 	}
-
-	return ['voice' => 'alba'];
+	if (isset($reference['voice_ref'])) {
+		return ['voice_ref' => $reference['voice_ref']];
+	}
+	$cleanName = trim(strval($voice));
+	if (strtolower(substr($cleanName, -4)) === '.wav') {
+		$cleanName = substr($cleanName, 0, -4);
+	}
+	// A remote service may hold named voices of its own; a same-host service keeps the prior default.
+	if ($cleanName === '' || chimAudioCppIsLoopback(strval($endpoint))) {
+		return ['voice' => 'alba'];
+	}
+	return ['voice' => $cleanName];
 }
 
 function pockettts_audio_cpp_model() {
@@ -92,7 +97,11 @@ function pockettts_build_request($endpoint, $text, $voice, $language) {
 			'input' => $text,
 			'language' => $language ?: 'en',
 		];
-		$data = array_merge($data, pockettts_backend_voice_payload($voice));
+		$voicePayload = pockettts_backend_voice_payload($voice, $endpoint, $data);
+		if (isset($voicePayload['error'])) {
+			return ['error' => $voicePayload['error'], 'url' => pockettts_audio_cpp_url($endpoint), 'data' => $data, 'audio_cpp' => true];
+		}
+		$data = array_merge($data, $voicePayload);
 		return [
 			'url' => pockettts_audio_cpp_url($endpoint),
 			'data' => $data,
@@ -112,14 +121,27 @@ function pockettts_build_request($endpoint, $text, $voice, $language) {
 }
 
 function pockettts_post_request(array $request) {
+	$jsonFlags = empty($request['audio_cpp']) ? 0 : (JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+	if (isset($request['error'])) {
+		return ['response' => false, 'http_code' => 0, 'headers' => [], 'options' => ['error' => $request['error']]];
+	}
 	$options = [
 		'http' => [
 			'header' => "Content-type: application/json\r\nAccept: audio/wav\r\n",
 			'method' => 'POST',
-			'content' => json_encode($request['data']),
+			'content' => json_encode($request['data'], $jsonFlags),
 		],
 	];
+	if (!empty($request['audio_cpp']) && !is_string($options['http']['content'])) {
+		return ['response' => false, 'http_code' => 0, 'headers' => [], 'options' => ['error' => 'Request could not be encoded as JSON']];
+	}
 	$context = stream_context_create($options);
+	// Request options are written to soundcache diagnostics; never include reference audio there.
+	if (is_array($request['data']['voice_ref'] ?? null)) {
+		$logged = $request['data'];
+		$logged['voice_ref'] = ['type' => 'base64', 'data' => '(' . strlen(strval($logged['voice_ref']['data'] ?? '')) . ' characters omitted)'];
+		$options['http']['content'] = json_encode($logged, $jsonFlags);
+	}
 	$response = @file_get_contents($request['url'], false, $context);
 	$responseHeaders = isset($http_response_header) && is_array($http_response_header)
 		? $http_response_header
@@ -127,6 +149,14 @@ function pockettts_post_request(array $request) {
 	$httpCode = 0;
 	if (isset($responseHeaders[0]) && preg_match('/\s(\d{3})(?:\s|$)/', $responseHeaders[0], $matches)) {
 		$httpCode = intval($matches[1]);
+	}
+	if (is_array($request['data']['voice_ref'] ?? null)) {
+		require_once __DIR__ . '/audio_cpp_voice_ref.php';
+		$rejection = chimAudioCppInlineRejection('Remote audio.cpp PocketTTS', $httpCode);
+		if ($rejection !== null) {
+			$GLOBALS['CHIM_AUDIO_CPP_VOICE_REF_ERROR'] = $rejection;
+			Logger::warn($rejection);
+		}
 	}
 
 	return [
@@ -538,6 +568,11 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
 
 		$endpoint = normalize_endpoint_url($GLOBALS["TTS"]["POCKETTTS"]["endpoint"] ?? '');
 		$request = pockettts_build_request($endpoint, $newString, $voice, $lang);
+		if (isset($request['error'])) {
+			// Keep the NPC's voice rather than substituting a default one.
+			Logger::warn("PocketTTS: " . $request['error']);
+			return false;
+		}
 		$requestResult = pockettts_post_request($request);
 		$response = $requestResult['response'];
 		$options = $requestResult['options'];
