@@ -125,10 +125,16 @@ function chimInworldBuildTags(array $data, string $modelId): array
         }
         $styles = array_slice(array_values(array_unique($styles)), 0, 6);
     }
-    $prompt = strtr($free ? (string)$data['template_free'] : (string)$data['template'], [
+    $template = $free ? (string)$data['template_free'] : (string)$data['template'];
+    $max = max(0, (int)($data['max_style'] ?? 2));
+    if ($max === 0) {
+        // 0 = no limit: drop the "at most {MAX_TAGS} per reply" clause; any other {MAX_TAGS} reads "any number".
+        $template = preg_replace('/,?\s*at most \{MAX_TAGS\} per reply/i', '', $template);
+    }
+    $prompt = strtr($template, [
         '{STYLE_TAGS}' => $styles ? implode(' ', $styles) : '(none)',
         '{SOUND_TAGS}' => $tags['sound'] ? implode(' ', $tags['sound']) : '(none)',
-        '{MAX_TAGS}' => (string)max(1, (int)($data['max_style'] ?? 2)),
+        '{MAX_TAGS}' => $max === 0 ? 'any number' : (string)$max,
     ]);
     return [$list, $prompt];
 }

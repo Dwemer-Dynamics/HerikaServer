@@ -1341,17 +1341,27 @@ $GLOBALS["TTS_IN_USE"] = function($textString, $mood, $stringforhash) {
     // would only reach the first sentence. Carry it over to the next sentences of the same reply and limit
     // how many different directions one reply may use. Only a tag at the start of a sentence counts as a
     // direction; sound tags ([laugh] etc.) and tags in the middle of a sentence are left alone.
+    // A reply ends when another NPC starts speaking. Inline narration switches to The Narrator in the middle
+    // of a reply, so the narrator keeps its own state and the NPC's direction and count survive it.
     $chimLeadTag = false;
     $chimSpeaker = strval($GLOBALS["HERIKA_NAME"] ?? '');
-    if (!isset($GLOBALS["CHIM_INWORLD_TAG_STATE"]) || !is_array($GLOBALS["CHIM_INWORLD_TAG_STATE"])
-        || ($GLOBALS["CHIM_INWORLD_TAG_STATE"]["npc"] ?? null) !== $chimSpeaker) {
-        $GLOBALS["CHIM_INWORLD_TAG_STATE"] = ["npc" => $chimSpeaker, "last" => "", "used" => []];
+    $chimIsNarrator = strcasecmp(trim($chimSpeaker), "The Narrator") === 0;
+    if (!isset($GLOBALS["CHIM_INWORLD_TAG_STATE"]["speakers"]) || !is_array($GLOBALS["CHIM_INWORLD_TAG_STATE"]["speakers"])
+        || (!$chimIsNarrator && ($GLOBALS["CHIM_INWORLD_TAG_STATE"]["npc"] ?? null) !== null
+            && $GLOBALS["CHIM_INWORLD_TAG_STATE"]["npc"] !== $chimSpeaker)) {
+        $GLOBALS["CHIM_INWORLD_TAG_STATE"] = ["npc" => $chimIsNarrator ? null : $chimSpeaker, "speakers" => []];
+    }
+    if (!$chimIsNarrator && $GLOBALS["CHIM_INWORLD_TAG_STATE"]["npc"] === null) {
+        $GLOBALS["CHIM_INWORLD_TAG_STATE"]["npc"] = $chimSpeaker; // narration came first in this reply
+    }
+    if (!isset($GLOBALS["CHIM_INWORLD_TAG_STATE"]["speakers"][$chimSpeaker])) {
+        $GLOBALS["CHIM_INWORLD_TAG_STATE"]["speakers"][$chimSpeaker] = ["last" => "", "used" => []];
     }
     if (!empty($GLOBALS["TTS"]["INWORLD"]["PARALINGUISTIC_TAGS_ENABLED"])) {
         $chimSoundList = strval($GLOBALS["TTS"]["INWORLD"]["PARALINGUISTIC_TAGS_SOUNDS"] ?? '[laugh],[chuckle],[growl],[sigh],[breathe],[cough],[yawn],[clear throat],[hmm]');
         $chimSounds = array_filter(array_map(function ($t) { return strtolower(trim($t)); }, explode(',', $chimSoundList)));
         $chimMax = intval($GLOBALS["TTS"]["INWORLD"]["PARALINGUISTIC_TAGS_MAX_STYLE"] ?? 2);
-        $chimState = &$GLOBALS["CHIM_INWORLD_TAG_STATE"];
+        $chimState = &$GLOBALS["CHIM_INWORLD_TAG_STATE"]["speakers"][$chimSpeaker];
 
         // Split the sentence into its leading tags and the rest.
         $chimRest = ltrim($textString);

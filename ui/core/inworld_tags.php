@@ -121,6 +121,7 @@ $inworld = array_values(array_filter($ttsConnector->readAll() ?: [], static func
 $message = '';
 $importNote = null;
 $errors = [];
+$formTags = null; // rows to redraw exactly as submitted when a save is refused
 // The dictionary is the same in every Inworld connector; read it from the first one that has it.
 $data = iwtDefaults();
 foreach ($inworld as $row) {
@@ -164,8 +165,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } else {
         $tags = [];
+        $submitted = [];
         $seen = [];
         foreach (($_POST['tags'] ?? []) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $submitted[] = [
+                'on' => !empty($row['on']),
+                'tag' => (string)($row['tag'] ?? ''),
+                'type' => ($row['type'] ?? '') === 'sound' ? 'sound' : 'style',
+                'models' => in_array($row['models'] ?? '', ['both', 'tts2', 'flash'], true) ? $row['models'] : 'both',
+                'note' => (string)($row['note'] ?? ''),
+            ];
             [$tag, $err] = iwtCleanTag((string)($row['tag'] ?? ''));
             if ($err !== '') {
                 $errors[] = $err;
@@ -192,6 +204,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'max_style' => max(0, min(5, (int)($_POST['max_style'] ?? 2))),
             'tags' => $tags,
         ];
+        if ($errors) {
+            $formTags = $submitted; // not saved: keep every row as typed so it can be corrected
+        }
     }
 
     if (!$errors) {
@@ -264,7 +279,7 @@ main { padding: <?php echo $isEmbed ? '10px 5px 5px' : '30px 5px 5px'; ?>; }
         <table id="iwt_table">
             <thead><tr><th><input type="checkbox" title="All on / off" onclick="document.querySelectorAll('#iwt_table tbody input[type=checkbox]').forEach(c => c.checked = this.checked)"> On</th><th>Tag</th><th>Type</th><th>Models</th><th class="hide-sm">Note</th><th></th></tr></thead>
             <tbody>
-            <?php foreach ($data['tags'] as $i => $t): ?>
+            <?php foreach ($formTags ?? $data['tags'] as $i => $t): ?>
                 <tr>
                     <td><input type="checkbox" name="tags[<?php echo $i; ?>][on]" value="1" <?php echo !empty($t['on']) ? 'checked' : ''; ?>></td>
                     <td class="tagcell"><input type="text" name="tags[<?php echo $i; ?>][tag]" value="<?php echo iwtH($t['tag']); ?>"></td>
@@ -293,7 +308,7 @@ main { padding: <?php echo $isEmbed ? '10px 5px 5px' : '30px 5px 5px'; ?>; }
         <label style="display:block;margin-bottom:8px"><b>Direction tags per reply, at most:</b>
             <input type="number" name="max_style" min="0" max="5" value="<?php echo (int)($data['max_style'] ?? 2); ?>" style="width:70px;display:inline-block">
             <span class="help">0 = no limit. Extra direction tags are removed before speech. A direction is carried over to the following sentences of the same reply, so one tag at the start covers the whole reply. Sound tags are not counted.</span></label>
-        <p class="help"><code>{MAX_TAGS}</code> = this limit. <code>{STYLE_TAGS}</code> and <code>{SOUND_TAGS}</code> are replaced with the enabled tags that fit each connector's model.</p>
+        <p class="help"><code>{MAX_TAGS}</code> = this limit (with 0, "at most {MAX_TAGS} per reply" is left out). <code>{STYLE_TAGS}</code> and <code>{SOUND_TAGS}</code> are replaced with the enabled tags that fit each connector's model.</p>
         <label class="help" style="display:block">TTS-2 with own tags:</label>
         <textarea name="template_free"><?php echo iwtH($data['template_free']); ?></textarea>
         <label class="help" style="display:block;margin-top:10px">Flash, and TTS-2 when own tags are off (list only):</label>
@@ -359,7 +374,7 @@ main { padding: <?php echo $isEmbed ? '10px 5px 5px' : '30px 5px 5px'; ?>; }
 <script>
 (function () {
     const body = document.querySelector('#iwt_table tbody');
-    let next = <?php echo count($data['tags']); ?> + 1000;
+    let next = <?php echo count($formTags ?? $data['tags']); ?> + 1000;
     document.getElementById('iwt_add').addEventListener('click', function () {
         const i = next++;
         const tr = document.createElement('tr');

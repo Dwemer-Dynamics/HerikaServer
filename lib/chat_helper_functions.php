@@ -331,10 +331,12 @@ function cleanResponse($rawResponse)
         }
     }
 
-    if ($shouldPreserveTags && !empty($eventTags)) {
-        // Inworld TTS-2 follows free short directions, so keep any tag of 1-4 English words there.
-        $chimFreeTags = isset($ttsKey) && $ttsKey === 'INWORLD' && !empty($GLOBALS["TTS"]["INWORLD"]["PARALINGUISTIC_TAGS_FREEFORM"])
-            && stripos(strval($GLOBALS["TTS"]["INWORLD"]["model_id"] ?? 'inworld-tts-2'), 'flash') === false;
+    // Inworld TTS-2 follows free short directions, so keep any tag of 1-4 English words there,
+    // even when every listed example tag is turned off.
+    $chimFreeTags = $shouldPreserveTags && isset($ttsKey) && $ttsKey === 'INWORLD' && !empty($GLOBALS["TTS"]["INWORLD"]["PARALINGUISTIC_TAGS_FREEFORM"])
+        && stripos(strval($GLOBALS["TTS"]["INWORLD"]["model_id"] ?? 'inworld-tts-2'), 'flash') === false;
+
+    if ($shouldPreserveTags && (!empty($eventTags) || $chimFreeTags)) {
         $rawResponse = preg_replace_callback('/\[.*?\]/', function($matches) use ($eventTags, $chimFreeTags) {
             // Convert to lowercase to ensure case-insensitive matching
             foreach ($eventTags as $tag) {
