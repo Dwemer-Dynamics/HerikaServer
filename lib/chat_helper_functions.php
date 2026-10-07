@@ -332,12 +332,19 @@ function cleanResponse($rawResponse)
     }
 
     if ($shouldPreserveTags && !empty($eventTags)) {
-        $rawResponse = preg_replace_callback('/\[.*?\]/', function($matches) use ($eventTags) {
+        // Inworld TTS-2 follows free short directions, so keep any tag of 1-4 English words there.
+        $chimFreeTags = isset($ttsKey) && $ttsKey === 'INWORLD' && !empty($GLOBALS["TTS"]["INWORLD"]["PARALINGUISTIC_TAGS_FREEFORM"])
+            && stripos(strval($GLOBALS["TTS"]["INWORLD"]["model_id"] ?? 'inworld-tts-2'), 'flash') === false;
+        $rawResponse = preg_replace_callback('/\[.*?\]/', function($matches) use ($eventTags, $chimFreeTags) {
             // Convert to lowercase to ensure case-insensitive matching
             foreach ($eventTags as $tag) {
                 if (strtolower($matches[0]) === strtolower($tag)) {
                     return $matches[0]; // Return the tag as-is
                 }
+            }
+            if ($chimFreeTags && preg_match("/^\\[[A-Za-z][A-Za-z' -]{0,40}\\]$/", $matches[0])
+                && count(preg_split('/\\s+/', trim($matches[0], '[] '))) <= 4) {
+                return $matches[0];
             }
             return ''; // Delete the tag
         }, $rawResponse);
@@ -1627,6 +1634,18 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                     $responseText = "";
                     $responseTextUnmooded = "";
                 }
+            }
+
+            // Inworld paralinguistic tags are for the voice only: keep them out of subtitles, the game text and history.
+            if (($GLOBALS["TTSFUNCTION"] ?? '') === 'inworld' && !empty($GLOBALS["TTS"]["INWORLD"]["PARALINGUISTIC_TAGS_ENABLED"])) {
+                $chimStripTags = function ($s) {
+                    $out = trim(preg_replace('/\s{2,}/', ' ', preg_replace('/\[[^\[\]]{1,60}\]/', '', (string)$s)));
+                    return $out !== '' ? $out : (string)$s; // a line that is only a tag stays as it is
+                };
+                $responseText = $chimStripTags($responseText);
+                $responseTextUnmooded = $chimStripTags($responseTextUnmooded);
+                $responseForSubtitles = $chimStripTags($responseForSubtitles);
+                $responseForContext = $chimStripTags($responseForContext);
             }
 
             $responseForSpeech = (string)$responseForTTS;

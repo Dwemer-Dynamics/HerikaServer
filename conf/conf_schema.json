@@ -457,7 +457,8 @@
       "language": {"type":"select","values":["en-US","zh-CN","ko-KR","ja-JP","ru-RU","it-IT","es-ES","pt-BR","de-DE","fr-FR","ar-SA","pl-PL","nl-NL","hi-IN","he-IL"],"description":"Language to use for TTS generation. Uses BCP-47 regional language codes."},
       "model_id": {"type":"select","values":["inworld-tts-1 (deprecated)","inworld-tts-1-max (deprecated)","inworld-tts-1.5-mini","inworld-tts-1.5-max","inworld-tts-2","inworld-tts-2-flash"],"description":"Inworld model to use. inworld-tts-2 prioritizes quality; inworld-tts-2-flash prioritizes speed.","helpurl":"https://docs.inworld.ai/docs/tts/tts-models"},
       "temperature": {"type":"number","description":"Sampling temperature (0-2). Higher values make output more random. Default: 1.0"},
-      "speed": {"type":"number","description":"Speaking rate/speed (0.5-1.5). Default: 1.0"}
+      "speed": {"type":"number","description":"Speaking rate/speed (0.5-1.5). Default: 1.0"},
+      "PARALINGUISTIC_TAGS_ENABLED":{"type":"boolean","description":"Let the LLM write delivery and sound tags for Inworld, e.g. [smug] Nice swing. [laugh]. With inworld-tts-2 the LLM may also write its own short directions such as [mad as hell]. Tags are removed from subtitles and history. <a class='btn-primary' href='inworld_tags.php' target='_blank' style='display:inline-block;margin-top:6px;'>Edit tags</a>","scope":"global"}
     }
 },
   "TTSFUNCTION_PLAYER": {"type":"select","userlvl":"basic","scope":"global","values":["omnivoice","higgs","pockettts","chatterbox","xtts-fastapi","inworld","cartesia","piper-tts","xvasynth","none","melotts","mimic3","azure","11labs","openai","kokoro","zonos_gradio"],"description":"Text-to-Speech service options. Used to generate your voice.","_title":"Player TTS"},
