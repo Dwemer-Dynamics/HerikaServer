@@ -171,16 +171,6 @@ Return only the required JSON object: steps and failure_narration. Each step con
 - narration: the intended successful outcome; failure_narration: an alternative for confirmed failure.
 
 Return empty steps with failure_narration only when no eligible mechanic meaningfully fulfills the intent or a concrete engine constraint prevents it. Otherwise leave top-level failure_narration empty. Never provide scripts, arbitrary identifiers, coordinates or additional targets. Execution receipts, not the plan, establish what happened; these engine and response constraints also apply to editable guidance below.
-
-## Illustrative examples
-
-These show format and intent mapping only. The actual eligible actions and value limits listed below always override them; never choose an action that is not listed.
-
-Selected magic Fireball, player asks to cast it at a living target, cast_selected_magic eligible:
-{"steps":[{"effect":"cast_selected_magic","value":0,"requires":[],"alive":true,"duration":0,"direction":"","axis":"","narration":"The player aims the selected Fireball at the target.","failure_narration":"The player tries to cast the selected spell, but it does not take effect."}],"failure_narration":""}
-
-Player asks to ignite a living target with a lit torch or fire salts, burning eligible with example limits 1 to 10:
-{"steps":[{"effect":"burning","value":5,"requires":[],"alive":true,"duration":5,"direction":"","axis":"","narration":"The player tries to set the target alight.","failure_narration":"The player tries to set the target alight, but it does not take effect."}],"failure_narration":""}
 PROMPT;
     $rules .= "\n\n## Interaction rules\n\n".$managed['interact_rules'];
     $rules .= "\n\n## Narration\n\n".$managed['interact_narration']."\n\n## Eligible actions";
