@@ -18,10 +18,14 @@ $GLOBALS['TTS_IN_USE'] = function ($textString, $mood, $stringforhash) {
     foreach (['HIGGS_TEXTMODIFIER', 'XTTS_TEXTMODIFIER'] as $group) {
         foreach (($GLOBALS['HOOKS'][$group] ?? []) as $hook) $text = call_user_func($hook, $text);
     }
-    $hash = md5('higgs|' . $endpoint . '|' . $model . '|' . $voice . '|' . trim($stringforhash) . '|' . $text);
+    // The client requests soundcache/md5(trim(text)).wav; the sidecar binds cache reuse to this voice and these exact bytes.
+    $hash = md5(trim($stringforhash));
+    $cacheKey = md5('higgs|' . $endpoint . '|' . $model . '|' . $voice . '|' . $text);
     $cache = dirname(__DIR__) . '/soundcache/';
     $output = $cache . $hash . '.wav';
-    if (($GLOBALS['AVOID_TTS_CACHE'] ?? true) === false && is_file($output) && filesize($output) > 44) return 'soundcache/' . $hash . '.wav';
+    $keyFile = $output . '.higgs';
+    if (($GLOBALS['AVOID_TTS_CACHE'] ?? true) === false && is_file($output) && filesize($output) > 44
+        && @file_get_contents($keyFile) === $cacheKey . '|' . @md5_file($output)) return 'soundcache/' . $hash . '.wav';
     $request = ['model' => $model, 'input' => $text, 'voice' => $voice];
     if (!in_array(strtolower(strval(parse_url($endpoint, PHP_URL_SCHEME))), ['http', 'https'], true)) return false;
     // Uploaded samples travel with the request to remote services; named voices remain the fallback.
@@ -76,7 +80,10 @@ $GLOBALS['TTS_IN_USE'] = function ($textString, $mood, $stringforhash) {
             Logger::warn('Higgs audio conversion failed.');
             return false;
         }
+        $digest = md5_file($converted);
         if (!rename($converted, $output)) return false;
+        // A failed sidecar write only disables reuse; a WAV later overwritten by another connector no longer matches.
+        if ($digest === false || @file_put_contents($keyFile, $cacheKey . '|' . $digest, LOCK_EX) === false) @unlink($keyFile);
     } finally {
         if (is_file($converted)) unlink($converted);
         unlink($raw);
