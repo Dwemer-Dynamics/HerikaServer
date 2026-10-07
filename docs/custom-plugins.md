@@ -15,6 +15,7 @@ Use a separate repository for an extension. Install its server payload under `ex
 | `prompts.php`, `dialogue_prompt.php` | [prompts/prompts.php](../prompts/prompts.php), [prompts/dialogue_prompt.php](../prompts/dialogue_prompt.php) |
 | `json_response_custom.php` | [functions/json_response.php](../functions/json_response.php): custom JSON response integration |
 | `prepostrequest.php`, `postrequest.php` | `main.php`: end-of-request hooks |
+| `interact_actions.php` | [lib/interact_extensions.php](../lib/interact_extensions.php): opt-in Interact actions built from existing effects; returns data only. See [Interact plugin actions](agent-guide.md#interact-plugin-actions) |
 
 Do not assume every endpoint executes every hook. Keep hook code bounded, avoid logging secrets, and fail cleanly when optional mods/providers or data are absent. Do not echo diagnostics into a streamed response. Namespaces/function prefixes prevent collisions with other installed extensions.
 

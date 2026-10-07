@@ -149,6 +149,66 @@ The snapshot carries `item: null` for itemless attempts. The client defaults to 
 
 The client interprets operation-specific receipts, not LLM claims of execution. Full mechanical behavior, exact-instance transfers, protected targets, input focus, Narrator playback and save/load cancellation require paired Skyrim validation. Ordinary Event Log observation records remain separate from the correlated attempt/outcome records; Interact does not insert an additional Narrator chat event.
 
+### Interact plugin actions
+
+Plugins can add actions to Interact's existing intent, plan, receipt and narration flow without editing the built-in effect handlers. [lib/interact_extensions.php](../lib/interact_extensions.php) implements both kinds:
+
+- **Game plugin actions** come from a Skyrim mod's Papyrus handler. The handler registers through CHIM's `CHIMInteractExtensions` script, which sends a descriptor with `resolve`. The CHIM [agent guide](https://github.com/Dwemer-Dynamics/CHIM/blob/unstable/AIAgent/docs/CHIM/agent-guide.md#plugin-actions) documents registration, the event and completion.
+- **Server plugin actions** are trusted compositions of built-in effects, declared in an installed package. They expand into ordinary steps before the plan is stored or returned. Older clients can run them without a game script.
+
+Both kinds use descriptor version 1:
+
+| Field | Contract |
+|---|---|
+| `id` | `namespace:action`. Each part is 1–31 characters from `a-z`, `0-9` and `_`, starting with a letter. `chim` is reserved. Every ID contains `:`, so it cannot replace a built-in effect. |
+| `description` | 1–240 bytes of UTF-8, trimmed, with no control characters. The prompt escapes it and labels it as plugin-supplied data. |
+| `targets` | A non-empty list of distinct values: `living_actor`, `dead_actor`, `object`. |
+| `item` | `optional`, `required` or `forbidden`. |
+| `min`, `max`, `whole` | Finite JSON numbers within ±1,000,000, with `min` ≤ `max`. If `whole` is true, the range must contain an integer. |
+
+**Game descriptors.** `resolve` may include `extensions`: a list of at most 16 objects with exactly the keys `version`, `id`, `description`, `targets`, `item`, `min`, `max` and `whole`. They are untrusted. A descriptor is accepted only if every field is valid and its ID is unique and also in `capabilities`. Its target and item rules must also match the snapshot. Invalid entries are dropped one by one, and a non-list or oversized payload is ignored. Accepted plugin steps must use the descriptor's bounds, `duration` 0 and empty `direction`/`axis`. They count toward the five-step limit. The receipt reports the plugin's own result, so the Event Log labels it `reported by game plugin, not verified by CHIM`. A `skipped`, `failed` or `unknown` receipt with `source: native` means CHIM skipped the step, could not dispatch it, timed out without a plugin report, or lost the target or registration before recording the report; the Event Log labels it a CHIM lifecycle outcome and leaves the game effect unverified. Any other combination for a game plugin step, including a missing or invalid `source` or a `native` success, is labelled `unconfirmed plugin provenance; game effect not verified by CHIM` and is never treated as CHIM evidence. The endpoint rejects a `succeeded` receipt for a game plugin step unless its `source` is exactly `plugin_reported`, so such a request records no outcome or narration; that label applies only to legacy or malformed stored data.
+
+**Server declarations.** A package opts in by placing `interact_actions.php` directly in `ext/<package>/`. The loader reads the folder names under `ext/` (at most 256 entries) and loads at most 16 declaration files and 32 actions. It loads each file once per request in an isolated scope, discards its output and logs any exceptions. It never loads `functions.php` or other hooks, and adds no dependencies or tables. Packages are visited in name order, and the first one to declare a namespace owns it. A later package using the same namespace is rejected. A server action whose ID matches an accepted game descriptor is skipped. The file must `return` an array with `version` 1, `namespace` and at most 16 `actions`. Each action has a `name`, the descriptor fields above and 1–5 `steps`. A step has:
+
+- `effect`: a built-in catalog effect. Plugin IDs are rejected, so actions cannot nest or recurse.
+- `value`: a number, or `"input"` to pass on the planned step's value.
+- `alive`: a boolean.
+- `requires`: optional indices of earlier steps in the same action.
+- `duration`, `direction` and `axis`: optional, with the same meaning as for a built-in step.
+
+No other keys are accepted. When it loads an action, the loader validates its steps with the built-in validator at both value extremes. Fractional values are also checked unless `whole` is true, so invalid bounds, conflicting inventory steps and unsupported selectors are rejected.
+
+A server action is advertised for a request only when every step's effect is in that request's built-in capabilities, after the snapshot narrows them. Each step's value range must also fit the allowed bounds. A server action can therefore never enable a game operation that the client did not offer. During expansion, each server action step becomes its built-in steps. A dependency on that step becomes a dependency on all of them. The whole expanded plan is validated again with the normal rules: at most five steps, one inventory operation, one pickup and one selected-magic cast, and only earlier dependencies. A plan that grows past five steps is rejected without running anything. The expansion record (`compositions`) is stored with the request. The narration is spoken once, if all steps in the group succeed. A confirmed failure of every step uses the group's failure narration. Otherwise each step is reported on its own. These are CHIM-checked receipts, labelled with the action that produced them.
+
+Requests without `extensions`, and servers with no `interact_actions.php` files, behave as before. Their Event Log and narration text is unchanged. Old servers ignore the `extensions` payload and drop plugin IDs from `capabilities`.
+
+This example, `ext/mymod/interact_actions.php`, only returns data; its package supplies no other Interact code.
+
+```php
+<?php
+return [
+    'version' => 1,
+    'namespace' => 'mymod',
+    'actions' => [
+        [
+            'name' => 'soothe',
+            'description' => 'Calm a living actor, then restore some of their stamina.',
+            'targets' => ['living_actor'],
+            'item' => 'optional',
+            'min' => 10,
+            'max' => 50,
+            'whole' => true,
+            'steps' => [
+                ['effect' => 'calm', 'value' => 'input', 'alive' => true, 'duration' => 20],
+                ['effect' => 'restore_stamina', 'value' => 25, 'alive' => true, 'requires' => [0]],
+            ],
+        ],
+    ],
+];
+```
+
+The Director can then choose `mymod:soothe` with a value from 10 to 50, as the calm level limit. The client receives `calm` (duration 20) and then `restore_stamina` 25, which depends on it. Each step's receipt comes from CHIM's own checks.
+
 ## Player voice responder decision
 
 CHIM posts to `stt_target.php` only for voice input whose own router would otherwise use its nearest-eligible fallback among two or more NPCs. The endpoint requires the game's JSON transport and playthrough tag, honours the CHIM interaction switch, and accepts at most 8 candidates and a 600-byte transcript. It uses only the dedicated Decision Connector (`CORE_CONNECTOR_DECISION`), while its enable switch is on and `chimIsDecisionConnector()` accepts it; it never reads the legacy Scene Classifier connector and never takes URLs, models or keys from the caller. The state sent to Jev holds the transcript, the candidates' names, distances and view/follower cues, and up to 8 recent `speech` lines with speaker and listener.
