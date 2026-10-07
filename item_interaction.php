@@ -57,6 +57,7 @@ try {
     chimRuntimeBootstrap(__DIR__,['run_db_updates'=>false,'load_general_settings'=>true,
         'load_stt_connector'=>false,'load_itt_connector'=>false,'load_player_name'=>true,'load_narrator'=>true]);
     require_once __DIR__.'/lib/item_interaction.php';
+    require_once __DIR__.'/lib/interact_extensions.php';
     require_once __DIR__.'/lib/core/npc_master.class.php';
     require_once __DIR__.'/lib/core/core_profiles.class.php';
     require_once __DIR__.'/lib/director_scene.php';
@@ -95,6 +96,12 @@ try {
         if ($selectedMagic===null) unset($allowed['cast_selected_magic']);
         if ($hasItem) unset($allowed['consume_world']);
         if (!$hasItem) $allowed=array_diff_key($allowed,array_flip(['give','store','consume','equip','magic','drop','place']));
+        // Plugin actions join only after built-ins are narrowed: game descriptors must be advertised and
+        // snapshot-eligible; server compositions must fit the built-in capabilities allowed above.
+        $capabilities=is_array($input['capabilities'] ?? null) ? $input['capabilities'] : [];
+        $extensions=chimInteractGameExtensions($input['extensions'] ?? null,$capabilities,$snapshot);
+        $extensions+=chimInteractServerExtensions($allowed,$snapshot,$extensions);
+        foreach ($extensions as $extensionId=>$extension) $allowed[$extensionId]=[$extension['min'],$extension['max']];
         if (!$allowed || $target==='' || ($hasItem && $item==='')) throw new InvalidArgumentException('No supported interaction');
         $location=mb_substr((string)($snapshot['location'] ?? ''),0,160);
         $sceneFilter=$location!=='' && $location!=='unknown' ? " OR location='".$db->escape($location)."'" : '';
@@ -129,11 +136,16 @@ try {
             'gamets'=>$gamets,'allowed'=>$allowed,'intent'=>$intent,'selected_magic'=>$selectedMagic,
             'target_ref'=>(string)($snapshot['target']['ref_id'] ?? ''),
             'target_speaker'=>(string)($snapshot['target']['speaker'] ?? '')];
+        if ($extensions) $state['extensions']=array_map(static fn(array $extension): array =>
+            array_intersect_key($extension,array_flip(['kind','package'])),$extensions);
         $rowid=$db->insertReturningId('rolemaster',['type'=>'item_interaction','localts'=>time(),'ttl'=>600,'data'=>json_encode($state)],'rowid');
         if (!$rowid) throw new RuntimeException('Could not save request');
         if ($db->query('COMMIT')===false) throw new RuntimeException('Could not save attempt');
         unset($snapshot['target']['ref_id'],$snapshot['target']['speaker']);
-        $plan=chimInteractGenerate(['player'=>$player,'intent'=>$intent,'current_game'=>$snapshot,'target_profile'=>$profile,'recent_context'=>$history],$allowed);
+        $plan=chimInteractGenerate(['player'=>$player,'intent'=>$intent,'current_game'=>$snapshot,'target_profile'=>$profile,'recent_context'=>$history],$allowed,$extensions);
+        $expanded=chimInteractExpandPlan($plan,$allowed,$extensions);
+        $plan=$expanded['plan'];
+        if ($expanded['compositions']) $state['compositions']=$expanded['compositions'];
         $state['failure_scene']=empty($plan['steps']);
         $state['failure_scene_token']=$state['failure_scene'] ? bin2hex(random_bytes(16)) : '';
         if ($db->query('BEGIN')===false) throw new RuntimeException('Could not begin resolution');
@@ -225,6 +237,21 @@ try {
         'fear'=>'frighten '.$state['target'], 'frenzy'=>'enrage '.$state['target'],
         'combat'=>'provoke '.$state['target'].' into a fight'
     ];
+    // Server plugin compositions narrate once per expanded group; their members remain native receipts.
+    $composed=[];
+    foreach ($state['compositions'] ?? [] as $composition)
+        for ($member=$composition['start']; $member<$composition['start']+$composition['count']; $member++) $composed[$member]=$composition;
+    foreach ($state['extensions'] ?? [] as $extensionId=>$extension)
+        if ($extension['kind']==='game') $attempts[$extensionId]='carry out '.str_replace('_',' ',explode(':',$extensionId)[1]).' on '.$state['target'];
+    $unconfirmed=static function (array $step, string $status, string $detail, bool $plugin) use ($state, $attempts): string {
+        if (!$plugin && str_starts_with($detail,'World item transferred')) return $state['player'].' takes '.$state['target'].' and tries to consume it.';
+        if (!$plugin && str_starts_with($detail,'Item transferred')) return $state['target'].' receives '.$state['item']
+            .($status==='failed' ? ', but the attempt goes no further.' : '.');
+        if (!$plugin && str_starts_with($detail,'Scroll consumed')) return $state['player'].' uses up the scroll.';
+        if ($status==='failed' && !empty($step['failure_narration'])) return $step['failure_narration'];
+        return $state['player'].' tries to '.($attempts[$step['effect']] ?? 'act on '.$state['target'])
+            .($status==='failed' ? ', but the attempt falls short. Confidence, alas, is not quite enough.' : '.');
+    };
     foreach ($state['plan']['steps'] as $index=>$step) {
         $receipt=$input['receipts'][$index];
         $status=$receipt['status'] ?? '';
@@ -233,21 +260,34 @@ try {
             if (($input['receipts'][$dependency]['status'] ?? '')!=='succeeded') throw new InvalidArgumentException('Unsatisfied effect dependency');
         }
         $detail=mb_substr((string)($receipt['detail'] ?? ''),0,300);
-        $facts[]=$step['effect'].': '.$status.($detail!=='' ? ' ('.$detail.')' : '');
+        $plugin=($state['extensions'][$step['effect']]['kind'] ?? '')==='game';
+        // Only the game plugin can report its own success; CHIM lifecycle receipts never succeed.
+        if ($plugin && $status==='succeeded' && ($receipt['source'] ?? null)!=='plugin_reported') throw new InvalidArgumentException('Unconfirmed plugin success');
+        $composition=$composed[$index] ?? null;
+        if ($plugin || $composition) {
+            $label=$composition ? $composition['id'].' via '.$step['effect'] : $step['effect'];
+            $facts[]=$label.': '.$status.' ['.chimInteractReceiptSource($state,$index,$receipt).']'.($detail!=='' ? ' ('.$detail.')' : '');
+        } else $facts[]=$step['effect'].': '.$status.($detail!=='' ? ' ('.$detail.')' : '');
+        if ($composition) {
+            $last=$composition['start']+$composition['count']-1;
+            if ($index!==$last) continue;
+            $members=array_slice($input['receipts'],$composition['start'],$composition['count']);
+            $statuses=array_column($members,'status');
+            if (!array_diff($statuses,['succeeded'])) $sentences[]=$composition['narration'];
+            elseif (!array_diff($statuses,['failed']) && $composition['failure_narration']!=='') $sentences[]=$composition['failure_narration'];
+            else foreach ($members as $offset=>$member) {
+                $memberStep=$state['plan']['steps'][$composition['start']+$offset];
+                if ($member['status']==='succeeded') $sentences[]=$state['player'].' manages to '.($attempts[$memberStep['effect']] ?? 'act on '.$state['target']).'.';
+                elseif ($member['status']!=='skipped') $sentences[]=$unconfirmed($memberStep,$member['status'],mb_substr((string)($member['detail'] ?? ''),0,300),false);
+            }
+            continue;
+        }
         if ($status==='succeeded' && $step['effect']==='cast_selected_magic') $sentences[]=$state['player'].' casts '.($state['selected_magic']['name'] ?? 'the selected magic').'.';
         elseif ($status==='succeeded' && $step['effect']==='activate') $sentences[]=$state['player'].' uses '.$state['target'].'.';
         elseif ($status==='succeeded' && $step['effect']==='consume_world') $sentences[]=$state['player'].' finishes '.$state['target'].'.';
         elseif ($status==='succeeded' && $step['effect']==='consume') $sentences[]=$state['target'].' finishes '.$state['item'].'.';
         elseif ($status==='succeeded' && $step['narration']!=='') $sentences[]=$step['narration'];
-        elseif ($status==='unknown' || $status==='failed') {
-            if (str_starts_with($detail,'World item transferred')) $sentences[]=$state['player'].' takes '.$state['target'].' and tries to consume it.';
-            elseif (str_starts_with($detail,'Item transferred')) $sentences[]=$state['target'].' receives '.$state['item']
-                .($status==='failed' ? ', but the attempt goes no further.' : '.');
-            elseif (str_starts_with($detail,'Scroll consumed')) $sentences[]=$state['player'].' uses up the scroll.';
-            elseif ($status==='failed' && !empty($step['failure_narration'])) $sentences[]=$step['failure_narration'];
-            else $sentences[]=$state['player'].' tries to '.($attempts[$step['effect']] ?? 'act on '.$state['target'])
-                .($status==='failed' ? ', but the attempt falls short. Confidence, alas, is not quite enough.' : '.');
-        }
+        elseif ($status==='unknown' || $status==='failed') $sentences[]=$unconfirmed($step,$status,$detail,$plugin);
     }
     if (!empty($state['failure_scene'])) {
         $sentences[]=$state['plan']['failure_narration'];
