@@ -291,6 +291,8 @@ if (isset($_GET["partial"]) && $_GET["partial"] === "editor") {
     .service-icons { display:flex; gap:8px; align-items:center; }
     .service-icon { width:56px; height:56px; border:1px solid rgba(138,155,182,0.3); border-radius:8px; cursor:pointer; opacity:0.8; }
     .service-icon.active { outline:2px solid rgb(242,124,17); opacity:1; }
+    .service-icons .service-icon-ploofy { flex:0 0 56px; min-height:0 !important; margin:0 !important; padding:0 !important; border:1px solid rgba(138,155,182,0.3) !important; background:transparent !important; overflow:hidden; }
+    .service-icons .service-icon-ploofy img { display:block; width:100%; height:100%; max-width:none; margin:0; object-fit:contain; }
     #service_label { color: #fff !important; }
     .tip-label { position: relative; cursor: help; }
     .tip-label::after { content: attr(data-tip); position: absolute; left: 0; top: 120%; max-width: 560px; padding: 8px 10px; background: #0c0f14; color: #cfe0ff; border: 1px solid rgba(138,155,182,0.35); border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,0.35); white-space: normal; line-height: 1.3; font-size: 12px; opacity: 0; transform: translateY(-4px); transition: opacity .12s ease, transform .12s ease; pointer-events: none; z-index: 9999; }
@@ -420,7 +422,7 @@ if (isset($_GET["partial"]) && $_GET["partial"] === "editor") {
                         <img src="<?= $webRoot; ?>/ui/images/core/icons/google.jpg" alt="Google" class="service-icon" data-service="google" />
                     <img src="<?= $webRoot; ?>/ui/images/core/icons/groq.jpg" alt="Groq" class="service-icon" data-service="groq" />
                     <img src="<?= $webRoot; ?>/ui/images/core/icons/nanogpt.jpg" alt="NanoGPT" class="service-icon" data-service="nanogpt" />
-                    <button type="button" class="service-icon btn-primary" data-service="ploofy" style="padding:0" title="Ploofy" aria-label="Ploofy"><img src="<?= $webRoot; ?>/ui/images/core/icons/ploofy.png" alt="" style="width:100%;height:100%;object-fit:contain"></button>
+                    <button type="button" class="service-icon service-icon-ploofy" data-service="ploofy" title="Ploofy" aria-label="Ploofy"><img src="<?= $webRoot; ?>/ui/images/core/icons/ploofy.png" alt=""></button>
                         <img src="<?= $webRoot; ?>/ui/images/core/icons/player2.jpg" alt="Player2" class="service-icon" data-service="player2" />
                         <img src="<?= $webRoot; ?>/ui/images/core/icons/custom.jpg" alt="Custom" class="service-icon" data-service="custom" />
                     </div>
@@ -1559,6 +1561,8 @@ if (isset($_GET["edit"])) {
 .service-icons { display:flex; gap:8px; align-items:center; }
 .service-icon { width:56px; height:56px; border:1px solid rgba(138,155,182,0.3); border-radius:8px; cursor:pointer; opacity:0.8; }
 .service-icon.active { outline:2px solid rgb(242,124,17); opacity:1; }
+.service-icons .service-icon-ploofy { flex:0 0 56px; min-height:0 !important; margin:0 !important; padding:0 !important; border:1px solid rgba(138,155,182,0.3) !important; background:transparent !important; overflow:hidden; }
+.service-icons .service-icon-ploofy img { display:block; width:100%; height:100%; max-width:none; margin:0; object-fit:contain; }
 #service_label { color:#fff !important; }
 /* Fancy tooltip for slider labels */
 .tip-label { position: relative; cursor: help; }
@@ -1763,7 +1767,7 @@ if (typeof window.consolidation !== 'function') {
                     <img src="<?= $webRoot; ?>/ui/images/core/icons/google.jpg" alt="Google" class="service-icon" data-service="google" />
                     <img src="<?= $webRoot; ?>/ui/images/core/icons/groq.jpg" alt="Groq" class="service-icon" data-service="groq" />
                     <img src="<?= $webRoot; ?>/ui/images/core/icons/nanogpt.jpg" alt="NanoGPT" class="service-icon" data-service="nanogpt" />
-                    <button type="button" class="service-icon btn-primary" data-service="ploofy" style="padding:0" title="Ploofy" aria-label="Ploofy"><img src="<?= $webRoot; ?>/ui/images/core/icons/ploofy.png" alt="" style="width:100%;height:100%;object-fit:contain"></button>
+                    <button type="button" class="service-icon service-icon-ploofy" data-service="ploofy" title="Ploofy" aria-label="Ploofy"><img src="<?= $webRoot; ?>/ui/images/core/icons/ploofy.png" alt=""></button>
                     <img src="<?= $webRoot; ?>/ui/images/core/icons/player2.jpg" alt="Player2" class="service-icon" data-service="player2" />
                     <img src="<?= $webRoot; ?>/ui/images/core/icons/custom.jpg" alt="Custom" class="service-icon" data-service="custom" />                </div>
                 </div>
