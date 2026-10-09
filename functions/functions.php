@@ -24,7 +24,6 @@ $ENABLED_FUNCTIONS_LOCAL = [
     'InspectSurroundings',
     'CheckInventory',
     'SheatheWeapon',
-    'Relax',
     'TakeASeat',
     'ReadQuestJournal',
     'Surrender',
@@ -44,7 +43,6 @@ $ENABLED_FUNCTIONS_LOCAL = [
     'UseSoulGaze',
     'MakeFollower',
     'Toast',
-    'Drink',
     'Consume',
     'StartRitualCeremony',
     'EndRitualCeremony',
@@ -62,6 +60,9 @@ $ENABLED_FUNCTIONS_LOCAL = [
     'PayBounty',
     'ArrestPlayer',
     'ForgiveCrime',
+    'CreateTasks',
+    'ResolveTask',
+    'CancelTask',
     'EndConversation'
     //    'WaitHere'
 ];
@@ -978,6 +979,9 @@ $F_TRANSLATIONS_LOCAL["AddBounty"] = "#HERIKA_NAME# adds a crime bounty to #PLAY
 $F_TRANSLATIONS_LOCAL["PayBounty"] = "#PLAYER_NAME# pays off their bounty to #HERIKA_NAME#. Stolen items are confiscated and the matter is resolved immediately. Guard-only action.";
 $F_TRANSLATIONS_LOCAL["ArrestPlayer"] = "#HERIKA_NAME# attempts to arrest #PLAYER_NAME#. #PLAYER_NAME# can submit or resist. Guard-only action for serious crimes or refusal to pay.";
 $F_TRANSLATIONS_LOCAL["ForgiveCrime"] = "#HERIKA_NAME# forgives #PLAYER_NAME#'s crimes and clears their bounty. Guard-only action for persuasion, bribe, or thane status.";
+$F_TRANSLATIONS_LOCAL["CreateTasks"] = "Create a persistent task whenever #HERIKA_NAME# accepts, promises, remembers, or schedules a future duty. Use this instead of Talk when a commitment is made. Include any task details already known; the server will structure and save the task in the background.";
+$F_TRANSLATIONS_LOCAL["ResolveTask"] = "Mark one of #HERIKA_NAME#'s active tasks as completed or failed after the outcome has happened. Repeating tasks automatically advance to their next scheduled occurrence.";
+$F_TRANSLATIONS_LOCAL["CancelTask"] = "Cancel one of #HERIKA_NAME#'s active tasks. Cancelling permanently stops a repeating task.";
 $F_TRANSLATIONS_LOCAL["FollowPlayer"] = "#HERIKA_NAME# follows #PLAYER_NAME#.";
 $F_TRANSLATIONS_LOCAL["ComeCloser"] = "#HERIKA_NAME# approaches #PLAYER_NAME#.";
 $F_TRANSLATIONS_LOCAL["Brawl"] = "#HERIKA_NAME# starts a brawl with #PLAYER_NAME# or another nearby NPC: an agreed, bare-fisted fight that is not meant to kill. Fists only, no weapons, shields, spells, staves, or poisons. Use Attack instead when #HERIKA_NAME# truly means to kill.";
@@ -1032,6 +1036,9 @@ $F_RETURNMESSAGES_LOCAL["AddBounty"] = "#HERIKA_NAME# added a bounty for #TARGET
 $F_RETURNMESSAGES_LOCAL["PayBounty"] = "#PLAYER_NAME# paid off their bounty to #HERIKA_NAME#, and stolen items were removed from inventory.";
 $F_RETURNMESSAGES_LOCAL["ArrestPlayer"] = "#HERIKA_NAME# attempted to arrest #PLAYER_NAME#.";
 $F_RETURNMESSAGES_LOCAL["ForgiveCrime"] = "#HERIKA_NAME# forgave #PLAYER_NAME#'s crimes and cleared their bounty.";
+$F_RETURNMESSAGES_LOCAL["CreateTasks"] = "#HERIKA_NAME# records a persistent task.";
+$F_RETURNMESSAGES_LOCAL["ResolveTask"] = "#HERIKA_NAME# resolves a persistent task.";
+$F_RETURNMESSAGES_LOCAL["CancelTask"] = "#HERIKA_NAME# cancels a persistent task.";
 $F_RETURNMESSAGES_LOCAL["FollowPlayer"] = "#HERIKA_NAME# follows #PLAYER_NAME#.";
 $F_RETURNMESSAGES_LOCAL["Brawl"] = "#HERIKA_NAME# starts a brawl with #TARGET#.";
 $F_RETURNMESSAGES_LOCAL["ReturnBackHome"] = "#HERIKA_NAME# goes back home.";
@@ -1086,6 +1093,9 @@ $F_NAMES_LOCAL["AddBounty"] = "AddBounty";
 $F_NAMES_LOCAL["PayBounty"] = "PayBounty";
 $F_NAMES_LOCAL["ArrestPlayer"] = "Arrest_#PLAYER_NAME#";
 $F_NAMES_LOCAL["ForgiveCrime"] = "ForgiveCrime";
+$F_NAMES_LOCAL["CreateTasks"] = "CreateTasks";
+$F_NAMES_LOCAL["ResolveTask"] = "ResolveTask";
+$F_NAMES_LOCAL["CancelTask"] = "CancelTask";
 $F_NAMES_LOCAL["FollowPlayer"] = "Follow_#PLAYER_NAME#";
 $F_NAMES_LOCAL["ComeCloser"] = "ComeCloser";
 $F_NAMES_LOCAL["Brawl"] = "Brawl";
@@ -1935,6 +1945,66 @@ $GLOBALS["FUNCTIONS"] = [
         ],
     ],
     [
+        "name" => $F_NAMES_LOCAL["CreateTasks"],
+        "description" => $F_TRANSLATIONS_LOCAL["CreateTasks"],
+        "parameters" => [
+            "type" => "object",
+            "properties" => [
+                "type" => [
+                    "type" => "string",
+                    "enum" => ["meeting", "message_delivery", "fetch", "escort", "errand", "other"],
+                    "description" => "Kind of task being created.",
+                ],
+                "subject" => [
+                    "type" => "string",
+                    "description" => "Short concrete description of what must happen.",
+                ],
+                "counterparty" => [
+                    "type" => "string",
+                    "description" => "Other person involved, if any.",
+                ],
+                "location" => [
+                    "type" => "string",
+                    "description" => "Place where the task should be completed, if any.",
+                ],
+                "due_in_hours" => [
+                    "type" => "number",
+                    "description" => "In-game hours until this task is first due. Minimum 0.25, maximum 8760.",
+                ],
+                "repeat_every_hours" => [
+                    "type" => "number",
+                    "description" => "Optional in-game repeat interval. Omit or use 0 for a one-time task; otherwise minimum 0.25 and maximum 8760.",
+                ],
+            ],
+            "required" => ["type", "subject", "due_in_hours"],
+        ],
+    ],
+    [
+        "name" => $F_NAMES_LOCAL["ResolveTask"],
+        "description" => $F_TRANSLATIONS_LOCAL["ResolveTask"],
+        "parameters" => [
+            "type" => "object",
+            "properties" => [
+                "task_id" => ["type" => "integer", "description" => "Task number shown in the active tasks context."],
+                "status" => ["type" => "string", "enum" => ["completed", "failed"], "description" => "Final outcome."],
+                "outcome" => ["type" => "string", "description" => "Brief factual description of what happened."],
+            ],
+            "required" => ["task_id", "status", "outcome"],
+        ],
+    ],
+    [
+        "name" => $F_NAMES_LOCAL["CancelTask"],
+        "description" => $F_TRANSLATIONS_LOCAL["CancelTask"],
+        "parameters" => [
+            "type" => "object",
+            "properties" => [
+                "task_id" => ["type" => "integer", "description" => "Task number shown in the active tasks context."],
+                "reason" => ["type" => "string", "description" => "Brief reason the task is being cancelled."],
+            ],
+            "required" => ["task_id", "reason"],
+        ],
+    ],
+    [
         "name" => $F_NAMES_LOCAL["EndConversation"],
         "description" => $F_TRANSLATIONS_LOCAL["EndConversation"],
         "parameters" => [
@@ -2008,6 +2078,14 @@ function getFunctionNameAliases()
 function getFunctionCodeName($key)
 {
     $key = strval($key);
+
+    if (isset($GLOBALS["HERIKA_GROUPED_ACTION_NAME_TO_CODE"]) && is_array($GLOBALS["HERIKA_GROUPED_ACTION_NAME_TO_CODE"])) {
+        $groupedCode = $GLOBALS["HERIKA_GROUPED_ACTION_NAME_TO_CODE"][$key] ?? false;
+        if ($groupedCode !== false) {
+            return $groupedCode;
+        }
+    }
+
     static $resolvedCodeNames = [];
 
     if (array_key_exists($key, $resolvedCodeNames)) {
@@ -2417,7 +2495,7 @@ function functionExecutionParameterValueIsEmpty($parameterValue)
     return trim(strval($parameterValue)) === "";
 }
 
-function buildFunctionParameterValueFromResponse($functionDef, $parsedResponse)
+function buildFunctionParameterValueFromResponse($functionDef, $parsedResponse, $forceObject = false)
 {
     $properties = $functionDef["parameters"]["properties"] ?? [];
     $requiredParameters = [];
@@ -2435,7 +2513,7 @@ function buildFunctionParameterValueFromResponse($functionDef, $parsedResponse)
         }
     }
 
-    if (count($properties) > 1) {
+    if ($forceObject || count($properties) > 1) {
         $parameters = [];
         foreach ($properties as $parameterName => $parameterSchema) {
             if (array_key_exists($parameterName, $parsedResponse)) {
@@ -2473,10 +2551,42 @@ function buildFunctionExecutionContextFromResponse($parsedResponse)
     $missingRequired = [];
 
     if (is_array($functionDef)) {
-        $parameterData = buildFunctionParameterValueFromResponse($functionDef, is_array($parsedResponse) ? $parsedResponse : []);
+        $forceObjectParameters = isset($GLOBALS['HERIKA_GROUPED_ACTION_SPECS'][$functionCodeName]);
+        $parameterResponse = is_array($parsedResponse) ? $parsedResponse : [];
+        $actionParameters = $parameterResponse["action_params"] ?? [];
+        if (!is_array($actionParameters)) {
+            $actionParameters = decodeFunctionExecutionParameterPayload($actionParameters);
+        }
+        if (is_array($actionParameters)) {
+            unset($parameterResponse["action_params"]);
+            $parameterResponse = array_merge($parameterResponse, $actionParameters);
+        }
+
+        if ($functionCodeName === 'CreateTasks' && function_exists('chimCommitmentPrepareCreatePayload')) {
+            $parameterResponse = chimCommitmentPrepareCreatePayload(
+                $parameterResponse,
+                (string)($GLOBALS['gameRequest'][3] ?? ''),
+                (string)($parsedResponse['message'] ?? '')
+            );
+        }
+
+        $parameterData = buildFunctionParameterValueFromResponse(
+            $functionDef,
+            $parameterResponse,
+            $forceObjectParameters
+        );
         $parameterValue = $parameterData["parameter_value"];
         $missingRequired = $parameterData["missing_required"];
     }
+
+    $submittedParameterValue = $parameterValue;
+    $executionResolution = resolveFunctionExecutionAction($functionCodeName, $parameterValue);
+    $functionCodeName = $executionResolution["code_name"];
+    $parameterValue = $executionResolution["parameter_value"];
+    $missingRequired = array_values(array_unique(array_merge(
+        $missingRequired,
+        $executionResolution["missing_required"]
+    )));
 
     if (strcasecmp($functionCodeName, 'TakeHeldItem') === 0) {
         $resolvedHeldItem = HeldItems::resolveHeldIdentifier(strval($parameterValue));
@@ -2500,7 +2610,34 @@ function buildFunctionExecutionContextFromResponse($parsedResponse)
         "parameter_string" => buildFunctionExecutionParameter($functionCodeName, $parameterValue),
         "missing_required" => $missingRequired,
         "has_required_parameters" => functionDefinitionHasRequiredParameters($functionDef),
-        "parameter_is_empty" => functionExecutionParameterValueIsEmpty($parameterValue),
+        "parameter_is_empty" => functionExecutionParameterValueIsEmpty($submittedParameterValue),
+        "parameter_resolution_valid" => $executionResolution["valid"],
+    ];
+}
+
+// Resolves compact runtime tools before connector-specific command serialization.
+function resolveFunctionExecutionAction($functionCodeName, $parameterValue)
+{
+    $functionCodeName = trim(strval($functionCodeName));
+    $resolution = function_exists('herikaActionGroupsResolveExecution')
+        ? herikaActionGroupsResolveExecution($functionCodeName, $parameterValue)
+        : null;
+    if (!is_array($resolution)) {
+        return [
+            "code_name" => $functionCodeName,
+            "parameter_value" => $parameterValue,
+            "missing_required" => [],
+            "valid" => true,
+        ];
+    }
+
+    return [
+        "code_name" => trim(strval($resolution["code_name"] ?? '')),
+        "parameter_value" => $resolution["parameter_value"] ?? '',
+        "missing_required" => is_array($resolution["missing_required"] ?? null)
+            ? $resolution["missing_required"]
+            : [],
+        "valid" => !empty($resolution["valid"]),
     ];
 }
 
@@ -2518,13 +2655,18 @@ function queueFunctionExecutionCommand(&$commandBuffer, &$alreadySent, $executio
         return false;
     }
 
+    if (array_key_exists("parameter_resolution_valid", $executionContext) && empty($executionContext["parameter_resolution_valid"])) {
+        $missingRequired = $executionContext["missing_required"] ?? [];
+        Logger::warn("{$connectorName}: Invalid grouped action parameters: " . implode(", ", $missingRequired));
+        return false;
+    }
+
     $missingRequired = $executionContext["missing_required"] ?? [];
     if (count($missingRequired) > 0) {
         Logger::warn("{$connectorName}: Missing required parameter(s) for " . strval($executionContext["function_code_name"] ?? $actionName) . ": " . implode(", ", $missingRequired));
+        if (in_array($executionContext["function_code_name"] ?? '', ['CreateTasks', 'ResolveTask', 'CancelTask'], true)) return false;
     }
-
     if (!empty($executionContext["has_required_parameters"]) && !empty($executionContext["parameter_is_empty"])) {
-        Logger::warn("{$connectorName}: Missing required parameter(s) for " . strval($executionContext["function_code_name"] ?? $actionName) . ": " . implode(", ", $missingRequired));
         return false;
     }
 
@@ -2813,6 +2955,11 @@ chimTraceFunctionsIncludePhase(__LINE__, 'bug_func_write_done', $startTime);
 
 $GLOBALS["FUNCTIONS"] = array_values($GLOBALS["FUNCTIONS"]); //Get rid of array keys
 
+// main.php groups later, after its per-turn action restrictions.
+if (function_exists('herikaActionGroupsApplyToRuntime') && empty($GLOBALS['HERIKA_DEFER_ACTION_GROUPS'])) {
+    herikaActionGroupsApplyToRuntime();
+}
+
 chimTraceFunctionsIncludePhase(__LINE__, 'functions_reindexed', $startTime);
 
 
@@ -2822,6 +2969,7 @@ chimTraceFunctionsIncludePhase(__LINE__, 'functions_reindexed', $startTime);
 
 require_once __DIR__ . "/../lib/scriptproxy_papyrus.php";
 require_once __DIR__ . "/../lib/core/activity_status.php";
+require_once __DIR__ . "/../lib/core/npc_commitments.php";
 
 chimTraceFunctionsIncludePhase(__LINE__, 'post_filter_dependencies_loaded', $startTime);
 
@@ -2838,7 +2986,10 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
         $actionParts2=explode("@",$actionParts[2]);
         
         if (isset($actionParts2[0])) {
-            $actionCodeNameResolved = getFunctionCodeName($actionParts2[0]);
+            // Queued commands carry execution codes; keep legacy codes from resolving to same-named groups.
+            $actionCodeNameResolved = isset($GLOBALS["F_NAMES"][$actionParts2[0]])
+                ? $actionParts2[0]
+                : getFunctionCodeName($actionParts2[0]);
             if ($actionCodeNameResolved === false || trim(strval($actionCodeNameResolved)) === '') {
                 $actionCodeNameResolved = $actionParts2[0];
             }
@@ -2852,6 +3003,79 @@ $GLOBALS["action_post_process_fnct_ex"][]=function($actions) {
             }
 
             if (herikaActionCatalogExecuteScriptProxyAction($action)) {
+                unset($actionsCopy[$n]);
+                continue;
+            }
+
+            if (in_array($actionCodeNameResolved, ['CreateTasks', 'ResolveTask', 'CancelTask'], true)) {
+                $rawParameter = implode("@", array_slice($actionParts2, 1));
+                $payload = decodeFunctionExecutionParameterPayload($rawParameter);
+                if (!is_array($payload)) {
+                    $payload = [];
+                }
+
+                $actorName = trim((string)($actionParts[0] ?? ($GLOBALS['HERIKA_NAME'] ?? '')));
+                $currentGamets = (int)($gameRequest[2] ?? 0);
+                if ($actionCodeNameResolved === 'CreateTasks') {
+                    $result = chimCommitmentQueueCreate(
+                        $actorName,
+                        $payload,
+                        $currentGamets,
+                        (string)($gameRequest[3] ?? '')
+                    );
+                    $message = !empty($result['ok'])
+                        ? "{$actorName} queued a persistent task for structured setup."
+                        : "{$actorName} could not queue a task: " . (string)($result['error'] ?? 'unknown error');
+                } elseif ($actionCodeNameResolved === 'ResolveTask') {
+                    $result = chimCommitmentSetStatus(
+                        $actorName,
+                        (int)($payload['task_id'] ?? 0),
+                        (string)($payload['status'] ?? ''),
+                        (string)($payload['outcome'] ?? ''),
+                        $currentGamets
+                    );
+                    if (!empty($result['ok']) && !empty($result['repeated'])) {
+                        $message = "{$actorName} resolved repeating task #{$result['id']} and scheduled its next occurrence.";
+                    } else {
+                        $message = !empty($result['ok'])
+                            ? "{$actorName} resolved task #{$result['id']} as " . trim((string)($payload['status'] ?? 'completed')) . "."
+                            : "{$actorName} could not resolve that task.";
+                    }
+                } else {
+                    $result = chimCommitmentSetStatus(
+                        $actorName,
+                        (int)($payload['task_id'] ?? 0),
+                        'cancelled',
+                        (string)($payload['reason'] ?? ''),
+                        $currentGamets
+                    );
+                    $message = !empty($result['ok'])
+                        ? "{$actorName} cancelled task #{$result['id']}."
+                        : "{$actorName} could not cancel that task.";
+                }
+
+                $GLOBALS['db']->insert('eventlog', [
+                    'ts' => (int)($gameRequest[1] ?? time()),
+                    'gamets' => $currentGamets,
+                    'type' => 'infoaction',
+                    'data' => 'The Narrator: ' . $message,
+                    'sess' => (int)($gameRequest[1] ?? time()),
+                    'localts' => time(),
+                    'people' => $actorName,
+                    'location' => null,
+                    'party' => '',
+                ]);
+
+                $GLOBALS['db']->insert('actions_issued', [
+                    'action' => $actionCodeNameResolved,
+                    'fullcall' => $rawParameter,
+                    'actorname' => $actorName,
+                    'ts' => (int)($gameRequest[1] ?? time()),
+                    'gamets' => $currentGamets,
+                    'localts' => time(),
+                    'original' => chimPrepareActionsIssuedOriginalValue(''),
+                ]);
+
                 unset($actionsCopy[$n]);
                 continue;
             }

@@ -68,7 +68,7 @@ function chimInteractionIsTrigger(string $type): bool
     $type = strtolower($type);
     return str_starts_with($type, 'diary') || str_starts_with($type, 'player_menu_tts_')
         || in_array($type, ['inputtext', 'inputtext_s', 'ginputtext', 'ginputtext_s',
-            'narrator_inputtext', 'bored', 'rechat', 'continue', 'continue_group',
+            'chatnf_interact_reaction', 'narrator_inputtext', 'bored', 'rechat', 'continue', 'continue_group',
             'instruction', 'suggestion', 'narration', 'narrator_welcome', 'combatbark',
             'just_say', 'cheatmode', 'vision', 'force_current_task', 'recover_last_task'], true);
 }

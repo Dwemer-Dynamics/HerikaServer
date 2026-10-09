@@ -1204,7 +1204,11 @@ class NpcMaster
 
         // Decode metadata and extended_data if available
         $metadata = json_decode($currentNpcData['metadata'] ?? '{}', true);
-        $presetId = is_array($metadata) ? ($metadata['tts_filter_preset'] ?? '') : '';
+        $presetId = resolveActorTtsFilterPreset(
+            is_array($metadata) ? $metadata : [],
+            chimGetGeneralSettingBool('AUTOMATIC_ACTOR_VOICE_EFFECTS', true),
+            chimGetGeneralSettingBool('TRANSFORMATION_DETECTION', true)
+        );
         setActiveTtsFilterPreset($presetId);
         $narratorManagedKeys = [
             'REMOVE_ASTERISKS_FROM_OUTPUT',
@@ -1446,7 +1450,8 @@ class NpcMaster
         }
         //error_log("[NPC BACKUP] Backup of {$npc["npc_name"]} ".print_r($npc,true));
         // Remove the original 'id' field, since the history table likely has its own auto-increment ID
-        unset($npc['id']);
+        // Profile ownership is administrative state and has no history-table column.
+        unset($npc['id'], $npc['profile_owner_npc_id']);
 
         // Add a reference to the original NPC ID
         $npc['npc_id'] = $id;

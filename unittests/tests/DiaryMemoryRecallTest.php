@@ -7,6 +7,18 @@ require_once __DIR__ . '/../../lib/chat_helper_functions.php';
 
 final class DiaryMemoryRecallTest extends TestCase
 {
+    public function testRecallAgeUsesCurrentGameTimeAndRejectsFutureMemories(): void
+    {
+        $memory = 1000000000;
+        foreach ([3 => 'About 3 days', 18 => 'About 2 weeks', 75 => 'About 2 months', 365 => 'About 1 year'] as $days => $label) {
+            $this->assertStringStartsWith($label, chimMemoryAgeLabel($memory, $memory + $days * 10000000));
+        }
+        $this->assertStringContainsString('4E ', chimMemoryAgeLabel($memory, $memory + 30000000));
+        $this->assertNull(chimMemoryAgeLabel($memory, $memory - 1));
+        $this->assertSame('Date unknown', chimMemoryAgeLabel(null, $memory));
+        $this->assertSame('Date unknown', chimMemoryAgeLabel(0, $memory));
+    }
+
     protected function setUp(): void
     {
         $GLOBALS['db'] = new class {
@@ -76,7 +88,7 @@ final class DiaryMemoryRecallTest extends TestCase
     public function testNpcRecallMatchesCanonicalAndLegacyDiaryOwners(): void
     {
         $this->assertSame(
-            "(memory_summary.companions LIKE '%|Embry|%' OR memory_summary.companions='Embry')",
+            "(position('|Embry|' in memory_summary.companions) > 0 OR memory_summary.companions='Embry')",
             dataGetMemoryCompanionConditionSql('Embry', 'memory_summary.companions')
         );
     }
@@ -84,7 +96,7 @@ final class DiaryMemoryRecallTest extends TestCase
     public function testNpcNameIsEscapedInRecallCondition(): void
     {
         $this->assertSame(
-            "(companions LIKE '%|M''aiq''s Friend|%' OR companions='M''aiq''s Friend')",
+            "(position('|M''aiq''s Friend|' in companions) > 0 OR companions='M''aiq''s Friend')",
             dataGetMemoryCompanionConditionSql("M'aiq's Friend")
         );
     }

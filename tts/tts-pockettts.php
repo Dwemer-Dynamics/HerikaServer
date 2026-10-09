@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . '/lib/speech_trace.php';
 
 if (!function_exists('insertNoise')) {
 	function insertNoise($inputString, $noiseArray) {
@@ -58,22 +59,27 @@ function pockettts_audio_cpp_url($endpoint) {
 	return $endpoint . '/v1/audio/speech';
 }
 
-function pockettts_backend_voice_payload($voice) {
-	$cleanName = basename((string)$voice, '.wav');
-	if ($cleanName !== '') {
-		$paths = [
-			dirname(__FILE__) . '/../data/voices/' . $cleanName . '.wav',
-			'/home/dwemer/pocket-tts/speakers/' . $cleanName . '.wav',
-			'/home/dwemer/audio.cpp/speakers/' . $cleanName . '.wav',
-		];
-		foreach ($paths as $path) {
-			if (is_readable($path)) {
-				return ['voice_ref' => $path];
-			}
-		}
+function pockettts_backend_voice_payload($voice, $endpoint = '', array $request = []) {
+	require_once __DIR__ . '/audio_cpp_voice_ref.php';
+	$reference = chimAudioCppVoiceReference(strval($endpoint), strval($voice), $request, [
+		'/home/dwemer/pocket-tts/speakers/',
+		'/home/dwemer/audio.cpp/speakers/',
+	]);
+	if ($reference['status'] === 'error') {
+		return ['error' => $reference['error']];
 	}
-
-	return ['voice' => 'alba'];
+	if (isset($reference['voice_ref'])) {
+		return ['voice_ref' => $reference['voice_ref']];
+	}
+	$cleanName = trim(strval($voice));
+	if (strtolower(substr($cleanName, -4)) === '.wav') {
+		$cleanName = substr($cleanName, 0, -4);
+	}
+	// A remote service may hold named voices of its own; a same-host service keeps the prior default.
+	if ($cleanName === '' || chimAudioCppIsLoopback(strval($endpoint))) {
+		return ['voice' => 'alba'];
+	}
+	return ['voice' => $cleanName];
 }
 
 function pockettts_audio_cpp_model() {
@@ -91,7 +97,11 @@ function pockettts_build_request($endpoint, $text, $voice, $language) {
 			'input' => $text,
 			'language' => $language ?: 'en',
 		];
-		$data = array_merge($data, pockettts_backend_voice_payload($voice));
+		$voicePayload = pockettts_backend_voice_payload($voice, $endpoint, $data);
+		if (isset($voicePayload['error'])) {
+			return ['error' => $voicePayload['error'], 'url' => pockettts_audio_cpp_url($endpoint), 'data' => $data, 'audio_cpp' => true];
+		}
+		$data = array_merge($data, $voicePayload);
 		return [
 			'url' => pockettts_audio_cpp_url($endpoint),
 			'data' => $data,
@@ -111,14 +121,27 @@ function pockettts_build_request($endpoint, $text, $voice, $language) {
 }
 
 function pockettts_post_request(array $request) {
+	$jsonFlags = empty($request['audio_cpp']) ? 0 : (JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+	if (isset($request['error'])) {
+		return ['response' => false, 'http_code' => 0, 'headers' => [], 'options' => ['error' => $request['error']]];
+	}
 	$options = [
 		'http' => [
 			'header' => "Content-type: application/json\r\nAccept: audio/wav\r\n",
 			'method' => 'POST',
-			'content' => json_encode($request['data']),
+			'content' => json_encode($request['data'], $jsonFlags),
 		],
 	];
+	if (!empty($request['audio_cpp']) && !is_string($options['http']['content'])) {
+		return ['response' => false, 'http_code' => 0, 'headers' => [], 'options' => ['error' => 'Request could not be encoded as JSON']];
+	}
 	$context = stream_context_create($options);
+	// Request options are written to soundcache diagnostics; never include reference audio there.
+	if (is_array($request['data']['voice_ref'] ?? null)) {
+		$logged = $request['data'];
+		$logged['voice_ref'] = ['type' => 'base64', 'data' => '(' . strlen(strval($logged['voice_ref']['data'] ?? '')) . ' characters omitted)'];
+		$options['http']['content'] = json_encode($logged, $jsonFlags);
+	}
 	$response = @file_get_contents($request['url'], false, $context);
 	$responseHeaders = isset($http_response_header) && is_array($http_response_header)
 		? $http_response_header
@@ -126,6 +149,14 @@ function pockettts_post_request(array $request) {
 	$httpCode = 0;
 	if (isset($responseHeaders[0]) && preg_match('/\s(\d{3})(?:\s|$)/', $responseHeaders[0], $matches)) {
 		$httpCode = intval($matches[1]);
+	}
+	if (is_array($request['data']['voice_ref'] ?? null)) {
+		require_once __DIR__ . '/audio_cpp_voice_ref.php';
+		$rejection = chimAudioCppInlineRejection('Remote audio.cpp PocketTTS', $httpCode);
+		if ($rejection !== null) {
+			$GLOBALS['CHIM_AUDIO_CPP_VOICE_REF_ERROR'] = $rejection;
+			Logger::warn($rejection);
+		}
 	}
 
 	return [
@@ -245,6 +276,141 @@ function pockettts_find_fallback_endpoint($configuredEndpoint) {
 	return null;
 }
 
+function pockettts_log_endpoint($endpoint) {
+	return preg_replace('#//[^/@]+@#', '//', strval($endpoint));
+}
+
+function pockettts_local_voice_sample_path($voice) {
+	$cleanName = basename(str_replace('\\', '/', strval($voice)), '.wav');
+	if ($cleanName === '' || !preg_match('/^[A-Za-z0-9_+-]+$/', $cleanName)) {
+		return '';
+	}
+	$path = dirname(__FILE__) . '/../data/voices/' . $cleanName . '.wav';
+	return (is_file($path) && filesize($path) > 44) ? $path : '';
+}
+
+// Uploads a cached sample to the standard PocketTTS API. Only a 2xx reply counts as synced.
+function pockettts_upload_voice_sample($endpoint, $samplePath, $voiceName) {
+	$ch = curl_init(normalize_endpoint_url($endpoint) . '/upload_sample');
+	curl_setopt_array($ch, [
+		CURLOPT_RETURNTRANSFER => true,
+		CURLOPT_POST => true,
+		CURLOPT_POSTFIELDS => [
+			'wavFile' => new CURLFile($samplePath, 'audio/wav', $voiceName . '.wav'),
+		],
+		CURLOPT_HTTPHEADER => ['Accept: application/json'],
+		CURLOPT_CONNECTTIMEOUT => 5,
+		CURLOPT_TIMEOUT => 30,
+	]);
+	$response = curl_exec($ch);
+	$httpCode = intval(curl_getinfo($ch, CURLINFO_HTTP_CODE));
+	$error = curl_error($ch);
+	curl_close($ch);
+
+	if ($error === '' && ($httpCode < 200 || $httpCode >= 300)) {
+		$error = 'HTTP ' . $httpCode . (is_string($response) && trim($response) !== '' ? ': ' . substr(trim($response), 0, 200) : '');
+	}
+	return [
+		'ok' => $response !== false && $httpCode >= 200 && $httpCode < 300,
+		'http_code' => $httpCode,
+		'error' => $error,
+	];
+}
+
+// Makes a cached sample available to the PocketTTS service that synthesis will use.
+// audio.cpp reads data/voices directly; the standard API needs /upload_sample.
+function pockettts_sync_voice_sample($configuredEndpoint, $voiceName, $samplePath) {
+	$endpoint = normalize_endpoint_url(trim(strval($configuredEndpoint)));
+	$result = [
+		'status' => 'failed',
+		'endpoint' => $endpoint,
+		'mode' => '',
+		'fallback' => false,
+		'http_code' => 0,
+		'error' => '',
+	];
+	if ($endpoint === '') {
+		$result['error'] = 'No PocketTTS endpoint configured';
+		return $result;
+	}
+
+	if (pockettts_is_audio_cpp($endpoint)) {
+		if (pockettts_detect_endpoint_mode($endpoint) === 'audio_cpp') {
+			$result['status'] = 'local';
+			$result['mode'] = 'audio_cpp';
+			return $result;
+		}
+		$result['error'] = 'audio.cpp PocketTTS endpoint unavailable';
+	} else {
+		$upload = pockettts_upload_voice_sample($endpoint, $samplePath, $voiceName);
+		$result['mode'] = 'standard';
+		$result['http_code'] = $upload['http_code'];
+		$result['error'] = $upload['error'];
+		if ($upload['ok']) {
+			$result['status'] = 'synced';
+			return $result;
+		}
+		if (!pockettts_should_try_fallback($endpoint, $upload['http_code'])) {
+			return $result;
+		}
+	}
+
+	$fallback = pockettts_find_fallback_endpoint($endpoint);
+	if ($fallback === null) {
+		return $result;
+	}
+	$result['endpoint'] = $fallback['endpoint'];
+	$result['mode'] = $fallback['mode'];
+	$result['fallback'] = true;
+	if ($fallback['mode'] === 'audio_cpp') {
+		$result['status'] = 'local';
+		$result['http_code'] = 0;
+		$result['error'] = '';
+		return $result;
+	}
+
+	$upload = pockettts_upload_voice_sample($fallback['endpoint'], $samplePath, $voiceName);
+	$result['http_code'] = $upload['http_code'];
+	$result['error'] = $upload['error'];
+	if ($upload['ok']) {
+		$result['status'] = 'synced';
+	}
+	return $result;
+}
+
+// Runs only after synthesis fell back to another standard PocketTTS service, so the
+// cached clone is uploaded before that service can cache its default voice for it.
+function pockettts_ensure_fallback_voice($endpoint, $voice) {
+	$samplePath = pockettts_local_voice_sample_path($voice);
+	if ($samplePath === '') {
+		return;
+	}
+	$voiceName = basename($samplePath, '.wav');
+	static $synced = [];
+	$key = normalize_endpoint_url($endpoint) . '|' . $voiceName;
+	if (isset($synced[$key])) {
+		return;
+	}
+
+	$speakers = pockettts_probe_json(normalize_endpoint_url($endpoint) . '/speakers_list');
+	$alreadyListed = $speakers['ok'] && is_array($speakers['decoded']) && in_array($voiceName, $speakers['decoded'], true);
+	if (!$alreadyListed) {
+		$upload = pockettts_upload_voice_sample($endpoint, $samplePath, $voiceName);
+		if (!$upload['ok']) {
+			Logger::warn("PocketTTS fallback voice sync failed for {$voiceName} at " . pockettts_log_endpoint($endpoint) . ": " . $upload['error']);
+			return;
+		}
+	}
+	if (count($synced) >= 64) {
+		$synced = [];
+	}
+	$synced[$key] = true;
+	if ($alreadyListed) {
+		return;
+	}
+	Logger::info("PocketTTS synced cached voice {$voiceName} to fallback " . pockettts_log_endpoint($endpoint));
+}
+
 function pockettts_settings($settings,$resetAfter=false) {
 	if (pockettts_is_audio_cpp($GLOBALS["TTS"]["POCKETTTS"]["endpoint"] ?? '')) {
 		return;
@@ -336,7 +502,7 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
 
 		if (isset($GLOBALS["AVOID_TTS_CACHE"]) && $GLOBALS["AVOID_TTS_CACHE"]===false )
 			if (file_exists(dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "soundcache/" . md5(trim($stringforhash)) . ".wav"))
-				return dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "soundcache/" . md5(trim($stringforhash)) . ".wav";
+				return chimTraceCachedTts(dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "soundcache/" . md5(trim($stringforhash)) . ".wav", 'pockettts');
 		
 		
 		
@@ -402,6 +568,11 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
 
 		$endpoint = normalize_endpoint_url($GLOBALS["TTS"]["POCKETTTS"]["endpoint"] ?? '');
 		$request = pockettts_build_request($endpoint, $newString, $voice, $lang);
+		if (isset($request['error'])) {
+			// Keep the NPC's voice rather than substituting a default one.
+			Logger::warn("PocketTTS: " . $request['error']);
+			return false;
+		}
 		$requestResult = pockettts_post_request($request);
 		$response = $requestResult['response'];
 		$options = $requestResult['options'];
@@ -411,8 +582,11 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
 			$fallback = pockettts_find_fallback_endpoint($endpoint);
 			if ($fallback !== null) {
 				$endpoint = $fallback['endpoint'];
-				$logEndpoint = preg_replace('#//[^/@]+@#', '//', $endpoint);
+				$logEndpoint = pockettts_log_endpoint($endpoint);
 				Logger::warn("PocketTTS endpoint unavailable; using compatible endpoint {$logEndpoint}");
+				if ($fallback['mode'] === 'standard') {
+					pockettts_ensure_fallback_voice($endpoint, $voice);
+				}
 				$request = pockettts_build_request($endpoint, $newString, $voice, $lang);
 				$requestResult = pockettts_post_request($request);
 				$response = $requestResult['response'];

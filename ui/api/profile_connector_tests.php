@@ -22,6 +22,7 @@ require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPA
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "itt_connector.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "api_badge.class.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "local_llm_setup.php");
+require_once($enginePath . 'lib/connector_capability_test.php');
 
 if (!isset($GLOBALS["db"])) {
     $GLOBALS["db"] = new sql();
@@ -211,6 +212,18 @@ function profileConnectorTestsFirstErrorMessage(array $errors): string
     return $message;
 }
 
+/** IDs of OpenRouter decision connectors, which answer fixed choices and cannot generate dialogue. */
+function profileConnectorTestsDecisionConnectorIds(): array
+{
+    $ids = [];
+    foreach ((array)(new LLMConnector())->readAll() as $row) {
+        if (chimIsDecisionConnector($row)) {
+            $ids[intval($row['id'] ?? 0)] = true;
+        }
+    }
+    return $ids;
+}
+
 function profileConnectorTestsBuildPlan(): array
 {
     $slotDefinitions = [
@@ -228,6 +241,7 @@ function profileConnectorTestsBuildPlan(): array
     $profiles = (new CoreProfile())->readAll();
     $jobs = [];
     $profileRows = [];
+    $decisionConnectorIds = profileConnectorTestsDecisionConnectorIds();
 
     foreach ($profiles as $profile) {
         $profileId = intval($profile['id'] ?? 0);
@@ -246,6 +260,20 @@ function profileConnectorTestsBuildPlan(): array
                     'job_key' => null,
                     'status' => 'skipped',
                     'message' => 'No connector selected',
+                ];
+                continue;
+            }
+
+            if ($definition['type'] === 'llm' && isset($decisionConnectorIds[$connectorId])) {
+                $slots[] = [
+                    'field' => $definition['field'],
+                    'type' => $definition['type'],
+                    'label' => $definition['label'],
+                    'required' => $definition['required'],
+                    'connector_id' => $connectorId,
+                    'job_key' => null,
+                    'status' => 'fail',
+                    'message' => 'Decision connectors cannot generate dialogue. Choose a chat model.',
                 ];
                 continue;
             }
@@ -306,22 +334,26 @@ function profileConnectorTestsBuildGlobalPlan(): array
         ['field' => 'CORE_CONNECTOR_PLAYER', 'type' => 'llm', 'label' => 'Player Respeech', 'enabled_by' => 'PLAYER_RESPEECH'],
         ['field' => 'CORE_CONNECTOR_SUMMARY', 'type' => 'llm', 'label' => 'Summaries', 'enabled_by' => 'CORE_CONNECTOR_SUMMARY_ENABLED'],
         ['field' => 'CORE_CONNECTOR_MEDIUMTERM', 'type' => 'llm', 'label' => 'Background & Memory Tasks', 'enabled_by' => 'CORE_CONNECTOR_MEDIUMTERM_ENABLED'],
-        ['field' => 'CORE_CONNECTOR_SCENECLASSIFIER', 'type' => 'llm', 'label' => 'Scene Classifier', 'enabled_by' => 'SCENE_CLASSIFIER_ENABLED', 'enabled_label' => 'Scene Classifier'],
+        ['field' => 'CORE_CONNECTOR_DECISION', 'type' => 'llm', 'label' => 'Decision Connector', 'enabled_by' => 'CORE_CONNECTOR_DECISION_ENABLED', 'decision' => true],
+        ['field' => 'CORE_CONNECTOR_SCENECLASSIFIER', 'type' => 'llm', 'label' => 'Scene Classifier (Legacy)', 'enabled_by' => 'SCENE_CLASSIFIER_ENABLED', 'enabled_label' => 'Scene Classifier (Legacy)'],
         ['field' => 'CORE_CONNECTOR_PROFILES', 'type' => 'llm', 'label' => 'Profile Tasks', 'enabled_by' => 'CORE_CONNECTOR_PROFILES_ENABLED'],
         ['field' => 'CORE_CONNECTOR_DIRECTOR', 'type' => 'llm', 'label' => 'Director Mode', 'enabled_by' => 'CORE_CONNECTOR_DIRECTOR_ENABLED'],
         ['field' => 'CORE_CONNECTOR_QUEST_CREATION', 'type' => 'llm', 'label' => 'Quest Creation Connector', 'enabled_by' => 'CORE_CONNECTOR_QUEST_CREATION_ENABLED'],
         ['field' => 'CORE_CONNECTOR_QUEST_ENGINE', 'type' => 'llm', 'label' => 'Quest Engine Connector', 'enabled_by' => 'CORE_CONNECTOR_QUEST_ENGINE_ENABLED'],
         ['field' => 'CORE_CONNECTOR_BGL', 'type' => 'llm', 'label' => 'Background Life', 'enabled_by' => 'CORE_CONNECTOR_BGL_ENABLED'],
         ['field' => 'RELLLM_CONNECTOR', 'type' => 'llm', 'label' => 'Relationship Management', 'enabled_by' => 'RELATIONSHIP_SYSTEM_ENABLED', 'enabled_label' => 'Relationship Management'],
-        ['field' => 'CORE_CONNECTOR_OGHMA_CUSTOM', 'type' => 'llm', 'label' => 'Oghma Extractor Fallback', 'enabled_by' => 'OGHMA_EXTRACTOR_FALLBACK', 'enabled_label' => 'Oghma Extractor Fallback'],
+        ['field' => 'CORE_CONNECTOR_OGHMA_CUSTOM', 'type' => 'llm', 'label' => 'Oghma Routing', 'enabled_by' => 'OGHMA_EXTRACTOR_FALLBACK', 'enabled_label' => 'Oghma routing'],
     ];
 
     $jobs = [];
     $slots = [];
+    $decisionConnectorIds = profileConnectorTestsDecisionConnectorIds();
 
     foreach ($slotDefinitions as $definition) {
         $enabledBy = profileConnectorTestsString($definition['enabled_by'] ?? '');
-        if ($enabledBy !== '' && !profileConnectorTestsBoolish(profileConnectorTestsGlobalValue($enabledBy, false))) {
+        $multilingualOghma = $definition['field'] === 'CORE_CONNECTOR_OGHMA_CUSTOM'
+            && profileConnectorTestsBoolish(profileConnectorTestsGlobalValue('OGHMA_MULTILINGUAL_ROUTING', false));
+        if ($enabledBy !== '' && !$multilingualOghma && !profileConnectorTestsBoolish(profileConnectorTestsGlobalValue($enabledBy, false))) {
             $slots[] = [
                 'field' => $definition['field'],
                 'type' => $definition['type'],
@@ -346,6 +378,24 @@ function profileConnectorTestsBuildGlobalPlan(): array
                 'job_key' => null,
                 'status' => 'skipped',
                 'message' => 'No connector selected',
+            ];
+            continue;
+        }
+
+        // The Decision slot needs a decision model; every other slot needs a chat model.
+        $needsDecision = !empty($definition['decision']);
+        if ($needsDecision !== isset($decisionConnectorIds[$connectorId])) {
+            $slots[] = [
+                'field' => $definition['field'],
+                'type' => $definition['type'],
+                'label' => $definition['label'],
+                'required' => false,
+                'connector_id' => $connectorId,
+                'job_key' => null,
+                'status' => 'fail',
+                'message' => $needsDecision
+                    ? 'Choose an OpenRouter decision model such as Jev.'
+                    : 'Decision connectors cannot generate text. Choose a chat model.',
             ];
             continue;
         }
@@ -424,6 +474,9 @@ function profileConnectorTestsTestLlm(int $connectorId): array
 
     $run = profileConnectorTestsRunWithCapturedErrors(function () use ($llm, $connector, $driver) {
         $GLOBALS["HERIKA_NAME"] = 'CHIM Profile Test';
+        $GLOBALS["HERIKA_PERS"] = 'A connection test character.';
+        $GLOBALS['DIRECT_NARRATOR_DIALOGUE'] = false;
+        $GLOBALS['gameRequest'] = ['connector_test', 0, 0, ''];
         $GLOBALS["PLAYER_NAME"] = $GLOBALS["PLAYER_NAME"] ?? 'Dragonborn';
         $GLOBALS["DEBUG_DATA"] = [];
         $GLOBALS["FUNCTIONS_ARE_ENABLED"] = false;
@@ -432,35 +485,22 @@ function profileConnectorTestsTestLlm(int $connectorId): array
         $GLOBALS["COMMAND_PROMPT_ENFORCE_ACTIONS"] = '';
 
         $llm->setOldGlobals($connector);
+        // Bound this diagnostic request without changing the saved connector configuration.
+        $GLOBALS['HTTP_TIMEOUT'] = min(120, max(1, intval($GLOBALS['HTTP_TIMEOUT'] ?? 30)));
         require_once($GLOBALS["ENGINE_PATH"] . "connector" . DIRECTORY_SEPARATOR . $driver . ".php");
         $handler = new $driver();
-        $contextData = [
-            ['role' => 'system', 'content' => 'You are a connection health check. Reply with OK.'],
-            ['role' => 'user', 'content' => 'Reply with exactly OK.'],
-        ];
-
-        $handler->open($contextData, []);
-        $accumulated = '';
-        $iterations = 0;
-        while (!$handler->isDone() && $iterations < 2000) {
-            $chunk = $handler->process();
-            if ($chunk === -1) {
-                break;
-            }
-            $accumulated .= strval($chunk);
-            $iterations++;
+        if (chimIsDecisionConnector($connector)) {
+            return chimRunDecisionCapabilityTest($handler);
         }
-
-        $closed = $handler->close('profile_connector_test');
-        return trim(strval($closed !== '' ? $closed : $accumulated));
+        return chimRunConnectorCapabilityTest($handler, $driver);
     });
 
     $elapsedMs = intval(round((microtime(true) - $started) * 1000));
-    $response = profileConnectorTestsString($run['value'] ?? '');
-    if ($response === '') {
+    $result = $run['value'] ?? null;
+    if (!is_array($result)) {
         $message = profileConnectorTestsFirstErrorMessage($run['errors']);
         if ($message === '') {
-            $message = 'LLM test returned an empty response';
+            $message = 'LLM test could not complete';
         }
 
         return [
@@ -478,9 +518,12 @@ function profileConnectorTestsTestLlm(int $connectorId): array
         'job_key' => 'llm:' . $connectorId,
         'type' => 'llm',
         'id' => $connectorId,
-        'status' => empty($run['errors']) ? 'pass' : 'warn',
-        'message' => empty($run['errors']) ? 'LLM responded successfully' : profileConnectorTestsFirstErrorMessage($run['errors']),
-        'details' => $details + ['response_preview' => mb_substr($response, 0, 180), 'errors' => $run['errors']],
+        'status' => $result['status'] === 'fail' ? 'fail' : (empty($run['errors']) ? $result['status'] : 'warn'),
+        'message' => implode(' | ', array_map(function ($name, $check) {
+            return ucfirst($name) . ': ' . $check['status'];
+        }, array_keys($result['checks']), $result['checks'])),
+        'details' => $details + ['checks' => $result['checks'], 'timings' => $result['timings'],
+            'response_preview' => $result['response_preview'], 'errors' => $run['errors']],
         'elapsed_ms' => $elapsedMs,
     ];
 }
@@ -635,7 +678,7 @@ function profileConnectorTestsTestItt(int $connectorId): array
         }
     }
 
-    $sampleImage = $GLOBALS["ENGINE_PATH"] . "debug" . DIRECTORY_SEPARATOR . "data" . DIRECTORY_SEPARATOR . "sample.jpg";
+    $sampleImage = $GLOBALS["ENGINE_PATH"] . 'debug/data/connector_vision_test.png';
     if (!file_exists($sampleImage)) {
         return profileConnectorTestsProblemResult('itt', $connectorId, 'fail', 'Sample image for ITT test was not found', $details);
     }
@@ -643,7 +686,7 @@ function profileConnectorTestsTestItt(int $connectorId): array
     $run = profileConnectorTestsRunWithCapturedErrors(function () use ($itt, $connector, $driverFile, $sampleImage) {
         $itt->setOldGlobals($connector);
         require_once($driverFile);
-        return profileConnectorTestsString(itt($sampleImage, 'Health check. Reply briefly.'));
+        return profileConnectorTestsString(itt($sampleImage, 'Image recognition test. What colour is the left shape, and what colour is the right shape? Answer in English with only the two colour names, separated by a comma.'));
     });
 
     $elapsedMs = intval(round((microtime(true) - $started) * 1000));
@@ -669,9 +712,12 @@ function profileConnectorTestsTestItt(int $connectorId): array
         'job_key' => 'itt:' . $connectorId,
         'type' => 'itt',
         'id' => $connectorId,
-        'status' => empty($run['errors']) ? 'pass' : 'warn',
-        'message' => empty($run['errors']) ? 'ITT returned a description successfully' : profileConnectorTestsFirstErrorMessage($run['errors']),
-        'details' => $details + ['response_preview' => mb_substr($response, 0, 180), 'errors' => $run['errors']],
+        'status' => empty($run['errors']) ? chimValidateConnectorVision($response)['status'] : 'warn',
+        'message' => empty($run['errors']) ? chimValidateConnectorVision($response)['message'] : profileConnectorTestsFirstErrorMessage($run['errors']),
+        'details' => $details + ['checks' => [
+            'connection' => ['status' => 'pass', 'message' => 'Image request returned text'],
+            'vision' => chimValidateConnectorVision($response),
+        ], 'response_preview' => mb_substr($response, 0, 180), 'errors' => $run['errors']],
         'elapsed_ms' => $elapsedMs,
     ];
 }

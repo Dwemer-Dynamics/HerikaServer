@@ -4,15 +4,19 @@
     dialog.dataset.bound='true';
     const el=id=>document.getElementById(`ptx-${id}`);
     let job=null,csrf='',token='',preview=null,busy=false,imported=false,opener=null,poll=null;
+    let exporting=false,cancelling=false,downloaded=false,closeFailed=false,closeLabel='Close';
     const endpoint=dialog.dataset.endpoint;
     async function request(action,values={}) {
-        const response=await fetch(endpoint,{method:'POST',credentials:'same-origin',body:new URLSearchParams({action,csrf_token:csrf,...(job?{job}:{}),...values})});
+        const response=await fetch(endpoint,{method:'POST',credentials:'same-origin',...(action==='cancel'?{signal:AbortSignal.timeout(15000)}:{}),body:new URLSearchParams({action,csrf_token:csrf,...(job?{job}:{}),...values})});
         const data=await response.json();
         if (!response.ok || !data.ok) throw new Error(data.message || 'Transfer failed.');
         return data;
     }
     function setBusy(value) {
-        busy=value;el('close').disabled=value;el('check').disabled=value || !job || !el('file').files.length;
+        // A running download can be cancelled; imports keep their existing non-cancellable flow.
+        busy=value;el('close').disabled=value && (!exporting || cancelling);
+        el('close').textContent=value && exporting?'Cancel download':closeLabel;
+        el('check').disabled=value || !job || !el('file').files.length;
         el('file').disabled=value || !job;el('name').disabled=value;
         el('profiles').querySelectorAll('select').forEach(select=>select.disabled=value);
         el('progress').hidden=!value;el('progress').removeAttribute('value');validate();
@@ -23,16 +27,63 @@
     function startPoll() {
         clearInterval(poll);
         poll=setInterval(async()=>{
-            try { const r=await fetch(`${endpoint}?action=status&job=${encodeURIComponent(job)}`,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(10000)});const result=await r.json();if (busy && result.ok) el('status').textContent=result.message; } catch (_) { /* The main request reports failures. */ }
+            const polledJob=job;
+            try {
+                const r=await fetch(`${endpoint}?action=status&job=${encodeURIComponent(polledJob)}`,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(10000)});const result=await r.json();
+                if (job===polledJob && busy && result.ok && !cancelling) {
+                    el('status').textContent=result.message;
+                    if (result.total>0) { el('progress').max=result.total;el('progress').value=result.step; }
+                }
+            } catch (_) { /* The main request reports failures. */ }
         },1500);
     }
     function stopPoll() { clearInterval(poll);poll=null; }
+    // Ask the server to stop this export; the export request itself confirms when it has stopped.
+    async function requestCancel() {
+        if (!busy || !exporting || cancelling) return;
+        const cancelJob=job;
+        cancelling=true;setBusy(true);el('error').textContent='';el('status').textContent='Stopping the download…';
+        try { await request('cancel',{job:cancelJob}); }
+        catch (error) {
+            // A late cancel response must not put a completed or newer dialog back into its busy state.
+            if (job!==cancelJob || !busy || !exporting) return;
+            cancelling=false;setBusy(true);el('error').textContent=`Could not stop the download: ${error.message}`;
+        }
+    }
+    // Remove the stopped job, which also covers an export that finished while cancellation was pending.
+    async function finishCancel() {
+        try {
+            const result=await request('cancel');
+            el('error').textContent='';
+            if (!result.removed) { el('status').textContent='Cancellation requested. The server is still stopping. Choose Close to check again.';return; }
+            job=null;el('status').textContent='Download cancelled. Temporary files were removed.';
+        }
+        catch (error) { el('status').textContent='';el('error').textContent=`Could not confirm cancellation or cleanup: ${error.message} Choose Close to try again.`; }
+    }
+    async function closeDialog() {
+        if (closeFailed) { dialog.close();return; }
+        if (job) {
+            el('close').disabled=true;
+            try {
+                const result=await request('cancel',downloaded?{after_download:'1'}:{});
+                if (result.pending && !downloaded) {
+                    el('close').disabled=false;el('status').textContent='Cancellation requested. The server is still stopping. Choose Close to check again.';return;
+                }
+                job=null;
+            }
+            catch (error) {
+                closeFailed=true;el('close').disabled=false;
+                el('error').textContent=`Could not confirm cleanup: ${error.message} Choose Close again to leave.`;return;
+            }
+        }
+        dialog.close();
+    }
     async function open(button) {
         if (busy) return;
-        opener=button;job=null;preview=null;imported=false;
+        opener=button;job=null;preview=null;imported=false;exporting=false;cancelling=false;downloaded=false;closeFailed=false;closeLabel='Close';
         el('error').textContent='';el('status').textContent='Preparing transfer…';el('file').value='';
         el('preview').hidden=true;el('import-confirm').hidden=true;el('download-link').hidden=true;
-        el('profiles').replaceChildren();el('close').textContent='Close';
+        el('profiles').replaceChildren();
         const downloading=button.classList.contains('ptx-download');
         el('title').textContent=downloading?'Download a Playthrough Save':'Import a Playthrough Save';
         el('upload').hidden=downloading;dialog.showModal();setBusy(true);
@@ -42,19 +93,23 @@
             csrf=state.csrf_token;token=state.state.token;
             job=(await request('allocate',{kind:downloading?'export':'import'})).job;
             if (downloading) {
-                startPoll();
-                const result=await request('export',{profile_id:button.dataset.profileId,expected_token:token});
+                exporting=true;setBusy(true);startPoll();
+                let result=null;
+                try { result=await request('export',{profile_id:button.dataset.profileId,expected_token:token}); }
+                catch (error) { if (!cancelling) throw error; }
+                if (cancelling) { await finishCancel();return; }
                 const link=el('download-link');link.href=`${endpoint}?action=download&job=${encodeURIComponent(job)}`;link.download=result.filename;link.hidden=false;
-                el('status').textContent='Your file is ready. Choose Download file to save it.';
+                el('status').textContent='Your file is ready. Choose Download file to save it. The server deletes its copy after the download finishes.';
                 if (result.runtime_ready===false) el('error').textContent='The file is ready, but the background worker did not confirm it restarted. Check server status before playing.';
             } else el('status').textContent='Choose a file to check its contents.';
         } catch (error) { el('error').textContent=job?error.message:`Could not prepare the transfer. ${error.message} Close this dialog and try again.`;el('status').textContent=''; }
-        finally { stopPoll();setBusy(false); }
+        finally { stopPoll();exporting=false;cancelling=false;setBusy(false); }
     }
     document.addEventListener('click',event=>{
         const button=event.target.closest('.ptx-import,.ptx-download');
         if (button) { event.preventDefault();open(button); }
     });
+    el('download-link').addEventListener('click',()=>{ downloaded=true;el('status').textContent='Download started. The server deletes its copy when the download finishes.'; });
     el('file').addEventListener('change',()=>{ preview=null;el('preview').hidden=true;el('import-confirm').hidden=true;validate();el('check').disabled=!el('file').files.length || !job; });
     el('name').addEventListener('input',validate);
     el('profiles').addEventListener('change',validate);
@@ -97,15 +152,23 @@
         const mapping={};el('profiles').querySelectorAll('select').forEach(select=>mapping[select.dataset.sourceId]=Number(select.value));
         try {
             const result=await request('import',{name:el('name').value.trim(),profile_map:JSON.stringify(mapping),profiles_version:preview.profiles_version});
-            imported=true;preview=null;el('import-confirm').hidden=true;el('upload').hidden=true;el('preview').hidden=true;el('close').textContent='Back to saves';el('status').textContent=result.message;
+            imported=true;preview=null;el('import-confirm').hidden=true;el('upload').hidden=true;el('preview').hidden=true;closeLabel='Back to saves';el('status').textContent=result.message;
             if (result.runtime_ready===false) el('error').textContent='The save was imported, but the background worker did not confirm it restarted. Check server status before playing.';
         } catch (error) { el('error').textContent=`${error.message} If the connection was interrupted, close and reload the save list to check whether the import completed.`;el('status').textContent=''; }
         finally { stopPoll();setBusy(false); }
     });
-    el('close').addEventListener('click',()=>{ if (!busy) dialog.close(); });
-    dialog.addEventListener('cancel',event=>{if (busy) event.preventDefault();});
+    el('close').addEventListener('click',()=>{ if (busy) requestCancel();else closeDialog(); });
+    // Escape follows the Close/Cancel button instead of dismissing a running transfer.
+    dialog.addEventListener('cancel',event=>{ event.preventDefault();if (busy) requestCancel();else closeDialog(); });
     dialog.addEventListener('close',()=>{
-        stopPoll();if (job) request('cancel').catch(()=>{});job=null;
+        // Browsers may still force-dismiss a dialog; stop and release its job all the same.
+        if (job) {
+            if (busy && exporting) cancelling=true;
+            request('cancel',downloaded?{after_download:'1'}:{}).catch(error=>console.error('Playthrough transfer cleanup failed:',error));
+            if (!busy) job=null;
+        }
         if (imported) location.reload();else opener?.focus();
     });
+    // Closing the page cannot await a response, so hand the owned job to the server for cleanup.
+    window.addEventListener('pagehide',()=>{ if (job && csrf) navigator.sendBeacon(endpoint,new URLSearchParams({action:'cancel',csrf_token:csrf,job,...(downloaded?{after_download:'1'}:{})})); });
 })();

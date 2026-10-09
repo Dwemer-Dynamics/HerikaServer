@@ -68,6 +68,7 @@ require_once $enginePath . 'lib/lazy_xml.php';
 
 require_once 'background_action_handler.php';
 require_once 'helpers.php';
+require_once $enginePath . 'lib/background_life_encounters.php';
 // ─── Database ─────────────────────────────────────────────────────────────────
 
 $db = $GLOBALS["db"];
@@ -126,9 +127,14 @@ $npcMaster = new NpcMaster();
 $connector = new LLMConnector();
 
 $currentNpcData = $npcMaster->getByName($npcName);
+if (!$currentNpcData) {
+    error_log("[BGL RUN] NPC not found: {$npcName}");
+    return;
+}
 $currentConnectorData = $connector->getById($GLOBALS['CORE_CONNECTOR_BGL']);
 
 $profile = new CoreProfile();
+if ($db->fetchOne("SELECT r.id FROM npc_schedule_runs r JOIN npc_commitments t ON t.id=r.task_id WHERE t.npc_id=" . (int)($currentNpcData['id'] ?? 0) . " AND (r.phase IN ('travelling','waiting','active','releasing') OR r.pending_op IN ('travel','ensure')) LIMIT 1")) return;
 $currentProfileData = $profile->getById($currentNpcData['profile_id']);
 
 $connector->setOldGlobals($currentConnectorData);
@@ -136,6 +142,10 @@ $npcMaster->setOldGlobalsFromCurrentNpcData($currentNpcData);
 
 $extdata = $npcMaster->getExtendedData($currentNpcData);
 $metadata = $npcMaster->getMetadata($currentNpcData);
+if (chimBglBoolean($metadata['stats']['is_dead'] ?? false)) {
+    error_log("[BGL RUN] {$npcName} is dead, skipping Background Life processing.");
+    return;
+}
 
 $connectionHandler = $connector->getConnector($currentConnectorData);
 
@@ -162,6 +172,10 @@ $momentum = time();
 
 $gameRequest = ['inputtext', '0', $last_gamets, $npcName];
 $npcNameEsc = $db->escape($npcName);
+chimBglRetryPendingEncounterCommands($db, (int)$currentNpcData['id']);
+if (chimBglEncounterIsActiveForNpc($db, (int)$currentNpcData['id'])) {
+    return;
+}
 
 
 // Guard: Avoid running if game is paused.
@@ -614,10 +628,18 @@ if ($middleTermMemorygameTs < ($lastItGamets + (24 / GAMETS_TO_HOURS))) {
      where gamets_truncated>$middleTermMemorygameTs 
      and companions like '%$npcNameEsc%' 
      and summary is not null
-     order by gamets_truncated asc limit 1");
+     order by gamets_truncated asc, rowid asc limit 1");
     if ($lastMemory) {
         $history = "\n<last_memory>\nThis represents last memory of {$GLOBALS['HERIKA_NAME']} after the last interaction with player ({$GLOBALS['PLAYER_NAME']}).\n";
-        $history .= "Memory: {$lastMemory['summary']}\n";
+        // A bucket can contain several episodes; retain the existing witness filter for every row.
+        $sourceId = intval($lastMemory['source_rowid'] ?? $lastMemory['rowid']);
+        $memoryScope = $db->escape($lastMemory['scope'] ?? 'global');
+        $episodes = $db->fetchAll("SELECT summary FROM memory_summary
+            WHERE (rowid=$sourceId OR source_rowid=$sourceId)
+              AND companions LIKE '%$npcNameEsc%' AND summary IS NOT NULL
+              AND COALESCE(scope,'global')='$memoryScope'
+            ORDER BY rowid ASC LIMIT 12");
+        $history .= "Memory: " . mb_substr(implode("\n\n", array_column($episodes, 'summary')), 0, 16000) . "\n";
         $history .= "</last_memory>\n";
     } else {
         $history = "";
@@ -864,6 +886,14 @@ if (isset($metadata['last_inventory_update_gamets'])) {
     ];
 }
 
+foreach (chimBglEncounterContextEvents($db, (int)$currentNpcData['id'], (float)$lastItGamets) as $encounterEvent) {
+    $bgEvents[] = [
+        'gamets' => $encounterEvent['gamets'],
+        'content' => $encounterEvent['narrative'] . ' Personal outcome: ' . $encounterEvent['applied_outcome'] . '.',
+        'type' => 'background_combat',
+    ];
+}
+
 // ─── Rumors Near Current Location ────────────────────────────────────────────
 
 if ($LAST_REPORTED_LOCATION) {
@@ -968,7 +998,7 @@ if (sizeof($actionIdleRows) > 2) {
         $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} has been working too much for the last 48h. This may affect health and well-being.\n";
     }
     if ($summaryIdleActions['Guard'] == 0) {
-        $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} hasn't been guarding for the last 48h. This may affect security well-being.\n";
+        $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} hasn't been guarding for the last 48h.\n";
     }
     if ($summaryIdleActions['Socialize'] == 0) {
         $lastMinuteNotes .= "\nNote: {$GLOBALS['HERIKA_NAME']} hasn't been properly socializing for the last 48h. This may affect health and well-being. Should make an effort to interact with others at a inn or tavern by staying with intent 'Socialize'.\n";
@@ -1169,6 +1199,8 @@ if (sizeof($tradingGuard) > 3) {
 
 // Modifier: Socialize chain
 $wasSocializeIntentAction = false;
+$innerThoughtBufferForced="";
+
 if (
     !empty($lastBackgroundAction)
     && (
@@ -1256,6 +1288,10 @@ if ($wasSocializeIntentAction && !$bypassInnerThoughts) {
 } else
     $innerThoughtEnforceSocialice = "";
 
+// Keep persistent duties visible to both Background Life prompt stages.
+require_once $enginePath . 'lib/core/npc_commitments.php';
+$lastMinuteNotes .= "\n" . chimCommitmentFormatContext($npcName, $last_gamets);
+
 $innerThoughtBuffer = requestForInnerThought(
     $npcName,
     $currentNpcData,
@@ -1274,7 +1310,9 @@ $innerThoughtBuffer = requestForInnerThought(
     $connector,
     $currentConnectorData,
     $recordInnerThoughts,
-    $recordDiaryEntry
+    $recordDiaryEntry,
+    $last_gamets,
+    $fortyEightHoursAgo,
 );
 
 Logger::debug(__LINE__ . ' ' . (microtime(true) - $startTime));
@@ -1311,7 +1349,9 @@ $decisionBuffer = requestForaction(
     $npcNameEsc,
     $GLOBALS["db"],
     $fortyEightHoursAgo,
-    $last_gamets
+    $last_gamets,
+    chimBglCombatActionPrompt($currentNpcData, (float)$last_gamets, $npcMaster, $db)
+        . chimBglLootActionPrompt($currentNpcData, $npcMaster, $db)
 );
 
 echo $decisionBuffer . PHP_EOL;
@@ -1429,6 +1469,36 @@ if (!empty($parsed['action'])) {
             unset($parsed['notification']);
             unset($parsed['rumor']);
 
+            break;
+        case 'AttackNPC':
+            if (!chimBglHandleAttackNpcAction(
+                (string)$actionArg,
+                $currentNpcData,
+                (string)$parsed['reason'],
+                (float)$last_gamets,
+                (int)$last_ts,
+                (string)$LAST_REPORTED_LOCATION,
+                $npcMaster,
+                $db,
+                $connectionHandler
+            )) {
+                $recordDiaryEntry = false;
+            }
+            unset($parsed['notification'], $parsed['rumor']);
+            break;
+        case 'LootEncounter':
+            if (!chimBglHandleLootEncounterAction(
+                (int)$actionArg,
+                $currentNpcData,
+                (float)$last_gamets,
+                (int)$last_ts,
+                $npcMaster,
+                $db,
+                $connectionHandler
+            )) {
+                $recordDiaryEntry = false;
+            }
+            unset($parsed['notification'], $parsed['rumor']);
             break;
         case 'Continue':
             error_log("[BGL RUN] Chosen action: Continue. No new action will be issued. Reason: {$parsed['reason']}");

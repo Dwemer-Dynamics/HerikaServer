@@ -1471,6 +1471,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     }
 
+    /* The catalog has ten columns; the legacy eight-column widths collapse Action.
+       Keep editing visible while the article columns scroll horizontally. */
+    .table-container table.oghma-entries {
+        min-width: 1400px;
+    }
+
+    .oghma-entries th:nth-child(1), .oghma-entries td:nth-child(1) { width: 10%; }
+    .oghma-entries th:nth-child(2), .oghma-entries td:nth-child(2) { width: 9%; }
+    .oghma-entries th:nth-child(3), .oghma-entries td:nth-child(3) { width: 19%; }
+    .oghma-entries th:nth-child(4), .oghma-entries td:nth-child(4) { width: 8%; }
+    .oghma-entries th:nth-child(5), .oghma-entries td:nth-child(5) { width: 17%; }
+    .oghma-entries th:nth-child(6), .oghma-entries td:nth-child(6) { width: 8%; }
+    .oghma-entries th:nth-child(7), .oghma-entries td:nth-child(7) { width: 8%; }
+    .oghma-entries th:nth-child(8), .oghma-entries td:nth-child(8) { width: 6%; }
+    .oghma-entries th:nth-child(9), .oghma-entries td:nth-child(9) { width: 9%; }
+    .oghma-entries th:nth-child(10), .oghma-entries td:nth-child(10) { width: 6%; }
+
+    .table-container .oghma-entries th:last-child,
+    .table-container .oghma-entries td:last-child {
+        position: sticky;
+        right: 0;
+        z-index: 2;
+        background: #222;
+        box-shadow: -2px 0 0 #4a4a4a;
+    }
+
     /* Filter improvements */
     .filter-section {
         background: linear-gradient(180deg, rgba(42, 42, 42, 0.95), rgba(34, 34, 34, 0.98));
@@ -1897,7 +1923,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 echo '</div>';
             }
             echo '<div class="table-container">';
-            echo '<table>';
+            echo '<table class="oghma-entries">';
             echo '<tr>
                     <th>Topic</th>
                     <th>Aliases</th>
