@@ -12,6 +12,7 @@ require_once($GLOBALS["ENGINE_ROOT"] . "/lib/core/npc_master.class.php");
 require_once($GLOBALS["ENGINE_ROOT"] . "/lib/core/core_profiles.class.php");
 require_once($GLOBALS["ENGINE_ROOT"] . "/lib/relationship_manager.php");
 require_once($GLOBALS["ENGINE_ROOT"] . "/lib/dynamic_update_util.php");
+require_once($GLOBALS["ENGINE_ROOT"] . "/lib/core/narrator.class.php");
 
 $GLOBALS["ENGINE_PATH"] = $GLOBALS["ENGINE_ROOT"]; // Todo, make this uniform
 
@@ -40,9 +41,36 @@ $GLOBALS["db"]->insert(
     )
 );
 
+$notifySmartWaitFailure = function () {
+    $GLOBALS["db"]->insert('responselog', [
+        'localts' => time(),
+        'sent' => 0,
+        'actor' => 'rolemaster',
+        'text' => '',
+        'action' => 'rolecommand|DebugNotification@Smart Wait could not prepare the scene. Check the server log.',
+        'tag' => '',
+    ]);
+};
+
 $connector = new LLMConnector();
 $currentConnectorData = $connector->getById(intval($GLOBALS["CORE_CONNECTOR_SUMMARY"] ?? 0));
-$connectionHandler = $connector->getConnector($currentConnectorData);
+$connectionHandler = null;
+// Validate the record before getConnector() requires the driver file; a missing driver file is fatal, not catchable.
+$connectorDriver = is_array($currentConnectorData) ? ($currentConnectorData["driver"] ?? null) : null;
+if (!is_string($connectorDriver) || !preg_match('/^[A-Za-z0-9_]+$/', $connectorDriver)
+    || !is_file($GLOBALS["ENGINE_ROOT"] . "/connector/{$connectorDriver}.php")) {
+    Logger::warn('[SMARTWAIT] Summary connector is missing or has an invalid driver');
+} else {
+    try {
+        $connectionHandler = $connector->getConnector($currentConnectorData);
+    } catch (\Throwable $e) {
+        Logger::warn('[SMARTWAIT] Connector initialization failed: ' . $e->getMessage());
+    }
+}
+if (!is_object($connectionHandler)) {
+    $notifySmartWaitFailure();
+    return;
+}
 
 $GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"] = $currentConnectorData;
 $GLOBALS["CURRENT_CONNECTOR"] = $currentConnectorData["driver"];
@@ -83,11 +111,19 @@ $prompt[] = array(
 
 
 
-$connectionHandler = $connector->getConnector($currentConnectorData);
-$generatedContent = $connectionHandler->fast_request($prompt, ['MAX_TOKENS' => 1024], 'smartwait');
-if ($generatedContent) {
-    print_r($generatedContent);
+try {
+    $generatedContent = $connectionHandler->fast_request($prompt, ['MAX_TOKENS' => 1024], 'smartwait');
+} catch (\Throwable $e) {
+    Logger::warn('[SMARTWAIT] Scene generation failed: ' . $e->getMessage());
+    $generatedContent = '';
 }
+$generatedContent = is_string($generatedContent) ? trim($generatedContent) : '';
+// Without a scene there is nothing to wait through; do not log empty narration or open the Wait menu.
+if ($generatedContent === '') {
+    $notifySmartWaitFailure();
+    return;
+}
+print_r($generatedContent);
 
 $lastGameTsRow = $GLOBALS["db"]->fetchAll('SELECT max(gamets) AS last_gamets FROM eventlog');
 $lastTsRow = $GLOBALS["db"]->fetchAll("SELECT max(ts) AS ts FROM eventlog WHERE gamets='{$lastGameTsRow[0]['last_gamets']}'");
@@ -100,7 +136,7 @@ $GLOBALS["db"]->insert('eventlog', [
     'ts' => $last_ts,
     'gamets' => $last_gamets + 20,
     'type' => 'innerchat',
-    'data' => "The Narrator: \n$generatedContent",
+    'data' => chimGetNarratorRoleplayName() . ": \n$generatedContent",
     'sess' => $momentum,
     'localts' => time(),
     'people' => DataBeingsInRange(),

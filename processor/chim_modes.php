@@ -43,7 +43,10 @@
 //
 // * HYPNOSIS (HYPNOSIS)
 //      Generates a full profile based on player input.
-//      
+//
+// * Smart Wait (SMARTWAIT)
+//      Narrates a scene from player input, then opens the Wait menu so the player chooses the duration.
+//
 
 if (!isset($db))
     $db = new sql();
@@ -226,24 +229,43 @@ if ($EXECUTION_MODE == "STANDARD") {
     terminate();
 } else if ($EXECUTION_MODE == "SMARTWAIT") {
     ignore_user_abort(true);
-    
     $userWish = trim(preg_replace('/^[^:]+:\s*/', '', $gameRequest[3]));
-    
-    $managerPath = dirname(__DIR__) . '/service/manager.php';
-    $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
-    $output = [];
-    exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
-            . ' rolemaster smartwait ' . escapeshellarg($userWish) , $output, $returnCode);
-    
-    $db->upsertRow(
-        'conf_opts',
-        array(
-            'id' => 'chim_mode',
-            'value' => 'STANDARD'
-        ),
-        "id='chim_mode'"
-    );
-    
+    $smartWaitError = '';
+    $workerPath = dirname(__DIR__) . '/service/processors/rolemaster/cmd/smartwait.php';
+
+    if ($userWish === '') {
+        $smartWaitError = 'Enter a scene for Smart Wait.';
+    } elseif (!is_readable($workerPath)) {
+        $smartWaitError = 'Smart Wait is unavailable on this server.';
+        Logger::warn('[chim_modes] Smart Wait worker is not installed');
+    } elseif (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_SUMMARY')) {
+        $smartWaitError = 'Enable Summaries to use Smart Wait.';
+    } else {
+        // Request-local submissions already reset in the client; do not overwrite a newer selection.
+        if (!$REQUEST_LOCAL_MODE_OVERRIDE) {
+            $db->query("UPDATE conf_opts SET value='STANDARD' WHERE id='chim_mode' AND value='SMARTWAIT'");
+        }
+        $managerPath = dirname(__DIR__) . '/service/manager.php';
+        $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
+        $output = [];
+        exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
+            . ' rolemaster smartwait ' . escapeshellarg($userWish), $output, $returnCode);
+        // The manager launches a worker; the worker reports generation failures itself.
+        if ($returnCode !== 0) {
+            $smartWaitError = 'Smart Wait could not start. Check the server log.';
+            Logger::warn('[chim_modes] Smart Wait dispatch failed with exit code ' . $returnCode);
+        }
+    }
+    if ($smartWaitError !== '') {
+        $db->insert('responselog', [
+            'localts' => time(),
+            'sent' => 0,
+            'actor' => 'rolemaster',
+            'text' => '',
+            'action' => 'rolecommand|DebugNotification@' . $smartWaitError,
+            'tag' => '',
+        ]);
+    }
     terminate();
 }
 
