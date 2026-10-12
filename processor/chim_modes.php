@@ -45,7 +45,7 @@
 //      Generates a full profile based on player input.
 //
 // * Smart Wait (SMARTWAIT)
-//      Narrates a scene from player input, then opens the Wait menu so the player chooses the duration.
+//      Opens the Wait menu so the player chooses the duration, while a worker narrates a scene from player input.
 //
 
 if (!isset($db))
@@ -241,19 +241,59 @@ if ($EXECUTION_MODE == "STANDARD") {
     } elseif (!chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_SUMMARY')) {
         $smartWaitError = 'Enable Summaries to use Smart Wait.';
     } else {
-        // Request-local submissions already reset in the client; do not overwrite a newer selection.
-        if (!$REQUEST_LOCAL_MODE_OVERRIDE) {
-            $db->query("UPDATE conf_opts SET value='STANDARD' WHERE id='chim_mode' AND value='SMARTWAIT'");
+        // Best-effort preflight: reject while a worker holds the scene lock. Near-simultaneous submissions can
+        // both pass here; the worker takes the lock itself, so only one of them prepares a scene.
+        $smartWaitLock = $db->fetchOne("SELECT pg_try_advisory_lock(hashtext('chim_smart_wait')) AS locked");
+        $smartWaitIdle = ($smartWaitLock['locked'] ?? '') === 't';
+        if ($smartWaitIdle) {
+            $db->fetchOne("SELECT pg_advisory_unlock(hashtext('chim_smart_wait')) AS unlocked");
         }
-        $managerPath = dirname(__DIR__) . '/service/manager.php';
-        $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
-        $output = [];
-        exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
-            . ' rolemaster smartwait ' . escapeshellarg($userWish), $output, $returnCode);
-        // The manager launches a worker; the worker reports generation failures itself.
-        if ($returnCode !== 0) {
-            $smartWaitError = 'Smart Wait could not start. Check the server log.';
-            Logger::warn('[chim_modes] Smart Wait dispatch failed with exit code ' . $returnCode);
+        if (!$smartWaitIdle) {
+            $smartWaitError = 'Smart Wait is already preparing a scene.';
+        } else {
+            // Request-local submissions already reset in the client; do not overwrite a newer selection.
+            if (!$REQUEST_LOCAL_MODE_OVERRIDE) {
+                $db->query("UPDATE conf_opts SET value='STANDARD' WHERE id='chim_mode' AND value='SMARTWAIT'");
+            }
+            // Open the Wait menu now; the narration is delivered separately once it is ready.
+            $smartWaitMenuId = $db->insertReturningId('responselog', [
+                'localts' => time(),
+                'sent' => 0,
+                'actor' => 'rolemaster',
+                'text' => '',
+                'action' => 'rolecommand|SmartWait@',
+                'tag' => '',
+            ], 'rowid');
+            // Off/On refuses the write (and this notice); a failed write is reported. Neither launches a worker.
+            if ($smartWaitMenuId === false) {
+                $smartWaitError = 'Smart Wait could not start. Check the server log.';
+                Logger::info('[chim_modes] Smart Wait request was invalidated by Off/On before dispatch');
+            } elseif (!$smartWaitMenuId) {
+                $smartWaitError = 'Smart Wait could not start. Check the server log.';
+                Logger::warn('[chim_modes] Smart Wait could not queue the Wait menu');
+            }
+        }
+        if ($smartWaitError === '') {
+            // The worker starts later, so it receives this request's generation and timeline rather than the live ones.
+            $smartWaitClock = $db->fetchOne("SELECT value FROM conf_opts WHERE id='DYNAMIC_PROFILE_CLOCK'");
+            $smartWaitEpoch = (string)((json_decode($smartWaitClock['value'] ?? '{}', true) ?: [])['epoch'] ?? '');
+            if (!preg_match('/^[0-9a-f]*$/', $smartWaitEpoch)) $smartWaitEpoch = '';
+            $managerPath = dirname(__DIR__) . '/service/manager.php';
+            $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
+            $output = [];
+            // Without redirection exec() waits for the forked worker, which inherits the manager's stdout.
+            exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
+                . ' rolemaster smartwait ' . escapeshellarg($userWish)
+                . ' ' . escapeshellarg((string)(int)$GLOBALS['chim_interaction_generation'])
+                . ' ' . escapeshellarg($smartWaitEpoch) . ' > /dev/null 2>&1 < /dev/null', $output, $returnCode);
+            // The manager launches a worker; the worker reports generation and delivery failures itself.
+            if ($returnCode !== 0) {
+                $smartWaitError = 'Smart Wait could not start. Check the server log.';
+                Logger::warn('[chim_modes] Smart Wait dispatch failed with exit code ' . $returnCode);
+                if ($smartWaitMenuId) {
+                    $db->query('DELETE FROM responselog WHERE sent=0 AND rowid=' . (int)$smartWaitMenuId);
+                }
+            }
         }
     }
     if ($smartWaitError !== '') {
