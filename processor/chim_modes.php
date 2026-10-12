@@ -229,6 +229,20 @@ if ($EXECUTION_MODE == "STANDARD") {
     
     $userWish = trim(preg_replace('/^[^:]+:\s*/', '', $gameRequest[3]));
     
+    $managerPath = dirname(__DIR__) . '/service/manager.php';
+    $phpCli = is_executable(PHP_BINDIR . '/php') ? PHP_BINDIR . '/php' : 'php';
+    $output = [];
+    exec(escapeshellarg($phpCli) . ' ' . escapeshellarg($managerPath)
+            . ' rolemaster smartwait ' . escapeshellarg($userWish) , $output, $returnCode);
+    
+    $db->upsertRow(
+        'conf_opts',
+        array(
+            'id' => 'chim_mode',
+            'value' => 'STANDARD'
+        ),
+        "id='chim_mode'"
+    );
     
     terminate();
 }
