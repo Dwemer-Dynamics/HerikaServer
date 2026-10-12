@@ -11,6 +11,16 @@ final class ProfileConnectorTestsRegressionTest extends TestCase
             'mood' => 'neutral', 'action' => 'Talk', 'target' => ''];
         $this->assertSame('pass', chimValidateConnectorDialogue(json_encode($reply), true)['dialogue']['status']);
         $this->assertSame('fail', chimValidateConnectorDialogue('{"message":"Hello"', true)['dialogue']['status']);
+        foreach ([1, 5, '', ' '] as $amount) {
+            $this->assertSame('pass', chimValidateConnectorDialogue(json_encode($reply + ['amount' => $amount]), true)['actions']['status']);
+        }
+        foreach ([0, -1, 1.5, '1', 'one', null, [1]] as $amount) {
+            $this->assertSame('fail', chimValidateConnectorDialogue(json_encode($reply + ['amount' => $amount]), true)['actions']['status']);
+        }
+        $this->assertSame('fail', chimValidateConnectorDialogue('{"action":"Talk","target":"","amount":1.0}', true)['actions']['status']);
+        foreach (['target', 'item'] as $key) {
+            $this->assertSame('fail', chimValidateConnectorDialogue(json_encode([$key => 'Lydia'] + $reply), true)['actions']['status']);
+        }
         $reply['action'] = 'Attack';
         $this->assertSame('fail', chimValidateConnectorDialogue(json_encode($reply), true)['actions']['status']);
         $this->assertSame('skipped', chimValidateConnectorDialogue('Hello', false)['actions']['status']);
