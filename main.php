@@ -296,9 +296,10 @@ if (in_array($gameRequest[0],["inputtext","inputtext_s","ginputtext","ginputtext
     error_log($cleaned_player_dialogue);
     if (strpos($gameRequest[3],"**")===0 || strpos($cleaned_player_dialogue,"**")===0 ) {
         // If player speech starts with **
-        if (strpos($cleaned_player_dialogue,"***")===0) {
+        if (strpos($cleaned_player_dialogue,"***")===0 || strpos($cleaned_player_dialogue,"**(*")===0) {
             // *** will be a shortcut of **(translate)
             $cleaned_player_dialogue = str_replace('***','**((translate) ',$cleaned_player_dialogue).")";
+            $cleaned_player_dialogue = str_replace('**(*','**((translate) ',$cleaned_player_dialogue).")";
         }
         error_log("Overwritting user prompt $cleaned_player_dialogue");
 
