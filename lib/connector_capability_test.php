@@ -17,8 +17,14 @@ function chimValidateConnectorDialogue(string $response, bool $jsonDriver): arra
     $valid = $valid && trim($object['message'] ?? '') !== '';
     $actions = is_array($object) && ($object['action'] ?? null) === 'Talk'
         && isset($object['target']) && is_string($object['target']) && trim($object['target']) === '';
-    foreach (['item', 'amount'] as $key) {
-        if (is_array($object) && array_key_exists($key, $object) && (!is_string($object[$key]) || trim($object[$key]) !== '')) {
+    if (is_array($object) && array_key_exists('item', $object) && (!is_string($object['item']) || trim($object['item']) !== '')) {
+        $actions = false;
+    }
+    // The dialogue schema types amount as an integer >= 1; legacy unschematized replies may leave it empty or omit it.
+    if (is_array($object) && array_key_exists('amount', $object)) {
+        $amount = $object['amount'];
+        $legacyEmpty = is_string($amount) && trim($amount) === '';
+        if (!$legacyEmpty && !(is_int($amount) && $amount >= 1)) {
             $actions = false;
         }
     }
@@ -26,7 +32,7 @@ function chimValidateConnectorDialogue(string $response, bool $jsonDriver): arra
         'dialogue' => ['status' => $valid ? 'pass' : 'fail', 'message' => $valid
             ? 'Complete dialogue JSON with typed fields' : 'Expected a JSON object with character, listener, message and mood strings and nonempty speech'],
         'actions' => ['status' => $actions ? 'pass' : 'fail', 'message' => $actions
-            ? 'Talk action and empty target; no action executed' : 'Expected action Talk with empty target, item and amount'],
+            ? 'Talk action and empty target; no action executed' : 'Expected action Talk with empty target and item, and amount omitted, empty or a positive integer'],
     ];
 }
 
@@ -37,7 +43,7 @@ function chimRunConnectorCapabilityTest(object $handler, string $driver): array
     $context = [
         ['role' => 'system', 'content' => 'This is an isolated connection test, not a game scene. Respond with a short greeting. Do not request any action.'],
         ['role' => 'user', 'content' => $jsonDriver
-            ? 'Use the required dialogue JSON. Set action to Talk, target to an empty string, and item and amount to empty strings if present. Say Hello in message.'
+            ? 'Use the required dialogue JSON. Set action to Talk and target and item to empty strings. Omit amount, or set it to 1 if it is required. Say Hello in message.'
             : 'Reply with Hello.'],
     ];
     $started = microtime(true);
