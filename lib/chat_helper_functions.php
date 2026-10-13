@@ -5,8 +5,10 @@ require_once __DIR__ . '/speech_trace.php';
 define("_MINIMAL_DISTANCE_TO_BE_THE_SAME", 0.0);
 define("_MAXIMAL_DISTANCE_TO_BE_RELATED", 0.8);
 define("_MINIMAL_ELEMENTS_TO_TRIGGER_MESSAGE", 3);
-//prevent in-game buffer overflow (does not truncate tts only subtitles. Fixes long player input playertts (auto-chat / manual player scene setting)) - ideally player input needs splitting for tts but returnLines is not appropriate
-define("_MAX_SUBTITLE_LENGTH", 1000);
+// Legacy name kept for plugins. returnLines() and split_sentences_stream() split speech into
+// lines of at most CHIM_SPEECH_SEGMENT_MAX_BYTES before TTS; 1000 bytes is not a safe size.
+require_once __DIR__ . '/sentence_boundaries.php';
+define("_MAX_SUBTITLE_LENGTH", CHIM_SPEECH_SEGMENT_MAX_BYTES);
 
 require_once(__DIR__."/online_translation.php");
 require_once(__DIR__."/utils_game_timestamp.php");
@@ -548,7 +550,8 @@ function split_sentences_stream($paragraph)
         $splitSentences[] = $currentSentence;
     }
 
-    return $splitSentences;
+    // Long narration spans and unbroken text still need a bounded line for the game.
+    return array_merge(...array_map('chimSplitSpeechSegments', $splitSentences));
 }
 
 function getEndOfSentencePunctuation() {
@@ -1325,13 +1328,43 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
         error_log("[returnLines] After recombination: " . count($lines) . " lines");
     }
 
-    foreach ($lines as $n => $sentence) {
+    // Bound each line before TTS so every subtitle keeps its own audio and utterance ID.
+    // A translation covers its whole source line, so it stays with the line's first segment;
+    // the prepared subtitle and audio text are split again below. Later segments carry none.
+    $hasTranslation = Translation::$response && is_array(Translation::$sentences);
+    $boundedLines = [];
+    $boundedTranslations = [];
+    foreach ($lines as $n => $line) {
+        $segments = is_string($line) ? chimSplitSpeechSegments($line) : [$line];
+        foreach ($segments as $index => $segment) {
+            if ($hasTranslation && array_key_exists($n, Translation::$sentences)) {
+                $boundedTranslations[count($boundedLines)] = $index === 0 ? Translation::$sentences[$n] : '';
+            }
+            $boundedLines[] = $segment;
+        }
+    }
+    if (count($boundedLines) !== count($lines)) {
+        error_log("[returnLines] Split oversized speech into " . count($boundedLines) . " bounded lines");
+    }
+    if ($hasTranslation) {
+        Translation::$sentences = $boundedTranslations;
+    }
+
+    // Prepared speech that still exceeds the limit is queued as continuation parts in front of the next line.
+    $speechQueue = [];
+    foreach ($boundedLines as $n => $sentence) {
+        $speechQueue[] = [$n, $sentence];
+    }
+
+    while ($speechQueue) {
+        [$n, $sentence] = array_shift($speechQueue);
 
         if ($FORCED_STOP) {
             return;
         }
-        
-        if (is_array($sentence))
+
+        $speechContinuation = is_array($sentence) ? ($sentence['chim_speech_continuation'] ?? null) : null;
+        if (is_array($sentence) && $speechContinuation === null)
             continue;
 
         // Let the caller stop a superseded response after the current TTS line has finished,
@@ -1352,6 +1385,17 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
         else
             $elapsedTimeAI= microtime(true) - $startTime;
         //error_log("PRE LLM STATUS DONE 2: ". (microtime(true) - $startTime));
+
+        if ($speechContinuation !== null) {
+            // Already prepared by the line it was split from; only TTS, output and logging remain.
+            [$responseForSubtitles, $responseForTTS, $responseText, $responseTextUnmooded, $responseForContext] = $speechContinuation;
+            $skipSpeechHistory = trim((string)$responseForContext) === '';
+            $shouldEmitNpcLine = true;
+            $inlineNarrationTtsCompleted = false;
+            $ttsOutput = null;
+            goto chimPreparedSpeechPart;
+        }
+        $skipSpeechHistory = false;
 
         $pattern = '/<[^>]+>/';
         $output = str_replace("#CHAT#", "", preg_replace($pattern, '', $sentence));
@@ -1433,7 +1477,10 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
         $mood = extractFirstEmoteMood($mood, "default");
 
 
-        if (strlen($responseTextUnmooded) < 2 && !($splitNarration && $narrationParts && !empty($narrationParts['narrations']))) { // Avoid too short responses
+        // A line's translation may be much longer than its source, so either side can carry the line.
+        $translatedSentence = Translation::$response ? stripOutputSpeakerPrefix(unmoodSentence((string)(Translation::$sentences[$n] ?? ''))) : '';
+
+        if (strlen($responseTextUnmooded) < 2 && strlen($translatedSentence) < 2 && !($splitNarration && $narrationParts && !empty($narrationParts['narrations']))) { // Avoid too short responses
             chimSpeechTrace('skipped', ['reason' => 'empty_or_short']);
             unset($GLOBALS['CHIM_SPEECH_TRACE_ID']);
             continue;
@@ -1454,24 +1501,13 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
         // Set up subtitles based on whether inline narration is enabled
         if ($isPlayerSpeech) {
             $responseForSubtitles = formatPlayerSubtitleText($sentenceForSubtitles);
-            if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
-                $responseForSubtitles = substr($responseForSubtitles, 0, _MAX_SUBTITLE_LENGTH);
-            }
         } elseif ($textOnlyNarration) {
             $responseForSubtitles = formatTextOnlyInlineNarrationSubtitleText($sentenceForSubtitles);
-            if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
-                $responseForSubtitles = substr($responseForSubtitles, 0, _MAX_SUBTITLE_LENGTH);
-            }
         } elseif (!$splitNarration && $inlineNarrationEnabled) {
             $responseForSubtitles = formatNpcSubtitleText($sentenceForSubtitles);
-            if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
-                $responseForSubtitles = substr($responseForSubtitles, 0, _MAX_SUBTITLE_LENGTH);
-            }
         } else {
             // If narration is disabled or will be split, use the same text as TTS (narration stripped)
-            $responseForSubtitles = strlen($responseTextUnmooded) > _MAX_SUBTITLE_LENGTH ?
-            substr($responseTextUnmooded, 0, _MAX_SUBTITLE_LENGTH) :
-            $responseTextUnmooded;
+            $responseForSubtitles = $responseTextUnmooded;
         }
 
         $responseForContext = $responseTextUnmooded;
@@ -1482,8 +1518,7 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
         $ttsOutput = null;
 
         if (Translation::$response) {
-            Translation::$sentences[$n] = unmoodSentence(Translation::$sentences[$n]);
-            Translation::$sentences[$n] = stripOutputSpeakerPrefix(Translation::$sentences[$n]);
+            Translation::$sentences[$n] = $translatedSentence;
 
             if (Translation::isAudioEnabled() || Translation::isPlayerAudioEnabled()) {
                 $responseForTTS = Translation::$sentences[$n]; // script for TTS to generate audio from
@@ -1496,6 +1531,8 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                 $responseText = Translation::$sentences[$n];
                 $responseTextUnmooded = Translation::$sentences[$n];
                 $responseForContext = Translation::$sentences[$n];
+                // Later segments of a split source line: the whole translation is logged with the first.
+                $skipSpeechHistory = trim($translatedSentence) === '';
             }
         }
 
@@ -1520,14 +1557,13 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
         $shouldEmitNpcLine = false;
         $inlineNarrationTtsCompleted = false;
 
-        if ($responseTextUnmooded || $hasNarrationBlocks || $hasTextOnlyNarration) {
+        // Gate on what is shown or voiced: with saved translations the history text can be empty
+        // for a source segment that is still spoken, and the reverse.
+        if (trim((string)$responseForSubtitles) !== '' || trim((string)$responseForTTS) !== '' || $hasNarrationBlocks || $hasTextOnlyNarration) {
             $shouldEmitNpcLine = true;
 
             if ($hasTextOnlyNarration) {
                 $responseForSubtitles = formatTextOnlyInlineNarrationSubtitleText($sentenceForSubtitles);
-                if (strlen($responseForSubtitles) > _MAX_SUBTITLE_LENGTH) {
-                    $responseForSubtitles = substr($responseForSubtitles, 0, _MAX_SUBTITLE_LENGTH);
-                }
 
                 if (!empty($narrationParts['dialogue'])) {
                     $responseForTTS = formatTextOnlyInlineNarrationSpeechText($sentenceForSubtitles, $narrationParts);
@@ -1573,7 +1609,7 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
 
                     // Prepare narration for TTS (with asterisks for subtitle display)
                     $narrationForTTS = $narrationText;
-                    $narrationForSubtitles = formatNarrationSubtitleText($narrationText);
+                    $narrationForSubtitles = chimClampSpeechBytes(formatNarrationSubtitleText($narrationText));
                     $narrationForSpeech = chimApplyTtsPronunciationDictionary($narrationForTTS, null, []);
                     $narrationTtsCacheText = $narrationForSpeech !== $narrationForTTS
                         ? $narrationForSpeech
@@ -1600,7 +1636,8 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                             $narratorExpression = ""; // No expression for narrator
                             $narratorAnimation = ""; // No animation for narrator
 
-                            echo "The Narrator|ScriptQueue|{$narrationForSubtitles}/{$narratorExpression}/{$narratorListener}/{$narratorAnimation}/{$narrationForSpeech}/1//{$narratorUtteranceId}\r\n";
+                            $narrationPhonetic = chimClampSpeechBytes($narrationForSpeech);
+                            echo "The Narrator|ScriptQueue|{$narrationForSubtitles}/{$narratorExpression}/{$narratorListener}/{$narratorAnimation}/{$narrationPhonetic}/1//{$narratorUtteranceId}\r\n";
                             chimSpeechTrace('emitted');
                             if (ob_get_level()) @ob_flush();
                             @flush();
@@ -1647,6 +1684,40 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                 $responseForSubtitles = $chimStripTags($responseForSubtitles);
                 $responseForContext = $chimStripTags($responseForContext);
             }
+
+            // A transformer or a translation can outgrow the bounded line. Split the final subtitle and
+            // audio text again; each part gets its own TTS call, utterance ID and cancellation check.
+            $subtitleParts = chimSplitSpeechSegments((string)$responseForSubtitles);
+            $ttsParts = chimSplitSpeechSegments((string)$responseForTTS);
+            $partCount = max(count($subtitleParts), count($ttsParts));
+            if ($shouldEmitNpcLine && $partCount > 1) {
+                $subtitleParts = chimSpreadSpeechSegments($subtitleParts, $partCount);
+                $ttsParts = chimSpreadSpeechSegments($ttsParts, $partCount);
+                // History text follows the audio or subtitle it equals; otherwise it is logged whole with the first part.
+                $historyParts = function ($text) use ($responseForTTS, $responseForSubtitles, $ttsParts, $subtitleParts, $partCount) {
+                    if ($text === $responseForTTS) return $ttsParts;
+                    if ($text === $responseForSubtitles) return $subtitleParts;
+                    return array_pad([$text], $partCount, '');
+                };
+                $textParts = $historyParts($responseText);
+                $unmoodedParts = $historyParts($responseTextUnmooded);
+                $contextParts = $historyParts($responseForContext);
+                $continuations = [];
+                for ($part = 1; $part < $partCount; $part++) {
+                    $continuations[] = [$n, ['chim_speech_continuation' => [$subtitleParts[$part], $ttsParts[$part], $textParts[$part], $unmoodedParts[$part], $contextParts[$part]]]];
+                }
+                array_unshift($speechQueue, ...$continuations);
+                [$responseForSubtitles, $responseForTTS, $responseText, $responseTextUnmooded, $responseForContext] = [$subtitleParts[0], $ttsParts[0], $textParts[0], $unmoodedParts[0], $contextParts[0]];
+                error_log("[returnLines] Split prepared speech into {$partCount} parts");
+            }
+
+            chimPreparedSpeechPart:
+            // Audio is found by its subtitle, so a voiced part without its own subtitle shows its spoken text.
+            if (trim((string)$responseForSubtitles) === '' && trim((string)$responseForTTS) !== '') {
+                $responseForSubtitles = $responseForTTS;
+            }
+            // Last-resort guard only; the split above keeps subtitles within the limit.
+            $responseForSubtitles = chimClampSpeechBytes((string)$responseForSubtitles);
 
             $responseForSpeech = (string)$responseForTTS;
             $npcPronunciationApplied = false;
@@ -2038,6 +2109,7 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
                     Logger::debug("No phonetic conversion available; using unmooded text for phonetic output: $responseTextPhonetic");
                 }
 
+                $responseTextPhonetic = chimClampSpeechBytes((string)$responseTextPhonetic);
                 $volumeBoost = 1.0;
 
                 chimInteractionRequire();
@@ -2077,7 +2149,7 @@ function returnLines($lines,$writeOutput=true,$beforeSpeechLine=null)
         }
 
 
-        if (!isset($GLOBALS["PATCH_DONT_STORE_SPEECH_ON_DB"])) {
+        if (!isset($GLOBALS["PATCH_DONT_STORE_SPEECH_ON_DB"]) && !$skipSpeechHistory) {
 
             $db->insert(
                 'log',

@@ -5,7 +5,8 @@ chimInteractionRequire();
 $playerTtsSourceText = function_exists('chimResolvePlayerTtsSourceText')
     ? chimResolvePlayerTtsSourceText($gameRequest[3] ?? '')
     : ($gameRequest[3] ?? '');
-$cleaned_dialogue = preg_replace('/^[^:]+:/', '', $playerTtsSourceText);
+// Trimmed so oversized lines split at the same offsets as the dialogue-menu cache check.
+$cleaned_dialogue = trim((string)preg_replace('/^[^:]+:/', '', $playerTtsSourceText));
 
 if (!function_exists('emitPlayerTextOnlyScriptQueueLine')) {
     function emitPlayerTextOnlyScriptQueueLine($line)
@@ -147,7 +148,10 @@ try {
     if ($hasPlayerTtsConnector) {
         $ownspeech = returnlines([$cleaned_dialogue], $writeOutput);
     } elseif ($writeOutput) {
-        emitPlayerTextOnlyScriptQueueLine($cleaned_dialogue);
+        // Match the bounded lines returnLines() produces for voiced player speech.
+        foreach (chimSplitSpeechSegments((string)$cleaned_dialogue) as $playerTextSegment) {
+            emitPlayerTextOnlyScriptQueueLine($playerTextSegment);
+        }
     }
 
     if (Translation::isSavePlayerTranslationEnabled()) {
