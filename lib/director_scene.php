@@ -122,6 +122,24 @@ function chimRequestDirectorScene($connection, array $prompt, array $actors, arr
     }
 }
 
+// A speaker whose profile disables TTS is sent as text only, without a cache key the client could
+// download. Any other connector must produce real audio; its failure still aborts the whole scene.
+function chimPrepareDirectorLineSpeech(array &$line, string $engineRoot): void
+{
+    if (strcasecmp(strval($GLOBALS['TTSFUNCTION'] ?? ''), 'none') === 0) {
+        chimSpeechTrace('tts_skipped', ['reason' => 'disabled']);
+        $line['text_only'] = true;
+        return;
+    }
+    $line['tts_cache_key'] = md5($line['utterance_id']);
+    $audio = $engineRoot . '/soundcache/' . $line['tts_cache_key'] . '.wav';
+    if (!is_file($audio) || filesize($audio) <= 44) callNpcTtsWithFallback($line['text'], 'default', $line['utterance_id']);
+    if (!is_file($audio) || filesize($audio) <= 44) {
+        dwemerDirectorLogError('Director audio generation failed');
+        throw new RuntimeException('Director audio generation failed');
+    }
+}
+
 // Generate and publish one complete scene; no NPC model interprets these lines again.
 function chimGenerateDirectorScene($connection, string $instruction, string $worldContext): void
 {
@@ -193,13 +211,7 @@ function chimGenerateDirectorScene($connection, string $instruction, string $wor
         $line['utterance_id'] = 'director-' . $scene['id'] . '-' . $index;
         $GLOBALS['CHIM_SPEECH_TRACE_ID'] = $line['utterance_id'];
         chimSpeechTrace('sentence_ready', ['sentence' => $index + 1]);
-        $line['tts_cache_key'] = md5($line['utterance_id']);
-        $audio = $CACHE_ENGINE_ROOT . '/soundcache/' . $line['tts_cache_key'] . '.wav';
-        if (!is_file($audio) || filesize($audio) <= 44) callNpcTtsWithFallback($line['text'], 'default', $line['utterance_id']);
-        if (!is_file($audio) || filesize($audio) <= 44) {
-            dwemerDirectorLogError('Director audio generation failed');
-            throw new RuntimeException('Director audio generation failed');
-        }
+        chimPrepareDirectorLineSpeech($line, $CACHE_ENGINE_ROOT);
     }
     unset($line);
     $db = $GLOBALS['db'];
