@@ -1006,39 +1006,63 @@ class BookReader
         }
         $GLOBALS["SCRIPTLINE_ANIMATION_SENT"] = true;  // To avoid returnlines from sending any animation.
         $GLOBALS["AVOID_TTS_CACHE"] = true;
-        returnLines([$lineText], true);
-        // returnLines can change the line text (e.g. to expand abbreviations), so we capture the final version it returns.
-        $output = $GLOBALS["DEBUG_DATA"]["OUTPUT_LOG"];
-        $output_parts = explode("|", $output);
-        $output_parts_queue = explode("/", $output_parts[2]);
+        // Voice every bounded segment before queuing any, so a failure leaves the whole line for retry.
+        // The last segment's utterance ID marks the line spoken once all of it has played.
+        $segments = [];
+        $failed = false;
+        // returnLines can change the line text (e.g. to expand abbreviations) and split it again, so collect
+        // each line it outputs before it starts the next one.
+        $collectOutput = function () use (&$segments, &$failed) {
+            $output = $GLOBALS["DEBUG_DATA"]["OUTPUT_LOG"] ?? null;
+            unset($GLOBALS["DEBUG_DATA"]["OUTPUT_LOG"]);
+            if ($output === null) {
+                return;
+            }
+            $output_parts = explode("|", $output);
+            $output_parts_queue = explode("/", $output_parts[2] ?? '');
+            if (count($output_parts_queue) < 3) {
+                Logger::error("[book_read] Failed to generate TTS for line: '{$output}'");
+                $failed = true;
+                return;
+            }
+            $segments[] = [
+                trim($output_parts_queue[0]),
+                trim($output_parts_queue[4] ?? ''),
+                $GLOBALS["SCRIPTLINE_UTTERANCE_ID"] ?? chimGenerateUtteranceId(),
+            ];
+        };
+        foreach (chimSplitSpeechSegments((string)$lineText) as $segmentText) {
+            unset($GLOBALS["DEBUG_DATA"]["OUTPUT_LOG"]);
+            $voicedBefore = count($segments);
+            returnLines([$segmentText], true, $collectOutput);
+            $collectOutput();
 
-        if (count($output_parts_queue) < 3) {
-            Logger::error("[book_read] Failed to generate TTS for line: '{$output}'");
-            return null;
+            if ($failed || count($segments) === $voicedBefore) {
+                Logger::error("[book_read] Failed to generate TTS for line: '{$segmentText}'");
+                return null;
+            }
         }
 
-        $lineText = trim($output_parts_queue[0]);
-        $phoneticText = trim($output_parts_queue[4]);
-        error_log("[book_read] Generated TTS for line: '{$lineText}'");
+        foreach ($segments as [$lineText, $phoneticText, $utteranceId]) {
+            error_log("[book_read] Generated TTS for line: '{$lineText}'");
+            $queuedText = "{$lineText}////{$phoneticText}/1/explicit_disable_rechat/{$utteranceId}";
 
-        $utteranceId = $GLOBALS["SCRIPTLINE_UTTERANCE_ID"] ?? chimGenerateUtteranceId();
-        $queuedText = "{$lineText}////{$phoneticText}/1/explicit_disable_rechat/{$utteranceId}";
+            $this->db->insert('responselog', [
+                'localts' => time(),
+                'sent' => 0,
+                'actor' => $this->narratorName,
+                'text' => $queuedText,
+                'action' => 'ScriptQueue',
+                'tag' => '',
+            ]);
 
-        $this->db->insert('responselog', [
-            'localts' => time(),
-            'sent' => 0,
-            'actor' => $this->narratorName,
-            'text' => $queuedText,
-            'action' => 'ScriptQueue',
-            'tag' => '',
-        ]);
-
-        $eventStruct[0] = "chat";
-        $eventStruct[1] = $this->lastTs++;
-        $eventStruct[2] = $this->lastGamets++;
-        $eventStruct[3] = "{$this->narratorName} is reading '{$bookName}': {$lineText}";
-        $eventStruct[5] = ["utterance_id" => $utteranceId];
-        logEvent($eventStruct, DataBeingsInCloseRange(true, true));
+            $eventStruct[0] = "chat";
+            $eventStruct[1] = $this->lastTs++;
+            $eventStruct[2] = $this->lastGamets++;
+            $eventStruct[3] = "{$this->narratorName} is reading '{$bookName}': {$lineText}";
+            $eventStruct[5] = ["utterance_id" => $utteranceId];
+            logEvent($eventStruct, DataBeingsInCloseRange(true, true));
+        }
 
         return $utteranceId;
     }

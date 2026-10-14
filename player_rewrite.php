@@ -168,9 +168,20 @@ if (! isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"])) {
         $outputInstruction = "Output only the final spoken dialogue line. No narration. No stage directions. No speaker names. No bracketed comments.";
     } else {
         $sourceSpeech = $_GET["speech"];
+        
+        
+        // This is broken, always removes content between brackets, so we disable it until fixed.
+        // 
         if ($removePlayerAutochatAsterisks) {
-            $sourceSpeech = sanitizePlayerRespeechText($sourceSpeech, $GLOBALS["PLAYER_NAME"] ?? null);
+            //$sourceSpeech = sanitizePlayerRespeechText($sourceSpeech, $GLOBALS["PLAYER_NAME"] ?? null);
+            $sourceSpeech = str_replace('**','',$_GET["speech"]);//Fast patch
         }
+
+        // Tests:
+        // **(translate) debo irme ahora. recuerda vender las joyas a Belthor, estas haciendo un buen trabajo aqui => "Varek:(translate) debo irme ahora. recuerda vender las joyas a Belthor, estas haciendo un buen trabajo aqui"
+        // **(convert to epic long speech) We're gonna win this battle => "Varek:We\'re gonna win this battle", expected: "Varek:(convert to epic long speech) We\'re gonna win this battle"
+
+        
 
         $promptReplacements = [
             '{PLAYER_NAME}' => $GLOBALS["PLAYER_NAME"],
@@ -201,6 +212,9 @@ if (! isset($GLOBALS["CHIM_CORE_CURRENT_CONNECTOR_DATA"])) {
             );
         }
     }
+
+    error_log("[REWRITE TEST] speech:'".$_GET["speech"]."' instruction generated:'".$instruction."' removePlayerAutochatAsterisks is ".($removePlayerAutochatAsterisks?"1":"0"));
+
 
     $prompt[] = ['role' => 'system', 'content' => $systemContent];
     $prompt[] = ['role' => 'user',   'content' => "# Contextual data\n$historyData"];

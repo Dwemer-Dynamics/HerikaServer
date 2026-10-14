@@ -897,8 +897,8 @@ if ($argv[1] == '15') {
 
 if ($argv[1] == '16') {
     $npcMaster = new NpcMaster();
-    $npc = $npcMaster->getByName("Orianne");
-    $npcMaster->renameNPC("Orianne", "Orianne Marius");
+    $npc = $npcMaster->getByName("Daphnne");
+    $npcMaster->renameNPC("Daphnne", "Daphnne");
 }
 
 if ($argv[1] == '17') {
@@ -1477,9 +1477,14 @@ if ($argv[1] == "47") {
 if ($argv[1] == "48") {
 
     $npcMaster = new NpcMaster();
-    $npcname = "Grosta";
+    $npcname = "Hamelyn";
     $npc = $npcMaster->getByName($npcname);
+
     $skyrimCmd = new SkyrimCommandBuilder();
+
+    $json = $skyrimCmd->Actor->RemoveFromAllFactions("0x{$npc["refid"]}");
+    $skyrimCmd->send(cmd: $json);
+
 
     $json = $skyrimCmd->Actor->AddToFaction("0x{$npc["refid"]}", "0x0001dd09"); //WEPlayerFriend
     $skyrimCmd->send(cmd: $json);
@@ -1489,6 +1494,22 @@ if ($argv[1] == "48") {
 
     $json = $skyrimCmd->Actor->SetRelationshipRank("0x{$npc["refid"]}", "0x14", 1); //WEPlayerFriend
     $skyrimCmd->send(cmd: $json);
+
+    // Guess AIAgentFactionOverride FormID
+    $localOverrideFactionFormID = "05f1f1";
+    $loadOrderESP = $skyrimCmd->getLoadOrderESP();
+    $OverrideFactionFormID = "0x{$loadOrderESP}$localOverrideFactionFormID";
+
+    $json = $skyrimCmd->Actor->AddToFaction("0x{$npc["refid"]}", $OverrideFactionFormID); //AIAgentFactionOverride
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->SetFactionRank("0x{$npc["refid"]}", $OverrideFactionFormID, 1); //AIAgentFactionOverride
+    $skyrimCmd->send(cmd: $json);
+
+    $json = $skyrimCmd->Actor->EvaluatePackage("0x{$npc["refid"]}");// NPC should do nothing if no PackageOverrides
+    $skyrimCmd->send(cmd: $json);
+
+
 }
 
 
@@ -1679,7 +1700,7 @@ if ($argv[1] == '54') {
 }
 
 if ($argv[1] == '55') {
-    $name = "Meridia";
+    $name = "Nocturnal";
     $npcMaster = new NpcMaster();
     $npc = $npcMaster->getByName($name);
 
@@ -1695,3 +1716,14 @@ if ($argv[1] == '56') {
     $contextDataHistoric = DataLastDataExpandedFor("", -15, $sqlfilter);
     print_r($contextDataHistoric);
 }
+
+if ($argv[1] == '57') {
+    $name = "Constance Michel";
+    $npcMaster = new NpcMaster();
+    $npc = $npcMaster->getByName($name);
+
+    $skyrimCmd = new SkyrimCommandBuilder();
+    $json = $skyrimCmd->Actor->SetRelationshipRank("0x{$npc["refid"]}", "0x14", 4); //WEPlayerFriend
+    $skyrimCmd->send(cmd: $json);
+}
+ 

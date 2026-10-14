@@ -1149,13 +1149,19 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
     $playerMenuLine = extractPlayerMenuDialogueLine($gameRequest[3] ?? "");
 
     if ($playerMenuLine !== "") {
-        $cachePath = playerMenuTtsCachePath($playerMenuLine);
-        $cacheExists = file_exists($cachePath);
+        // player_tts.php voices oversized lines as bounded segments, each with its own cache file.
+        $playerMenuSegments = chimSplitSpeechSegments($playerMenuLine);
+        $cacheExists = true;
+        foreach ($playerMenuSegments as $playerMenuSegment) {
+            $cacheExists = $cacheExists && file_exists(playerMenuTtsCachePath($playerMenuSegment));
+        }
         $shouldWriteOutput = ($gameRequest[0] == "player_menu_tts_play");
 
         if ($cacheExists) {
             if ($shouldWriteOutput) {
-                emitPlayerMenuScriptQueueLine($playerMenuLine);
+                foreach ($playerMenuSegments as $playerMenuSegment) {
+                    emitPlayerMenuScriptQueueLine($playerMenuSegment);
+                }
             }
         } else {
             $originalRequestText = $gameRequest[3];
@@ -1178,8 +1184,11 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
 
                 require(__DIR__ . DIRECTORY_SEPARATOR . "player_tts.php");
 
-                if ($shouldWriteOutput && file_exists($cachePath)) {
-                    emitPlayerMenuScriptQueueLine($playerMenuLine);
+                $voicedSegments = array_filter($playerMenuSegments, fn($segment) => file_exists(playerMenuTtsCachePath($segment)));
+                if ($shouldWriteOutput && count($voicedSegments) === count($playerMenuSegments)) {
+                    foreach ($playerMenuSegments as $playerMenuSegment) {
+                        emitPlayerMenuScriptQueueLine($playerMenuSegment);
+                    }
                 }
             } finally {
                 $gameRequest[3] = $originalRequestText;
