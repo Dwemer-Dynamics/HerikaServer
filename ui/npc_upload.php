@@ -111,7 +111,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['submit_individual'])
         $query = "
             INSERT INTO {$schema}.bio_templates_custom
                 (npc_name, core, oghma_knowledge_tags, npc_static_bio, personality, appearance, relationships, occupation, skills, speechstyle, goals, voiceid, gender, race, refid, tts_filter_preset)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, COALESCE($16, (SELECT tts_filter_preset FROM {$schema}.combined_bio_templates WHERE npc_name=$1)))
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, COALESCE($16, (SELECT tts_filter_preset FROM {$schema}.combined_bio_templates WHERE npc_name=$1::varchar)))
             ON CONFLICT (npc_name)
             DO UPDATE SET
                 core = EXCLUDED.core,
@@ -321,7 +321,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_csv'])) {
                             INSERT INTO $schema.bio_templates_custom 
                                     (npc_name, core, oghma_knowledge_tags, npc_static_bio, personality, appearance, 
                                      relationships, occupation, skills, speechstyle, goals, voiceid, gender, race, refid, tts_filter_preset)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, COALESCE($16, (SELECT tts_filter_preset FROM {$schema}.combined_bio_templates WHERE npc_name=$1)))
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, COALESCE($16, (SELECT tts_filter_preset FROM {$schema}.combined_bio_templates WHERE npc_name=$1::varchar)))
                             ON CONFLICT (npc_name)
                             DO UPDATE SET
                                 core = EXCLUDED.core,

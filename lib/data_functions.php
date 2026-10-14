@@ -2206,10 +2206,11 @@ function DataLastDataExpandedForNPC($actor, $lastNelements = -10,$sqlfilter="") 
         
         
 
-        $results = $db->fetchAll("SELECT gamets,data,ts FROM eventlog where type in ('infoaction','itemfound') 
+        $results = $db->fetchAll("SELECT gamets,data,ts,type FROM eventlog where type in ('infoaction','itemfound')
         and people like '%$actorcn%' and data not  like '%<memory>%' and data not like '%#MEMORY%' order by gamets desc LIMIT 10 OFFSET 0");    
         $rawData=[];
         foreach ($results as $row) {
+            if (herikaShouldExcludeEventFromPromptContext($row)) continue;
             $lastDialogFull[]= array('role' => 'user', 'content' => "The Narrator: {$row["data"]}",
             "_gs"=>$row["gamets"]);
         }
@@ -2577,6 +2578,11 @@ function herikaShouldExcludeEventFromPromptContext(array $row): bool
         if (in_array($type, $promptOnlyEventTypes, true)) {
             return true;
         }
+    }
+
+    // Interact outcomes carry the result; their paired attempt rows stay log-only.
+    if ($type === 'infoaction' && preg_match('/^\[Interact [a-f0-9]{32} attempt\] /', $data) === 1) {
+        return true;
     }
 
     if ($type === 'status_msg' && stripos($data, 'csv_import@') === 0) {
