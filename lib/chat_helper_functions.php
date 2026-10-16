@@ -5650,6 +5650,7 @@ function logEvent($dataArray,$forcePeople='', $returnEventId = false)
 {
     if (!empty($GLOBALS['chim_interaction_generated']) && !chimInteractionAllowed()) return;
     $GLOBALS['chim_interaction_observed'] = true;
+    if (isset($dataArray) && chimMagicEventBlacklisted($dataArray[0] ?? '', $dataArray[3] ?? '')) return;
     global $db;
 
     if (!isset($GLOBALS["CACHE_PEOPLE_LIMITED"])) {
