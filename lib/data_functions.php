@@ -2585,6 +2585,10 @@ function herikaShouldExcludeEventFromPromptContext(array $row): bool
         return true;
     }
 
+    if (chimMagicEventBlacklisted($type, $data)) {
+        return true;
+    }
+
     if ($type === 'status_msg' && stripos($data, 'csv_import@') === 0) {
         return true;
     }
