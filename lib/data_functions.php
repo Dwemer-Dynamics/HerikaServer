@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/chim_interaction.php';
+require_once __DIR__ . '/follow_target.php';
 
 require_once(__DIR__."/utils.php");
 // used for openai_token_count table
@@ -2582,6 +2583,10 @@ function herikaShouldExcludeEventFromPromptContext(array $row): bool
 
     // Interact outcomes carry the result; their paired attempt rows stay log-only.
     if ($type === 'infoaction' && preg_match('/^\[Interact [a-f0-9]{32} attempt\] /', $data) === 1) {
+        return true;
+    }
+
+    if (chimMagicEventBlacklisted($type, $data)) {
         return true;
     }
 
@@ -6144,6 +6149,19 @@ function call_llm_internal() {
                     $actionParts2=explode("@",$actionParts[2]);
                     
                     if (isset($actionParts2[1])) {
+                        // Resolve player intent and reject self-follow before explicit-ID passthrough.
+                        if ($actionParts2[0] === "Follow") {
+                            $followCommand = chimResolveFollowCommand($actionParts[0], $actionParts2[1]);
+                            if ($followCommand === null) {
+                                error_log("[ACTION POSTFILTER Follow] Rejected invalid/self target for " . $actionParts[0]);
+                                unset($actions[$n]);
+                                continue;
+                            }
+                            if ($followCommand === 'FollowPlayer@') {
+                                $actions[$n] = "{$actionParts[0]}|{$actionParts[1]}|FollowPlayer@";
+                                continue;
+                            }
+                        }
                         // Parameter part 
                         $explicitActorRefTarget = chimNormalizeExplicitActorRefTarget($actionParts2[1]);
                         $refAwarePlainActions = [
@@ -6276,10 +6294,12 @@ function call_llm_internal() {
                                 $destination=$mang4;
                             else
                                 $destination=$mang3[0];
-                            if ($destination!=$GLOBALS["PLAYER_NAME"])
-                                $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|Follow@$destination";
-                            else
-                                $actions[$n]="{$actionParts[0]}|{$actionParts[1]}|FollowPlayer@";
+                            $followCommand = chimResolveFollowCommand($actionParts[0], $destination);
+                            if ($followCommand === null) {
+                                unset($actions[$n]);
+                                continue;
+                            }
+                            $actions[$n] = "{$actionParts[0]}|{$actionParts[1]}|{$followCommand}";
                             
 
                             error_log("[ACTION POSTFILTER Follow] $localtarget => {$mang3[0]} => $destination");

@@ -52,3 +52,48 @@ if (!function_exists('chimFilterRowsByEventType')) {
         });
     }
 }
+
+if (!function_exists('chimIsMagicCastEvent')) {
+    function chimIsMagicCastEvent($eventType, $data = ''): bool
+    {
+        $eventType = strtolower(trim((string)$eventType));
+        if ($eventType === 'spellcast' || $eventType === 'npcspellcast') {
+            return true;
+        }
+
+        // CHIM AI cast commands log "<actor> casts <spell> at <target>" with no
+        // marker prefix or sentence punctuation; matching prose is indistinguishable.
+        return $eventType === 'infoaction'
+            && preg_match('/^[^\[#<(\r\n][^\r\n]*? casts [^\r\n]+? at [^\r\n]*?[^.!?\s]\s*$/u', (string)$data) === 1;
+    }
+}
+
+if (!function_exists('chimMagicEventBlacklisted')) {
+    function chimMagicEventBlacklisted($eventType, $data = ''): bool
+    {
+        static $cachedBlacklist = null;
+        static $terms = [];
+
+        $blacklist = (string)($GLOBALS['MAGIC_EVENT_BLACKLIST'] ?? '');
+        if (trim($blacklist) === '' || !chimIsMagicCastEvent($eventType, $data)) {
+            return false;
+        }
+
+        if ($blacklist !== $cachedBlacklist) {
+            $cachedBlacklist = $blacklist;
+            $terms = array_values(array_filter(
+                array_map('trim', explode(',', strtolower($blacklist))),
+                static fn(string $term): bool => $term !== '' && $term !== '0'
+            ));
+        }
+
+        $data = strtolower((string)$data);
+        foreach ($terms as $term) {
+            if (strpos($data, $term) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}

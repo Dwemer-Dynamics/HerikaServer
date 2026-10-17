@@ -963,24 +963,8 @@ if ($gameRequest[0] == "npcspellcast") {
     // Handle npcspellcast events based on DETECT_MAGIC_EVENT setting
     if (isset($GLOBALS["DETECT_MAGIC_EVENT"]) && $GLOBALS["DETECT_MAGIC_EVENT"]) {
         $gameRequest[3] = isset($gameRequest[3]) ? $gameRequest[3] : "";
-        
-        // Check blacklist if configured
-        $shouldLog = true;
-        if (isset($GLOBALS["MAGIC_EVENT_BLACKLIST"]) && !empty($GLOBALS["MAGIC_EVENT_BLACKLIST"])) {
-            $blacklistedEvents = array_map('trim', explode(',', strtolower($GLOBALS["MAGIC_EVENT_BLACKLIST"])));
-            $eventData = strtolower($gameRequest[3]);
-            
-            foreach ($blacklistedEvents as $blacklistedEvent) {
-                if (!empty($blacklistedEvent) && strpos($eventData, $blacklistedEvent) !== false) {
-                    $shouldLog = false;
-                    break;
-                }
-            }
-        }
-        
-        if ($shouldLog) {
-            logEvent($gameRequest);
-        }
+        // logEvent applies MAGIC_EVENT_BLACKLIST.
+        logEvent($gameRequest);
     }
     terminate(); // Always exit, whether logged or not
 }
