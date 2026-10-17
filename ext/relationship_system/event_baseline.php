@@ -218,10 +218,10 @@ if (!function_exists('chimRelBuildEventBaseline')) {
             $scanLimit = 3500;
         }
 
-        $excludeTypes = "'prechat','setconf','status_msg','user_input','npc_snapshot','playerinfo'";
+        $excludeTypes = "'relationship','prechat','setconf','status_msg','user_input','npc_snapshot','playerinfo'";
         $safeNpcEscaped = $db->escape($safeNpc);
         $rows = $db->fetchAll(
-            "SELECT rowid, type, data, gamets, localts, ts, people, location
+            "SELECT rowid, type, data, gamets, localts, ts, people, location, private_thought, delivery_state
              FROM eventlog
              WHERE type NOT IN ({$excludeTypes})
                AND (
@@ -232,6 +232,9 @@ if (!function_exists('chimRelBuildEventBaseline')) {
              LIMIT " . intval($scanLimit)
         );
 
+        require_once dirname(__DIR__, 2) . '/lib/npc_private_thoughts.php';
+        $thoughtOwner = chimPrivateThoughtOwner($safeNpc);
+        $thoughtGameTs = (int)DataLastKnownGameTS();
         $linesDesc = [];
         $counterparts = [];
         $npcLower = strtolower($safeNpc);
@@ -245,7 +248,7 @@ if (!function_exists('chimRelBuildEventBaseline')) {
                 if ($line === '') {
                     continue;
                 }
-                $linesDesc[] = $line;
+                $linesDesc[] = $line . chimPrivateThoughtAnnotation($row, $thoughtOwner, $thoughtGameTs);
 
                 foreach (chimRelBaselineExtractParticipants($row) as $participant) {
                     $name = chimRelBaselineNormalizeName($participant);

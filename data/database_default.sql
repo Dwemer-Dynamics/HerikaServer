@@ -1237,11 +1237,13 @@ CREATE TABLE public.memory_summary (
     embedding768 public.vector(768),
     tags text,
     scope text,
-    native_vec tsvector
+    native_vec tsvector,
+    source_rowid integer
 );
 
 
 ALTER TABLE public.memory_summary OWNER TO dwemer;
+CREATE INDEX memory_summary_source_rowid_idx ON public.memory_summary(source_rowid) WHERE source_rowid IS NOT NULL;
 
 --
 -- Name: memory_summary_rowid_seq; Type: SEQUENCE; Schema: public; Owner: dwemer

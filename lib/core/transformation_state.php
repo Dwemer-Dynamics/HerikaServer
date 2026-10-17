@@ -70,6 +70,8 @@ function chimSanitizeTransformationStatePayload(array $payload): array
 function chimBuildTransformationStateMetadataUpdates(array $payload): array
 {
     $state = chimSanitizeTransformationStatePayload($payload);
+    // Use server receipt time for temporary audio effects without changing the client timestamp.
+    $state['received_at_ms'] = chimTransformationStateNowMs();
 
     $setValues = [
         'transformation_state' => $state,

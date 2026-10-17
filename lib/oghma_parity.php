@@ -55,6 +55,7 @@ if (!function_exists('chimOghmaEffectiveSettings')) {
         $values = [
             'enabled' => chimOghmaBool($GLOBALS['OGHMA_INFINIUM'] ?? true, true),
             'extractor_fallback_enabled' => chimOghmaBool($fallbackSetting, false),
+            'multilingual_routing_enabled' => chimOghmaBool($GLOBALS['OGHMA_MULTILINGUAL_ROUTING'] ?? false, false),
             'topic_count' => $topicCount,
             'result_limit' => $resultLimit,
             'racial_context_enabled' => chimOghmaBool($GLOBALS['RACIAL_OGHMA'] ?? true, true),
@@ -68,6 +69,7 @@ if (!function_exists('chimOghmaEffectiveSettings')) {
                 ? 'OGHMA_EXTRACTOR_FALLBACK'
                 : 'OGHMA_CUSTOM',
             'topic_count' => 'OGHMA_AMOUNT',
+            'multilingual_routing_enabled' => 'OGHMA_MULTILINGUAL_ROUTING',
             'result_limit' => 'OGHMA_RESULT_LIMIT',
             'racial_context_enabled' => 'RACIAL_OGHMA',
             'location_context_enabled' => 'LOCATION_OGHMA',

@@ -155,9 +155,13 @@ function dps_context_limit(array $npc): int {
 }
 
 function dps_context($conn, array $npc, int $gamets): string {
+    require_once __DIR__ . '/npc_private_thoughts.php';
+    $thoughtOwner = chimPrivateThoughtOwner($npc['name'], (int)$npc['id']);
     try {
         $limit = dps_context_limit($npc);
-        $data = DataLastDataExpandedForNPC($npc["name"], $limit*-1);
+        $data = $thoughtOwner
+            ? DataLastDataExpandedFor($npc["name"], $limit*-1, " AND gamets <= " . intval($gamets), (int)$npc["id"])
+            : DataLastDataExpandedForNPC($npc["name"], $limit*-1);
         $context = [];
         foreach ($data as $k => $v) {
             $context[] = $v["content"];
@@ -167,9 +171,9 @@ function dps_context($conn, array $npc, int $gamets): string {
         $params = [];
         $audience = dps_audience($npc,$params);
         $limit = dps_context_limit($npc);
-        $rows = pg_fetch_all(dps_query($conn,'SELECT type,data,gamets,location FROM public.eventlog WHERE '
+        $rows = pg_fetch_all(dps_query($conn,'SELECT rowid,type,data,gamets,location,private_thought,delivery_state FROM public.eventlog WHERE '
             . dps_event_filter(false) . " AND ($audience) AND gamets <= $gamets ORDER BY rowid DESC LIMIT $limit",$params)) ?: [];
-        return implode("\n",array_map(static fn($row)=>'['.$row['gamets'].' '.$row['type'].' '.$row['location'].'] '.mb_substr($row['data'],0,2000),array_reverse($rows)));
+        return implode("\n",array_map(static fn($row)=>'['.$row['gamets'].' '.$row['type'].' '.$row['location'].'] '.mb_substr($row['data'],0,2000) . chimPrivateThoughtAnnotation($row,$thoughtOwner,$gamets),array_reverse($rows)));
     }
 }
 

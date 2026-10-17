@@ -264,7 +264,21 @@ Logger::info("[vsx] Cached normalized voice sample {$codename}.wav sha256=" . ha
 
 $syncAttempted = false;
 $syncSucceeded = null;
-if ($ttsEndpoint !== '') {
+$syncStatus = 'not_required';
+$syncEndpoint = $ttsEndpoint;
+$syncHttpCode = 0;
+$syncError = '';
+if ($ttsEndpoint !== '' && $vsxTtsRuntime['driver'] === 'pockettts') {
+    // Resolve the same PocketTTS service synthesis will use, including its known-port fallback.
+    require_once $path . "tts/tts-pockettts.php";
+    $syncAttempted = true;
+    $sync = pockettts_sync_voice_sample($ttsEndpoint, $codename, $voiceCacheFile);
+    $syncStatus = $sync['status'];
+    $syncEndpoint = $sync['endpoint'];
+    $syncHttpCode = $sync['http_code'];
+    $syncError = $sync['error'];
+    $syncSucceeded = $syncStatus !== 'failed';
+} elseif ($ttsEndpoint !== '') {
     $syncAttempted = true;
     $url  = rtrim($ttsEndpoint, '/') . '/upload_sample';
     $curl = curl_init();
@@ -279,22 +293,42 @@ if ($ttsEndpoint !== '') {
     ]);
 
     $response = curl_exec($curl);
-    $syncSucceeded = $response !== false;
-    if (!$syncSucceeded) {
-        Logger::warn("[vsx] Voice provider sync failed for {$codename}: " . curl_error($curl));
-    }
+    $syncHttpCode = intval(curl_getinfo($curl, CURLINFO_HTTP_CODE));
+    $syncError = curl_error($curl);
     curl_close($curl);
+    // Other clone providers keep their existing contract: any HTTP reply counts, so
+    // XTTS's 400 "already exists" for a known voice stays a successful sync.
+    $syncSucceeded = $response !== false;
+    $syncStatus = $syncSucceeded ? 'synced' : 'failed';
 } else {
     Logger::info("[vsx] Cached {$codename}.wav locally for '{$vsxTtsRuntime['driver']}'; no immediate clone endpoint required");
 }
 
-audit_log("vsx.php voice available for {$actorName}");
-chimVsxRespond(200, true, 'Voice sample uploaded', [
+$syncLogEndpoint = preg_replace('#//[^/@]+@#', '//', $syncEndpoint);
+if ($syncSucceeded === false) {
+    Logger::warn("[vsx] Voice provider sync failed for {$codename} at {$syncLogEndpoint}: {$syncError}");
+} elseif ($syncSucceeded === true) {
+    Logger::info("[vsx] Voice provider sync {$syncStatus} for {$codename} at {$syncLogEndpoint} (HTTP {$syncHttpCode})");
+}
+
+$responseFields = [
     'codename' => $codename,
     'driver' => $vsxTtsRuntime['driver'] ?? '',
     'already_available' => $cacheAlreadyAvailable,
+    'cache_succeeded' => true,
     'cached_path' => "data/voices/$codename.wav",
     'metadata_path' => "data/voices/$codename.json",
     'provider_sync_attempted' => $syncAttempted,
     'provider_sync_succeeded' => $syncSucceeded,
-]);
+    'provider_sync_status' => $syncStatus,
+    'provider_endpoint' => $syncLogEndpoint,
+    'provider_sync_http_code' => $syncHttpCode,
+];
+if ($syncSucceeded === false && $vsxTtsRuntime['driver'] === 'pockettts') {
+    // The normalized sample stays cached; only delivery to the voice provider failed.
+    audit_log("vsx.php voice cached for {$actorName}; provider sync failed");
+    chimVsxRespond(502, false, 'Voice sample cached, but provider sync failed', $responseFields);
+}
+
+audit_log("vsx.php voice available for {$actorName}");
+chimVsxRespond(200, true, 'Voice sample uploaded', $responseFields);

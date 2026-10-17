@@ -79,6 +79,51 @@ final class AsteriskParsingTest extends TestCase
         }
     }
 
+    public function testSpeechBoundariesPreserveAbbreviationsAndClosingPunctuation(): void
+    {
+        $cases = [
+            ['Mr. Dragonborn meets Dr. Septimus. Go!', ['Mr. Dragonborn meets Dr. Septimus.', 'Go!']],
+            ['J. R. Smith has version 1.2 and 3.14 gold. Fine.', ['J. R. Smith has version 1.2 and 3.14 gold.', 'Fine.']],
+            ['He said "Stop!" Then left.', ['He said "Stop!"', 'Then left.']],
+            ['Visit example.com. Then rest.', ['Visit example.com.', 'Then rest.']],
+            ['Wait... Still here. Yes.', ['Wait... Still here.', 'Yes.']],
+            ['こんにちは。次です？！終わり。', ['こんにちは。', '次です？！', '終わり。']],
+        ];
+        foreach ($cases as [$text, $expected]) {
+            $this->assertSame($expected, split_at_end_of_sentence($text));
+            // Every byte chunk size includes splits inside punctuation, names, and UTF-8 characters.
+            for ($size = 1; $size <= strlen($text); ++$size) {
+                $buffer = ''; $actual = [];
+                foreach (str_split($text, $size) as $chunk) {
+                    $buffer .= $chunk;
+                    while (($end = findFastSentencePosition($buffer)) !== false) {
+                        $actual[] = trim(substr($buffer, 0, $end + 1));
+                        $buffer = substr($buffer, $end + 1);
+                    }
+                }
+                if (trim($buffer) !== '') $actual[] = trim($buffer);
+                $this->assertSame($expected, $actual, 'Chunk size ' . $size . ': ' . $text);
+            }
+        }
+    }
+
+    public function testLocalizedAndUnfinishedSentenceBoundaries(): void
+    {
+        $previousLanguage = $GLOBALS['CORE_LANG'] ?? null;
+        try {
+            foreach (['fr' => 'Mme. Dupont', 'de' => 'Hr. Schmidt', 'es' => 'Sra. García', 'ru' => 'ул. Ленина'] as $lang => $name) {
+                $GLOBALS['CORE_LANG'] = $lang;
+                $this->assertSame([$name . ' arrives.', 'Hello.'], split_at_end_of_sentence($name . ' arrives. Hello.'));
+            }
+            foreach (['Mr. ', 'J. ', 'Hello. ', 'Really?!', '次です？！'] as $unfinished) {
+                $this->assertFalse(findFastSentencePosition($unfinished));
+            }
+        } finally {
+            if ($previousLanguage === null) unset($GLOBALS['CORE_LANG']);
+            else $GLOBALS['CORE_LANG'] = $previousLanguage;
+        }
+    }
+
     public function testFullWrappedNarrationBlockDoesNotSplitMidReply(): void
     {
         $wrappedReply = "*A slight chuckle escapes me as I straighten a few more apples, my eyes crinkling at the corners. 'Wow,' you say? I hope that's a good 'wow,' Your Majesty. My produce is usually met with enthusiasm for its quality, not surprise. Though, I suppose a king might have seen grander displays of... apples.*";

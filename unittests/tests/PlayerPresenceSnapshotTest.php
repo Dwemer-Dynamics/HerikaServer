@@ -234,7 +234,7 @@ final class PlayerPresenceSnapshotTest extends TestCase
 
     public function testExecutionModeIsValidatedIndependentlyOfSavedMood(): void
     {
-        foreach (['DIRECTOR', 'STANDARD', 'HYPNOSIS'] as $mode) {
+        foreach (['DIRECTOR', 'STANDARD', 'HYPNOSIS', 'SMARTWAIT'] as $mode) {
             foreach (['', 'happy', 'custom'] as $mood) {
                 $payload = ['source' => 'plugin_player_routing_v2', 'execution_mode' => $mode, 'player_mood' => $mood];
                 $this->assertSame($mode, chimDecodePlayerRoutingSnapshotField(base64_encode(json_encode($payload)))['execution_mode']);

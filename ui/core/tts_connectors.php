@@ -57,7 +57,7 @@ function ttsVisibleDriverOptions(TTSConnector $ttsConnector): array
     return array_values(array_filter(
         $ttsConnector->getDriverOptions(),
         function ($driverOption) use ($ttsConnector) {
-            return $ttsConnector->normalizeDriverValue($driverOption) !== 'none';
+            return !in_array($ttsConnector->normalizeDriverValue($driverOption), ['none', 'mimic3', 'melotts'], true);
         }
     ));
 }
@@ -493,6 +493,11 @@ if (isset($_GET['delete'])) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_connector'])) {
     $editId = intval($_POST['id'] ?? 0);
+    $savedConnector = $editId > 0 ? $ttsConnector->getById($editId) : null;
+    if (in_array($ttsConnector->normalizeDriverValue($savedConnector['driver'] ?? ''), ['mimic3', 'melotts'], true)) {
+        header('Location: ' . ttsNoticeUrl('Deprecated connector settings are preserved.', ['edit' => $editId]));
+        exit;
+    }
     $driver = $ttsConnector->normalizeDriverValue($_POST['driver'] ?? 'none');
     $visibleDriverOptions = ttsVisibleDriverOptions($ttsConnector);
     $visibleDriverMap = [];
@@ -669,7 +674,7 @@ main { padding: <?php echo $isEmbed ? '10px 5px 5px' : '30px 5px 5px'; ?>; }
                         <div class="conn-card<?php echo $rowActive; ?>" data-edit-id="<?php echo h($rowId); ?>">
                             <div class="conn-head">
                                 <div class="conn-name"><?php echo h($row['label'] ?? ('Connector #' . $rowId)); ?></div>
-                                <div class="conn-badge"><?php echo h($ttsConnector->getDisplayName($rowDriver)); ?></div>
+                                <div class="conn-badge"><?php echo h($ttsConnector->getDisplayName($rowDriver) . (in_array($rowDriver, ['mimic3', 'melotts'], true) ? ' (deprecated)' : '')); ?></div>
                             </div>
                             <div class="conn-sub"><?php echo h($row['url'] ?? ''); ?></div>
                             <div class="conn-usage"><?php echo h($rowUseCount); ?> assignment<?php echo $rowUseCount === 1 ? '' : 's'; ?></div>
@@ -683,6 +688,8 @@ main { padding: <?php echo $isEmbed ? '10px 5px 5px' : '30px 5px 5px'; ?>; }
                     <div class="placeholder">
                         Select a connector from the left to edit it. New installs will already have the currently selected legacy TTS provider migrated into this table.
                     </div>
+                <?php elseif (in_array($currentDriver, ['mimic3', 'melotts'], true)): ?>
+                    <div class="placeholder"><strong><?php echo h($ttsConnector->getDisplayName($currentDriver)); ?> (deprecated)</strong><p>Existing settings and assignments are preserved. Create a connector with a supported provider to replace it.</p></div>
                 <?php else: ?>
                     <form method="post" action="<?php echo h(ttsPageUrl()); ?>" id="tts_connector_form">
                         <input type="hidden" name="id" value="<?php echo h($editItem['id']); ?>">

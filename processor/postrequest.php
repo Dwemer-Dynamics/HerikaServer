@@ -7,11 +7,15 @@ Post tasks.
 
 // Helper function to properly check boolean values (handles string "false" from form submissions)
 if (!function_exists('isOghmaSettingEnabled')) {
-    function isOghmaSettingEnabled($value) {
-        if ($value === null) return false;
-        if ($value === false || $value === 'false' || $value === '0' || $value === 0) return false;
-        if ($value === true || $value === 'true' || $value === '1' || $value === 1) return true;
-        return (bool)$value;
+    function isOghmaSettingEnabled($value)
+    {
+        if ($value === null)
+            return false;
+        if ($value === false || $value === 'false' || $value === '0' || $value === 0)
+            return false;
+        if ($value === true || $value === 'true' || $value === '1' || $value === 1)
+            return true;
+        return (bool) $value;
     }
 }
 
@@ -21,7 +25,7 @@ $oghmaInfiniumEnabled = isOghmaSettingEnabled($GLOBALS["OGHMA_INFINIUM"] ?? fals
 if ($minimeEnabled) {
     // Use profile-based OGHMA_INFINIUM setting (not legacy conf.php $FEATURES["MISC"]["OGHMA_INFINIUM"])
     if ($oghmaInfiniumEnabled) {
-        if (in_array($gameRequest[0], ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s", "rechat", "continue", "continue_group"])) {
+        if (in_array($gameRequest[0], ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s", "rechat", "continue", "continue_group", "narrator_inputtext"])) {
 
             //$TEST_TEXT=lastSpeech($GLOBALS["HERIKA_NAME"]);
             //$TEST_TEXT="{$GLOBALS["HERIKA_NAME"]}:".implode(" ",$GLOBALS["talkedSoFar"]);
@@ -33,19 +37,21 @@ if ($minimeEnabled) {
     }
 }
 
+define("__JEV_CONFIDENCE_THRESHOLD", 0.89);
+
 // POST MEMORY
 if ($minimeEnabled) {
-    if (in_array($gameRequest[0], ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s"])) {
+    if (in_array($gameRequest[0], ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s", "narrator_inputtext"])) {
         if (sizeof($memoryInjectionCtx) == 0) {
             // In case main memory search didnt return resutls because minime activated and user is nt directly asking a question
             error_log("[POST MEMORY SEARCH]");
             $GLOBALS["PATCH_BYPASS_MINIME_EXTRACT"] = true;
 
             $GLOBALS["MEMORY_THRESHOLD_MODIFIER"] = 0.5;
-            $memoryInjection                      = offerMemory($gameRequest,$useLocationContext=true);
+            $memoryInjection = offerMemory($gameRequest, $useLocationContext = true);
             if ($memoryInjection) {
 
-                $gameRequestCopy    = $gameRequest;
+                $gameRequestCopy = $gameRequest;
                 $gameRequestCopy[0] = "infoaction";
                 $gameRequestCopy[3] = "#MEMORY: {$GLOBALS["HERIKA_NAME"]} remembers this: [$memoryInjection]";
                 error_log("[POST MEMORY SEARCH], memory found ($memoryInjection)");
@@ -54,43 +60,11 @@ if ($minimeEnabled) {
 
         }
 
-        $historyData  = "";
-        $lastPlace    = "";
-        $lastListener = "";
-        $lastDateTime = "";
-
-        foreach (json_decode(DataSpeechJournal($GLOBALS["HERIKA_NAME"], 10), true) as $element) {
-            if ($element["listener"] == "The Narrator") {
-                continue;
-            }
-            if ($lastListener != $element["listener"]) {
-                $listener     = " (talking to {$element["listener"]})";
-                $lastListener = $element["listener"];
-            } else {
-                $listener = "";
-            }
-
-            if ($lastPlace != $element["location"]) {
-                $place     = " (at {$element["location"]})";
-                $lastPlace = $element["location"];
-            } else {
-                $place = "";
-            }
-
-            if ($lastDateTime != substr($element["sk_date"], 0, 15)) {
-                $date         = substr($element["sk_date"], 0, 10);
-                $time         = substr($element["sk_date"], 11);
-                $dateTime     = "(on date {$date} at {$time})";
-                $lastDateTime = substr($element["sk_date"], 0, 15);
-            } else {
-                $dateTime = "";
-            }
-
-            $historyData .= trim("{$element["speaker"]}:" . trim($element["speech"]) . " $listener $place $dateTime") . PHP_EOL;
-        }
-
-        $status = "default";
-        //$topic  = json_decode(minimePostScene($historyData), true);// Not working well for now.
+        // Scene genre switches are read before the dialogue history so a switched-off classifier makes no
+        // history query or provider request. An enabled Decision Connector owns scene genre: with its Scene
+        // Classifier off, Scene Classifier (Legacy) is not used. scene_status is still updated below.
+        $decisionConnectorEnabled = chimIsGlobalLlmConnectorEnabled('CORE_CONNECTOR_DECISION');
+        $decisionSceneClassifierEnabled = chimIsDecisionSceneClassifierEnabled();
         $sceneClassifierEnabled = true;
         if (array_key_exists("SCENE_CLASSIFIER_ENABLED", $GLOBALS)) {
             $sceneClassifierEnabledValue = $GLOBALS["SCENE_CLASSIFIER_ENABLED"];
@@ -100,9 +74,100 @@ if ($minimeEnabled) {
                 $sceneClassifierEnabled = !empty($sceneClassifierEnabledValue);
             }
         }
+        $sceneGenreWanted = $decisionConnectorEnabled ? $decisionSceneClassifierEnabled : $sceneClassifierEnabled;
 
+        $historyData = "";
+        $lastPlace = "";
+        $lastListener = "";
+        $lastDateTime = "";
+
+        foreach (($sceneGenreWanted ? json_decode(DataSpeechJournal($GLOBALS["HERIKA_NAME"], 10), true) : []) as $element) {
+            if ($element["listener"] == "The Narrator") {
+                continue;
+            }
+            if ($lastListener != $element["listener"]) {
+                $listener = " (talking to {$element["listener"]})";
+                $lastListener = $element["listener"];
+            } else {
+                $listener = "";
+            }
+
+            if ($lastPlace != $element["location"]) {
+                $place = " (at {$element["location"]})";
+                $lastPlace = $element["location"];
+            } else {
+                $place = "";
+            }
+
+            if ($lastDateTime != substr($element["sk_date"], 0, 15)) {
+                $date = substr($element["sk_date"], 0, 10);
+                $time = substr($element["sk_date"], 11);
+                $dateTime = "(on date {$date} at {$time})";
+                $lastDateTime = substr($element["sk_date"], 0, 15);
+            } else {
+                $dateTime = "";
+            }
+
+            $historyData .= trim("{$element["speaker"]}:" . trim($element["speech"]) . " $listener $place $dateTime") . PHP_EOL;
+        }
+
+        // SCENE classifier
+
+        $status = "default";
+        //$topic  = json_decode(minimePostScene($historyData), true);// Not working well for now.
+
+        $genreCriteria = [
+            "horror" => "The dialogue is primarily frightening, supernatural, or disturbing.",
+            "action" => "The dialogue centers on immediate physical conflict, danger, or fast-paced events.",
+            "thriller" => "The dialogue centers on suspense, imminent danger, or tense uncertainty.",
+            "mystery" => "The dialogue centers on an unresolved question, investigation, or hidden truth.",
+            "romance" => "The dialogue centers on romantic attraction, intimacy, or a relationship.",
+            "comedy" => "The dialogue is primarily humorous, playful, or intended to amuse.",
+            "drama" => "The dialogue centers on serious emotional conflict or consequential personal events.",
+            "nsfw" => "The dialogue is primarily sexually explicit or adult in nature.",
+            "default" => "No listed genre clearly describes the current dialogue.",
+        ];
+
+        // An enabled Decision Connector replaces the legacy classifier. Each path makes at most one
+        // request; a failed, missing or uncertain answer keeps the default genre without a retry.
         $topic = ["generated_tags" => "default"];
-        if ($sceneClassifierEnabled) {
+        if ($decisionConnectorEnabled && !$decisionSceneClassifierEnabled) {
+            Logger::info("[SCENE CLASSIFIER] Decision Connector Scene Classifier is off, skipping scene genre detection");
+        } else if ($decisionConnectorEnabled) {
+            $connector = new LLMConnector();
+            $decisionConnectorId = intval($GLOBALS["CORE_CONNECTOR_DECISION"] ?? 0);
+            $decisionConnectorData = $decisionConnectorId > 0 ? $connector->getById($decisionConnectorId) : null;
+            $decisionResponse = [];
+            if (!chimIsDecisionConnector($decisionConnectorData)) {
+                Logger::warn("[SCENE CLASSIFIER] Decision Connector is not an OpenRouter decision connector, skipping scene genre detection");
+            } else {
+                $connector->setOldGlobals($decisionConnectorData);
+                if (trim((string) ($GLOBALS["CONNECTOR"]["openrouterjson"]["API_KEY"] ?? "")) === "") {
+                    Logger::warn("[SCENE CLASSIFIER] Decision Connector has no API key, skipping scene genre detection");
+                } else {
+                    $decisionResponse = $connector->getConnector($decisionConnectorData)->jev_request(
+                        ["dialogue" => $historyData],
+                        "Choose the dominant genre of the recent dialogue between the actors.",
+                        $genreCriteria,
+                        "sceneclassifier"
+                    );
+                }
+            }
+
+            $genreDecision = is_array($decisionResponse) ? ($decisionResponse["answers"]["genre"] ?? null) : null;
+            $genreChoice = is_array($genreDecision) ? ($genreDecision["choice"] ?? null) : null;
+            $genreConfidence = is_array($genreDecision) ? ($genreDecision["confidence"] ?? null) : null;
+            if (is_string($genreChoice) && (is_int($genreConfidence) || is_float($genreConfidence))
+                && is_finite((float) $genreConfidence) && $genreConfidence <= 1
+                && $genreConfidence > __JEV_CONFIDENCE_THRESHOLD) {
+                $genreChoice = strtolower(trim($genreChoice));
+                if (array_key_exists($genreChoice, $genreCriteria)) {
+                    $topic = ["generated_tags" => $genreChoice];
+                }
+            }
+
+            Logger::info("[SCENE CLASSIFIER] Decision Connector genre: {$topic["generated_tags"]}");
+        } else if ($sceneClassifierEnabled) {
             $connector = new LLMConnector();
             $sceneClassifierLabels = [
                 "Gemma 3 4B",
@@ -141,19 +206,21 @@ if ($minimeEnabled) {
                 $currentConnectorData = $connector->getById($mediumTermConnectorId);
             }
 
-            if (!empty($currentConnectorData)) {
+            if (!empty($currentConnectorData) && chimIsDecisionConnector($currentConnectorData)) {
+                Logger::warn("[SCENE CLASSIFIER] Scene Classifier (Legacy) needs a chat model, not a decision connector; skipping scene genre detection");
+            } else if (!empty($currentConnectorData)) {
                 $connector->setOldGlobals($currentConnectorData);
                 $connectionHandler = $connector->getConnector($currentConnectorData);
             } else {
                 Logger::warn("[SCENE CLASSIFIER] No connector configured for scene classification, skipping scene genre detection");
             }
-            
-            $allowedGenres = ["horror", "action", "thriller", "mystery", "romance", "comedy", "drama","nsfw"];
+
+            $allowedGenres = array_values(array_diff(array_keys($genreCriteria), ["default"]));
 
             $prompt = [];
             $prompt[] = ['role' => 'system', 'content' => "Classify the following dialogue into one of these genres: ".
                 implode(", ", $allowedGenres)];
-            
+
             $prompt[] = ['role' => 'user', 'content' => "Dialogue:\n$historyData"];
             $prompt[] = ['role' => 'user', 'content' => "Respond only with the genre name."];
 
@@ -167,50 +234,87 @@ if ($minimeEnabled) {
             }
 
             // Parse LLM output to find matching genre
-            $detectedGenre = "default";
-            $bufferLower = strtolower(trim($buffer));
+            $bufferLower = is_string($buffer) ? strtolower(trim($buffer)) : "";
             foreach ($allowedGenres as $genre) {
-                if (stripos($bufferLower, strtolower($genre)) !== false) {
-                    $detectedGenre = $genre;
+                if ($bufferLower !== "" && stripos($bufferLower, $genre) !== false) {
+                    $topic = ["generated_tags" => $genre];
                     break;
                 }
             }
-            
-            $topic = ["generated_tags" => $detectedGenre];
 
-            error_log("[minimePostScene] Detected genre: {$topic["generated_tags"]} from buffer $buffer");
+            Logger::info("[SCENE CLASSIFIER] Scene Classifier (Legacy) genre: {$topic["generated_tags"]}");
         } else {
             Logger::info("[SCENE CLASSIFIER] Disabled, skipping scene genre detection");
         }
-        if ($topic["generated_tags"] == "relax") {
+
+        $sceneNotes = [
+            "default" => [
+                "status" => "neutral",
+                "data" => "The overall atmosphere is neutral and balanced. Actors should behave naturally, with grounded expressions, measured movement, and behavior appropriate to the immediate context.",
+            ],
+
+            "relax" => [
+                "status" => "relaxed",
+                "data" => "The overall atmosphere is calm, comfortable, and unhurried. Actors should appear at ease, using natural body language, gentle expressions, relaxed posture, and slow, effortless movements.",
+            ],
+
+            "romance" => [
+                "status" => "intimate",
+                "data" => "The overall atmosphere is romantic, warm, and emotionally intimate. Actors should convey affection and mutual interest through soft expressions, attentive eye contact, natural proximity, gentle gestures, and restrained, emotionally authentic movement.",
+            ],
+
+            "nsfw" => [
+                "status" => "intimate",
+                "data" => "The overall atmosphere is mature and intimate. Actors should behave naturally and consensually, with emotionally suggestive body language, close interpersonal distance, attentive expressions, and a restrained cinematic tone.",
+            ],
+
+            "thriller" => [
+                "status" => "dynamic",
+                "data" => "The overall atmosphere is tense, suspenseful, and unpredictable. Actors should remain alert and reactive, with purposeful movements, heightened expressions, guarded body language, and pacing that reflects mounting tension.",
+            ],
+
+            "horror" => [
+                "status" => "tense",
+                "data" => "The overall atmosphere is unsettling, ominous, and suspenseful. Actors should appear cautious and increasingly uneasy, using hesitant movements, fearful or suspicious expressions, environmental awareness, and restrained reactions that build tension.",
+            ],
+
+            "mystery" => [
+                "status" => "intriguing",
+                "data" => "The overall atmosphere is mysterious and investigative. Actors should appear observant and thoughtful, with subtle reactions, deliberate movements, cautious interactions, and expressions suggesting curiosity, uncertainty, or suspicion.",
+            ],
+
+            "comedy" => [
+                "status" => "playful",
+                "data" => "The overall atmosphere is lighthearted, playful, and energetic. Actors should use expressive faces, natural comedic timing, relaxed posture, animated gestures, and reactions that emphasize the humorous situation without feeling forced.",
+            ],
+
+            "drama" => [
+                "status" => "emotional",
+                "data" => "The overall atmosphere is emotionally charged and serious. Actors should use authentic facial expressions, deliberate gestures, attentive eye contact, and controlled movements that communicate the emotional weight of the scene.",
+            ],
+
+            "action" => [
+                "status" => "dynamic",
+                "data" => "The overall atmosphere is energetic, urgent, and physically dynamic. Actors should use purposeful movement, decisive gestures, heightened awareness, strong reactions, and pacing appropriate to an active cinematic sequence.",
+            ],
+        ];
+
+        $sceneNote = $sceneNotes[$topic["generated_tags"]] ?? null;
+        if ($sceneNote !== null && $topic["generated_tags"]!="default") {
             $GLOBALS["db"]->insert(
                 'rolemaster',
                 [
                     'localts' => time(),
-                    'ttl'     => 60,
-                    'type'    => "scenenote",
-                    'data'    => "Overall ambient seems relaxed. Actors should behave in a relaxed way",
+                    'ttl' => 60,
+                    'type' => "scenenote",
+                    'data' => "{$topic["generated_tags"]}: {$sceneNote["data"]}",
                 ]
             );
-
-            $status = "relax";
-
-        } else if ($topic["generated_tags"] == "romance") {
-            $GLOBALS["db"]->insert(
-                'rolemaster',
-                [
-                    'localts' => time(),
-                    'ttl'     => 60,
-                    'type'    => "scenenote",
-                    'data'    => "Overall ambient seems intimate. Actors should behave in a intimate way",
-                ]
-            );
-
-            $status = "intimate";
+            $status = $sceneNote["status"];
         }
 
         $npcManager = new NpcMaster();
-        $npcData    = $npcManager->getByName($GLOBALS["HERIKA_NAME"]);
+        $npcData = $npcManager->getByName($GLOBALS["HERIKA_NAME"]);
         if ($npcData) {
             if (isset($npcData["extended_data"])) {
                 $extended = json_decode($npcData["extended_data"], true);
@@ -224,16 +328,18 @@ if ($minimeEnabled) {
         }
 
     }
+} else {
+    Logger::info("[SCENE CLASSIFIER] No topic generated, skipping scene genre detection");
 }
 
-$configFilepath                 = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "conf" . DIRECTORY_SEPARATOR;
+$configFilepath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "conf" . DIRECTORY_SEPARATOR;
 $GLOBALS["PROFILES"]["default"] = "$configFilepath/conf.php";
 foreach (glob($configFilepath . 'conf_????????????????????????????????.php') as $mconf) {
     if (file_exists($mconf)) {
         $filename = basename($mconf);
-        $pattern  = '/conf_([a-f0-9]+)\.php/';
+        $pattern = '/conf_([a-f0-9]+)\.php/';
         preg_match($pattern, $filename, $matches);
-        $hash                       = $matches[1];
+        $hash = $matches[1];
         $GLOBALS["PROFILES"][$hash] = $mconf;
     }
 }
@@ -244,11 +350,11 @@ require "$configFilepath/conf.php";
 if ($minimeEnabled) {
     if (in_array($gameRequest[0], ["inputtext", "inputtext_s", "ginputtext", "ginputtext_s"])) {
 
-        $pattern     = "/\([^)]*Context location[^)]*\)/"; // Remove (Context location..
+        $pattern = "/\([^)]*Context location[^)]*\)/"; // Remove (Context location..
         $replacement = "";
-        $TEST_TEXT   = preg_replace($pattern, $replacement, $gameRequest[3]); // // assistant vs user war
-        $pattern     = '/\(\s*(?:(?:talking|whispering|shouting)\s+to|speaking\s+(?:loudly|privately)\s+to)\s+[^()]+(?:\s+from\s+far\s+away)?\s*\)/i';
-        $TEST_TEXT   = preg_replace($pattern, '', $TEST_TEXT);
+        $TEST_TEXT = preg_replace($pattern, $replacement, $gameRequest[3]); // // assistant vs user war
+        $pattern = '/\(\s*(?:(?:talking|whispering|shouting)\s+to|speaking\s+(?:loudly|privately)\s+to)\s+[^()]+(?:\s+from\s+far\s+away)?\s*\)/i';
+        $TEST_TEXT = preg_replace($pattern, '', $TEST_TEXT);
 
         $command = json_decode(minimeTask($TEST_TEXT), true);
         if (isset($command["is_command"])) {
@@ -257,22 +363,22 @@ if ($minimeEnabled) {
                 $db->insert(
                     'currentmission',
                     [
-                        'ts'          => $gameRequest[1],
-                        'gamets'      => $gameRequest[2],
+                        'ts' => $gameRequest[1],
+                        'gamets' => $gameRequest[2],
                         'description' => $prCmd[1],
-                        'sess'        => 'pending',
-                        'localts'     => time(),
+                        'sess' => 'pending',
+                        'localts' => time(),
                     ]
                 );
                 $db->insert(
                     'audit_memory',
                     [
-                        'input'    => $TEST_TEXT,
+                        'input' => $TEST_TEXT,
                         'keywords' => 'auto added task',
                         'rank_any' => -1,
                         'rank_all' => -1,
-                        'memory'   => $command["is_command"],
-                        'time'     => $command["elapsed_time"],
+                        'memory' => $command["is_command"],
+                        'time' => $command["elapsed_time"],
                     ]
                 );
             }

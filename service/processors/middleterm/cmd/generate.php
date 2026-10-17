@@ -13,6 +13,12 @@ $startTime = microtime(true);
 
 $selectedNpc=$GLOBALS["SELECTED_NPC"];
 
+// An empty name would match every shared summary via the narrator companion condition.
+if (trim((string)$selectedNpc) === '') {
+    Logger::debug('[MIDDLETERM] Generation skipped because no NPC is selected');
+    return;
+}
+
 $npcMaster = new NpcMaster();
 $connector = new LLMConnector();
 $currentConnectorData = $connector->getById($GLOBALS["CORE_CONNECTOR_MEDIUMTERM"]);
@@ -34,10 +40,10 @@ if (isset($extended_data["middle_term_memory"])&&sizeof($extended_data["middle_t
 }
 
 
-$dbNpcName=$GLOBALS["db"]->escape($selectedNpc);
 $scopeConditionSql = dataGetMemoryScopeConditionSql($selectedNpc);
+$companionConditionSql = dataGetMemoryCompanionConditionSql($selectedNpc);
 
-$query="SELECT summary as content,gamets_truncated FROM memory_summary where summary is not null and $scopeConditionSql and (companions like '%|$dbNpcName|%' or companions='$dbNpcName') and gamets_truncated>$gametsfrom order by gamets_truncated desc LIMIT 100";
+$query="SELECT summary as content,gamets_truncated FROM memory_summary where summary is not null and $scopeConditionSql and $companionConditionSql and gamets_truncated>$gametsfrom order by gamets_truncated desc LIMIT 100";
 
 $contextDataFull=$GLOBALS["db"]->fetchAll($query);
 

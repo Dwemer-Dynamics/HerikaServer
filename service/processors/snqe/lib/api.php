@@ -1055,9 +1055,15 @@ function WaitToItemBeRecovered(
     // Increment recovery attempts
     $item["recover_attempts"] = ($item["recover_attempts"] ?? 0) + 1;
 
-    // Query event log to see if player has the item (stub integration with Skyrim engine)
+    // Prefer the spawned reference event when a current client supplies it, while retaining name matching for older clients.
     $cn = $GLOBALS["db"]->escape($item["name"]);
-    $rows = $GLOBALS["db"]->fetchAll("select count(*) as n from eventlog where (type='itemfound' and data like '%$cn%') or (type='infoaction' and data like '%picks up $cn%')");
+    $referenceMatch = '';
+    if (isset($item["int_refid"]) && is_numeric($item["int_refid"])) {
+        $referenceId = strtolower(convertSignedToUnsignedHex((int) $item["int_refid"]));
+        $cnReference = $GLOBALS["db"]->escape("quest_item_recovered@$referenceId");
+        $referenceMatch = " or (type='status_msg' and lower(data) like '%$cnReference%')";
+    }
+    $rows = $GLOBALS["db"]->fetchAll("select count(*) as n from eventlog where (type='itemfound' and data like '%$cn%') or (type='infoaction' and data like '%picks up $cn%')$referenceMatch");
 
     $hasItem = false;
     if (is_array($rows) && isset($rows[0]) && $rows[0]["n"] > 0) {

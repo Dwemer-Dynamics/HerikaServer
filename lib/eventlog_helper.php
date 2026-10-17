@@ -28,7 +28,6 @@ if (!function_exists('chimGetVisibleEventLogExcludedTypes')) {
             'status_msg',
             'region',
             'ext_nsfw_physics_raw',
-            'relationship',
         ];
     }
 }
@@ -67,11 +66,16 @@ if (!function_exists('chimBuildNpcEventLogPeopleWhereClause')) {
         }
 
         $escapedNpcName = $db->escape(trim((string)$npcName));
-        return "EXISTS (
+        $legacyPeopleWhere = "EXISTS (
             SELECT 1
             FROM unnest(string_to_array(trim(BOTH '|' FROM COALESCE({$peopleColumn}, '')), '|')) AS chim_person(person_name)
             WHERE lower(regexp_replace(btrim(chim_person.person_name), ' \\((busy|hostile|in combat|restrained)\\)$', '', 'i')) = lower('{$escapedNpcName}')
         )";
+        // Earlier local builds stored JSON recipients; history still matches their displayed names.
+        $jsonNamePattern = '"name"[[:space:]]*:[[:space:]]*'
+            . preg_quote(json_encode(trim((string)$npcName), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), '~');
+        return '(' . $legacyPeopleWhere . " OR (left(ltrim(COALESCE({$peopleColumn}, '')), 1) = '['"
+            . " AND {$peopleColumn} ~* '" . $db->escape($jsonNamePattern) . "'))";
     }
 }
 

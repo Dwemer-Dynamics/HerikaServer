@@ -138,7 +138,7 @@ final class ShortTermMemoryTest extends TestCase
         $q = $this->db->lastSummaryQuery();
 
         $this->assertStringContainsString("(scope IS NULL OR scope='global')", $q);
-        $this->assertStringContainsString("companions LIKE '%|StmNpcScope|%'", $q);
+        $this->assertStringContainsString("position('|StmNpcScope|' in companions) > 0", $q);
         $this->assertStringContainsString("companions='StmNpcScope'", $q);
         $this->assertStringContainsString('summary IS NOT NULL', $q);
         $this->assertStringContainsString('ORDER BY gamets_truncated DESC', $q);

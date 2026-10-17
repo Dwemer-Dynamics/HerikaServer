@@ -325,6 +325,19 @@ document.head.appendChild(style);
 </script>";
 
 foreach ($currentConf as $pname=>$parms) {
+    // Keep legacy values in the submitted form without exposing retired controls.
+    if (preg_match('/^TTS (MIMIC3|MELOTTS) /', $pname)) {
+        echo '<input type="hidden" name="' . htmlspecialchars(str_replace(' ', '@', $pname), ENT_QUOTES) . '" value="' . htmlspecialchars(strval($parms['currentValue'] ?? ''), ENT_QUOTES) . '">';
+        continue;
+    }
+    if (in_array($pname, ['TTSFUNCTION', 'TTSFUNCTION_PLAYER'], true)) {
+        if (in_array($parms['currentValue'] ?? '', ['mimic3', 'melotts'], true)) {
+            echo '<p class="conf-item">' . htmlspecialchars($pname) . ': ' . htmlspecialchars($parms['currentValue']) . ' (deprecated)</p>';
+            echo '<input type="hidden" name="' . $pname . '" value="' . htmlspecialchars($parms['currentValue'], ENT_QUOTES) . '">';
+            continue;
+        }
+        $parms['values'] = array_values(array_diff($parms['values'], ['mimic3', 'melotts']));
+    }
 
     /* Groupping stuff */
     $pnameA=explode(" ", $pname);

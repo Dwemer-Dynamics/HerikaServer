@@ -230,7 +230,8 @@ function herikaQuickstartGetGeneralLlmConnectorSummary($db): array {
     $items = [
         'CORE_CONNECTOR_SUMMARY' => 'Summaries',
         'CORE_CONNECTOR_MEDIUMTERM' => 'Background Life',
-        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier',
+        'CORE_CONNECTOR_DECISION' => 'Decision Connector',
+        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier (Legacy)',
         'CORE_CONNECTOR_PROFILES' => 'Dynamic Profile',
         'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
         'RELLLM_CONNECTOR' => 'Relationship Management',
@@ -892,6 +893,10 @@ foreach ($quickstartConf as $pname => $parms) {
             }
         ));
         echo "<select class='form-control' id='$fieldName' name='" . htmlspecialchars($fieldName) . "' $FORCE_DISABLED>";
+        // Preserve an existing retired provider when Quickstart saves unrelated settings.
+        if ($pname === 'TTSFUNCTION' && in_array($quickstartActiveTtsDriver, ['mimic3', 'melotts'], true)) {
+            echo "<option value='" . htmlspecialchars($quickstartActiveTtsDriver, ENT_QUOTES) . "' selected>" . htmlspecialchars($quickstartTtsConnector->getDisplayName($quickstartActiveTtsDriver)) . " (deprecated)</option>";
+        }
         if (count($recommendedValues) > 0) {
             echo "<optgroup label='Recommended'>";
             foreach ($recommendedValues as $item) {
@@ -2119,7 +2124,7 @@ function qsLocalLlmRefreshWarnings(){
   const urlEl = qsEl("qs_local_llm_url");
   const loopbackWarning = qsEl("qs_local_llm_loopback_warning");
   if (loopbackWarning) {
-    loopbackWarning.hidden = !(urlEl && qsLocalLlmIsLoopback(urlEl.value));
+    loopbackWarning.hidden = qsEl("qs_local_llm_server_type").value === "dwemerdistro" || !(urlEl && qsLocalLlmIsLoopback(urlEl.value));
   }
   const player2Warning = qsEl("qs_local_llm_player2_warning");
   if (player2Warning) {
@@ -2471,3 +2476,5 @@ document.addEventListener("DOMContentLoaded", function(){
 </script>';
 
 ?>
+
+<script defer data-distro-llm data-status-url="api/dwemerdistro_llm.php" src="js/dwemerdistro_llm.js"></script>

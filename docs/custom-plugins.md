@@ -15,8 +15,11 @@ Use a separate repository for an extension. Install its server payload under `ex
 | `prompts.php`, `dialogue_prompt.php` | [prompts/prompts.php](../prompts/prompts.php), [prompts/dialogue_prompt.php](../prompts/dialogue_prompt.php) |
 | `json_response_custom.php` | [functions/json_response.php](../functions/json_response.php): custom JSON response integration |
 | `prepostrequest.php`, `postrequest.php` | `main.php`: end-of-request hooks |
+| `interact_actions.php` | [lib/interact_extensions.php](../lib/interact_extensions.php): opt-in Interact actions built from existing effects; returns data only. See [Interact plugin actions](agent-guide.md#interact-plugin-actions) |
 
 Do not assume every endpoint executes every hook. Keep hook code bounded, avoid logging secrets, and fail cleanly when optional mods/providers or data are absent. Do not echo diagnostics into a streamed response. Namespaces/function prefixes prevent collisions with other installed extensions.
+
+See [Plugin runtime reference](plugin-runtime.md) for hook examples and timing, optional speech/playthrough state, atomic writes, install/update routes, and background model calls.
 
 ## Maintained examples
 
@@ -31,7 +34,7 @@ For new plugin-owned tables, use prefixed names in the `plugins` schema and insp
 
 ## Package a server extension
 
-The current [package manager](../lib/plugin_package_manager.php) accepts ZIP-format `.dwpkg`/`.zip` uploads with schema version 4. Plugin Manager listings ([below](#list-a-plugin-in-plugin-manager)) use [ui/server_plugin_installer.php](../ui/server_plugin_installer.php) and tar archives; [ext/generic_installer.php](../ext/generic_installer.php) is an older tarball installer. Do not mix their layouts. Choose one install/update route per plugin: Plugin Manager replaces the whole `ext/<name>/` directory and does not apply the package manager's `mutable_paths` preservation.
+The current [package manager](../lib/plugin_package_manager.php) accepts ZIP-format `.dwpkg`/`.zip` uploads with schema version 4. Plugin Manager listings ([below](#list-a-plugin-in-plugin-manager)) use [ui/server_plugin_installer.php](../ui/server_plugin_installer.php) and tar archives; [ext/generic_installer.php](../ext/generic_installer.php) is another legacy installer. Do not mix their layouts. Choose one [install/update route](plugin-runtime.md#install-and-update-routes) per plugin: Plugin Manager replaces the whole `ext/<name>/` directory and does not apply the package manager's `mutable_paths` preservation.
 
 ```text
 manifest.json

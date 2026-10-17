@@ -9,6 +9,7 @@ $enginePath = __DIR__ . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "runtime_bootstrap.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "logger.php");
 require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "prisma_settings_catalog.php");
+require_once($enginePath . "lib" . DIRECTORY_SEPARATOR . "core" . DIRECTORY_SEPARATOR . "llm_connector.class.php");
 
 chimRuntimeBootstrap($enginePath, [
     'load_general_settings' => true,
@@ -34,6 +35,7 @@ ob_start();
 include(__DIR__ . DIRECTORY_SEPARATOR . "tmpl" . DIRECTORY_SEPARATOR . "head.html");
 
 $saveSuccess = isset($_GET['_saved']) && $_GET['_saved'] === '1';
+$saveError = '';
 $clearReanimationResult = null;
 $promptContextSectionTitle = 'Context Selections';
 $gsSections = chimPrismaGlobalSettingsSections();
@@ -50,8 +52,14 @@ $tabControlPanels = [
 $connectorAvailabilityToggles = chimGlobalLlmConnectorAvailabilityMap();
 
 // Paired toggles stay beside their connector instead of appearing twice. OGHMA_EXTRACTOR_FALLBACK
-// gates the Oghma extractor connector, so it renders next to it rather than as its own card.
-$pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_EXTRACTOR_FALLBACK']);
+// controls native fallback; multilingual routing can independently use the same connector.
+// Decision Connector task switches sit under its dropdown.
+$decisionTaskToggles = [
+    'STT_TARGETING_ENABLED' => 'Choose which nearby NPC answers your voice input. Crosshair targets still take priority.',
+    'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Choose the scene genre for ambient cues. Off does not fall back to Scene Classifier (Legacy).',
+    'DECISION_QUEST_INTENT_ENABLED' => 'Interprets player dialogue for Traditional Quest steps. Uncertainty leaves the quest unchanged.',
+];
+$pairedConnectorToggles = array_merge(array_values($connectorAvailabilityToggles), ['OGHMA_EXTRACTOR_FALLBACK'], array_keys($decisionTaskToggles));
 foreach ($gsSections as $sectionName => $fields) {
     $gsSections[$sectionName] = array_values(array_filter($fields, static function (array $field) use ($pairedConnectorToggles): bool {
         return !in_array($field['name'] ?? '', $pairedConnectorToggles, true);
@@ -93,14 +101,19 @@ function pretty_label(string $flatName): string
         'CORE_CONNECTOR_PLAYER' => 'Player Respeech',
         'CORE_CONNECTOR_SUMMARY' => 'Summaries',
         'CORE_CONNECTOR_MEDIUMTERM' => 'Background & Memory Tasks',
-        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier',
-        'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
+        'CORE_CONNECTOR_DECISION' => 'Decision Connector',
+        'CORE_CONNECTOR_DECISION_ENABLED' => 'Decision Connector',
+        'STT_TARGETING_ENABLED' => 'STT Targeting',
+        'DECISION_SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier',
+        'DECISION_QUEST_INTENT_ENABLED' => 'Quest Dialogue Intent',
+        'CORE_CONNECTOR_SCENECLASSIFIER' => 'Scene Classifier (Legacy)',
+        'SCENE_CLASSIFIER_ENABLED' => 'Scene Classifier (Legacy)',
         'CORE_CONNECTOR_PROFILES' => 'Profile Tasks',
         'CORE_CONNECTOR_DIRECTOR' => 'Director Mode',
         'CORE_CONNECTOR_QUEST_CREATION' => 'Quest Creation Connector',
         'CORE_CONNECTOR_QUEST_ENGINE' => 'Quest Engine Connector',
         'CORE_CONNECTOR_BGL' => 'Background Life',
-        'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Extractor Fallback',
+        'CORE_CONNECTOR_OGHMA_CUSTOM' => 'Oghma Connector',
         'RELLLM_CONNECTOR' => 'Relationship Management',
         'RELATIONSHIP_UPDATE_CHANCE' => 'Relationship Update Chance',
         'NEVER_CLEAR_RELATIONSHIP_DATA' => 'Never Clear Relationship Data',
@@ -112,10 +125,13 @@ function pretty_label(string $flatName): string
         'OGHMA_AMOUNT' => 'Oghma Topic Count',
         'OGHMA_RESULT_LIMIT' => 'Oghma Result Limit',
         'OGHMA_EXTRACTOR_TIMEOUT_MS' => 'Extractor Timeout (ms)',
+        'OGHMA_MULTILINGUAL_ROUTING' => 'Multilingual Oghma Routing',
         'RACIAL_OGHMA' => 'Force Racial Oghma',
         'LOCATION_OGHMA' => 'Force Location Oghma',
         'ENFORCE_STRICT_RECHAT_RESPONSE' => 'Strict Rechat Targeting',
         'BGL_TRIGGER_HOURS' => 'Background Life Trigger Time',
+        'BGL_AUTO_ENROLL_ENABLED' => 'Background Life Auto Enrollment',
+        'BGL_AUTO_ENROLL_EVENT_THRESHOLD' => 'Background Life Enrollment Events',
         'CHIM_AI_QUEST_PROGRESSION' => 'CHIM AI Quest Progression (Beta)',
         'CHIM_PLAYER_ONLY_QUEST_ADVANCEMENT' => 'Player Only Quest Advancement',
         'CHIM_ITEM_PICKUP_EVENTLOG_MIN_VALUE' => 'Item Pickup Detection Value',
@@ -155,9 +171,13 @@ function icon_for_field(string $flatName): string
         'AUTOFILL_CUSTOM_PROFILES' => '✨',
         'AUTOFILL_CUSTOM_PROFILES_TRIGGER' => '🎯',
         'BGL_TRIGGER_HOURS' => '🌍',
+        'BGL_AUTO_ENROLL_ENABLED' => '🌍',
+        'BGL_AUTO_ENROLL_EVENT_THRESHOLD' => '🔢',
+        'SKYRIM_START_DATE' => '📅',
         'END_CONVERSATION_COOLDOWN' => '⏳',
         'CHIM_AI_QUEST_PROGRESSION' => '🗺️',
         'CHIM_PLAYER_ONLY_QUEST_ADVANCEMENT' => '🧍',
+        'STT_TARGETING_ENABLED' => '🎯',
         'SCENE_CLASSIFIER_ENABLED' => '🎭',
         'RELATIONSHIP_SYSTEM_ENABLED' => '💞',
         'RELLLM_CONNECTOR' => '🔗',
@@ -194,6 +214,7 @@ function icon_for_field(string $flatName): string
         if ($u === 'CORE_CONNECTOR_PLAYER') return '🎮';
         if ($u === 'CORE_CONNECTOR_SUMMARY') return '📝';
         if ($u === 'CORE_CONNECTOR_MEDIUMTERM') return '🧠';
+        if ($u === 'CORE_CONNECTOR_DECISION') return '⚖️';
         if ($u === 'CORE_CONNECTOR_SCENECLASSIFIER') return '🎭';
         if ($u === 'CORE_CONNECTOR_PROFILES') return '👥';
         if ($u === 'CORE_CONNECTOR_DIRECTOR') return '🎬';
@@ -352,7 +373,7 @@ $filterBrowseFieldConfigs = filter_browse_field_configs();
 
 $foreignOptions = [];
 try {
-    $foreignOptions['core_llm_connector:id:label'] = $GLOBALS["db"]->fetchAll("SELECT id, label FROM core_llm_connector ORDER BY LOWER(label) ASC, id ASC");
+    $foreignOptions['core_llm_connector:id:label'] = $GLOBALS["db"]->fetchAll("SELECT id, label, driver, model, url FROM core_llm_connector ORDER BY LOWER(label) ASC, id ASC");
 } catch (\Throwable $e) {
     $foreignOptions['core_llm_connector:id:label'] = [];
 }
@@ -393,6 +414,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
             } else {
                 $value = normalize_posted_value($type, $_POST[$name] ?? '');
             }
+            if (($field['format'] ?? '') === 'skyrim_datetime') {
+                try {
+                    $value = chimRequireSkyrimStartDate(is_array($value) ? false : $value);
+                } catch (InvalidArgumentException $e) {
+                    // Keep the saved date; the other settings still save.
+                    $saveError = strval($field['label'] ?? pretty_label($name)) . ' was not changed. ' . $e->getMessage();
+                    continue;
+                }
+            }
+
+            if ($name === 'CORE_CONNECTOR_DECISION' && intval($value) > 0 && intval($value) !== intval(current_value($name))
+                && !chimIsDecisionConnector((new LLMConnector())->getById(intval($value)))) {
+                $saveError = 'Decision Connector was not changed. Choose an OpenRouter decision model such as Jev.';
+                continue;
+            }
 
             $description = current_description($name, $generalSettingRowMap);
             if (!chimSetGeneralSetting($name, $value, $description)) {
@@ -424,7 +460,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
         $didSave = false;
     }
 
-    if ($didSave) {
+    if ($didSave && $saveError !== '') {
+        chimLoadGeneralSettingsIntoGlobals();
+        Logger::warn("Global settings saved by UI with a rejected value: " . $saveError);
+    } elseif ($didSave) {
         chimLoadGeneralSettingsIntoGlobals();
         Logger::info("Global settings saved to general_settings by UI");
         while (ob_get_level() > 0) {
@@ -433,9 +472,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_all'])) {
         $redirectUrl = strtok($_SERVER['REQUEST_URI'], '?') . '?_saved=1&_ts=' . time();
         header("Location: " . $redirectUrl);
         exit;
+    } else {
+        Logger::error("Failed writing general_settings from Global Settings UI");
     }
-
-    Logger::error("Failed writing general_settings from Global Settings UI");
 }
 
 ?>
@@ -750,6 +789,33 @@ body .settings-tabs .settings-tab.is-active {
     transform: scale(1.6);
     transform-origin: center;
     cursor: pointer;
+}
+
+/* Decision Connector task switches: own card row under its select, wrapping on narrow cards. */
+.decision-task-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    min-width: 0;
+}
+
+.decision-task-toggles label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.decision-task-toggles input[type="checkbox"] {
+    accent-color: #176529;
+    margin: 0;
+    cursor: pointer;
+}
+
+.decision-task-toggles input[type="checkbox"]:focus-visible {
+    outline: 2px solid rgba(242, 124, 17, 0.85);
+    outline-offset: 2px;
 }
 
 /* On/Off switch for a global connector. Its select stays editable while switched off. */
@@ -1633,6 +1699,9 @@ body .settings-tabs .settings-tab.is-active {
     <?php if ($saveSuccess): ?>
         <div class="result-ok" style="margin-bottom: 16px;">Global settings saved to the database.</div>
     <?php endif; ?>
+    <?php if ($saveError !== ''): ?>
+        <div class="result-error" style="margin-bottom: 16px;">Other settings were saved. <?php echo htmlspecialchars($saveError); ?></div>
+    <?php endif; ?>
 
     <div class="settings-tabs" role="tablist" aria-label="Global settings categories">
         <?php foreach ($settingsTabs as $tabId => $tabLabel): ?>
@@ -1786,7 +1855,7 @@ body .settings-tabs .settings-tab.is-active {
                                         <?php if ($fieldType === 'boolean'): ?>
                                             <div class="provider-toggle">
                                                 <input type="hidden" name="<?php echo htmlspecialchars($fieldName); ?>" value="false">
-                                                <input type="checkbox" name="<?php echo htmlspecialchars($fieldName); ?>" value="true" <?php echo ($current ? 'checked' : ''); ?> <?php echo $isReadonly ? 'disabled' : ''; ?>>
+                                                <input type="checkbox" name="<?php echo htmlspecialchars($fieldName); ?>" aria-label="<?php echo htmlspecialchars($label); ?>" value="true" <?php echo ($current ? 'checked' : ''); ?> <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             </div>
                                         <?php endif; ?>
                                         <?php if (isset($connectorAvailabilityToggles[$fieldName])): ?>
@@ -1795,7 +1864,7 @@ body .settings-tabs .settings-tab.is-active {
                                         <?php if ($fieldName === 'CORE_CONNECTOR_OGHMA_CUSTOM'): ?>
                                             <div class="provider-toggle">
                                                 <input type="hidden" name="OGHMA_EXTRACTOR_FALLBACK" value="false">
-                                                <input type="checkbox" name="OGHMA_EXTRACTOR_FALLBACK" value="true" <?php echo (current_value('OGHMA_EXTRACTOR_FALLBACK') ? 'checked' : ''); ?> title="Allow one bounded connector fallback after deterministic Oghma abstains">
+                                                <label><input type="checkbox" name="OGHMA_EXTRACTOR_FALLBACK" value="true" <?php echo (current_value('OGHMA_EXTRACTOR_FALLBACK') ? 'checked' : ''); ?> title="Used when Multilingual Oghma Routing is off"> Extractor Fallback</label>
                                             </div>
                                         <?php endif; ?>
                                     </div>
@@ -1853,6 +1922,7 @@ body .settings-tabs .settings-tab.is-active {
                                         </select>
                                     <?php elseif (strpos($fieldType, 'foreign:') === 0): ?>
                                         <?php $parts = explode(':', $fieldType); $fkKey = implode(':', array_slice($parts, 1)); $rows = $foreignOptions[$fkKey] ?? []; ?>
+                                        <?php if ($fieldName === 'CORE_CONNECTOR_DECISION') { $rows = array_filter($rows, static fn($row) => chimIsDecisionConnector($row) || strval($row['id'] ?? '') === strval($current)); } ?>
                                         <select aria-label="<?php echo htmlspecialchars($label); ?>" name="<?php echo htmlspecialchars($fieldName); ?>" <?php echo $isReadonly ? 'disabled' : ''; ?>>
                                             <option value="" <?php echo (empty($current) ? 'selected' : ''); ?>>None</option>
                                             <?php foreach ($rows as $row): ?>
@@ -1862,9 +1932,17 @@ body .settings-tabs .settings-tab.is-active {
                                             <?php endforeach; ?>
                                         </select>
                                     <?php else: ?>
-                                        <input type="text" name="<?php echo htmlspecialchars($fieldName); ?>" value="<?php echo htmlspecialchars(strval($current)); ?>" <?php echo $readonlyAttr; ?>>
+                                        <input type="text" name="<?php echo htmlspecialchars($fieldName); ?>" value="<?php echo htmlspecialchars(strval($current)); ?>"<?php echo isset($field['placeholder']) ? ' placeholder="' . htmlspecialchars(strval($field['placeholder'])) . '"' : ''; ?> <?php echo $readonlyAttr; ?>>
                                     <?php endif; ?>
                                 </div>
+                                <?php if ($fieldName === 'CORE_CONNECTOR_DECISION'): ?>
+                                    <div class="decision-task-toggles">
+                                        <?php foreach ($decisionTaskToggles as $taskName => $taskHint): ?>
+                                            <input type="hidden" name="<?php echo htmlspecialchars($taskName); ?>" value="false">
+                                            <label title="<?php echo htmlspecialchars($taskHint); ?>"><input type="checkbox" name="<?php echo htmlspecialchars($taskName); ?>" value="true" aria-description="<?php echo htmlspecialchars($taskHint); ?>" <?php echo (filter_var(current_value($taskName), FILTER_VALIDATE_BOOLEAN) ? 'checked' : ''); ?>> <?php echo htmlspecialchars(pretty_label($taskName)); ?></label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php endif; ?>
                                 <?php if ($help !== ''): ?>
                                     <div class="provider-help"><?php echo render_provider_help($fieldName, $help, $webRoot); ?></div>
                                 <?php endif; ?>
@@ -2142,6 +2220,9 @@ document.addEventListener('DOMContentLoaded', function () {
         if (details.url) chunks.push('url: ' + details.url);
         if (Number(result.elapsed_ms || 0) > 0) chunks.push(String(result.elapsed_ms) + 'ms');
         if (details.response_preview) chunks.push('response: ' + details.response_preview);
+                if (details.checks) Object.entries(details.checks).forEach(([name, check]) => chunks.push(name + ': ' + check.status + ' — ' + check.message));
+                if (details.timings && details.timings.ttft_ms != null) chunks.push('first token: ' + details.timings.ttft_ms + 'ms');
+                if (details.errors && details.errors.length) chunks.push('warnings: ' + details.errors.map(error => error.message).join('; '));
         return chunks.join(' | ');
     }
 

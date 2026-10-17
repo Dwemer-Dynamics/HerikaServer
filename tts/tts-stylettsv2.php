@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . '/lib/speech_trace.php';
 
 
 function tts($textString, $mood , $stringforhash) {
@@ -7,7 +8,7 @@ function tts($textString, $mood , $stringforhash) {
 		
 		if (!isset($GLOBALS["AVOID_TTS_CACHE"]))
 			if (file_exists($GLOBALS["DATA_PATH"]."/".session_id()."/"  . md5(trim($stringforhash)) . ".wav"))
-				return $GLOBALS["DATA_PATH"]."/".session_id()."/"  . md5(trim($stringforhash)) . ".wav";
+				return chimTraceCachedTts($GLOBALS["DATA_PATH"]."/".session_id()."/"  . md5(trim($stringforhash)) . ".wav", 'stylettsv2');
 	
 	    $starTime = microtime(true);
 

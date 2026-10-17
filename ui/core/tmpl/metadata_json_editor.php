@@ -36,7 +36,7 @@ $localSchemaOverrides = [
     ],
     'QUEST_COMMENT' => [
         'type' => 'boolean',
-        'description' => 'Will trigger AI (NPCs and Narrator) to talk about new objectives in your current active quest. Will trigger a lot of events on a new character, so leave disabled until you complete the tutorial!',
+        'description' => 'Allow nearby NPCs using this profile to comment on displayed, completed or failed quest objectives. One NPC is selected per update. Narrator comments are configured separately in Narrator Management.',
     ],
     'DIARY_COOLDOWN' => [
         'type' => 'integer',
@@ -57,7 +57,7 @@ $localSchemaOverrides = [
     'QUEST_COMMENT_CHANCE' => [
         'type' => 'select',
         'values' => ['10%','25%','50%','75%','100%'],
-        'description' => 'Chance that an AI Quest Comment will happen every time a quest updates.',
+        'description' => 'Chance for the selected NPC to comment. If no NPC comment is selected, Narrator settings are checked. The shared cooldown in Narrator Management still applies.',
     ],
     'RECHAT_ALLOW_ACTIONS' => [
         'type' => 'boolean',
@@ -110,6 +110,8 @@ function meta_pretty_label(string $name): string {
         'RECHAT_H' => 'Rechat Response Rounds',
         'RECHAT_P' => 'Rechat Probaility',
         'BORED_EVENT' => 'Bored Event Chance',
+        'QUEST_COMMENT' => 'NPC Quest Comments',
+        'QUEST_COMMENT_CHANCE' => 'NPC Quest Comment Chance',
         'CONTEXT_HISTORY' => 'Context History Event Count',
         'CONTEXT_HISTORY_DIARY' => 'Context History Diary Event Count',
         'CONTEXT_HISTORY_DYNAMIC_PROFILE' => 'Context History Dynamic Profile Event Count'

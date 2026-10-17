@@ -6,7 +6,8 @@ $TEMPLATE_DIALOG = " Écris la prochaine réplique de {$GLOBALS["HERIKA_NAME"]}.
 $frDirectNarratorDialogue = !empty($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])
     || (($GLOBALS["gameRequest"][0] ?? '') === 'narrator_inputtext')
     || (($gameRequest[0] ?? '') === 'narrator_inputtext');
-if ($frDirectNarratorDialogue) {
+$frInlineNpcNarration = in_array(strtolower(trim((string)($GLOBALS["INLINE_NARRATION_MODE"] ?? ''))), ['npc', 'text_only'], true);
+if ($frDirectNarratorDialogue && !$frInlineNpcNarration) {
     $TEMPLATE_DIALOG .= " Réponds directement à {$GLOBALS["PLAYER_NAME"]} uniquement avec du dialogue parlé."
         . " N'ajoute pas de narration à la troisième personne, de description de scène, d'indications scéniques ni de texte entre astérisques.";
 }
