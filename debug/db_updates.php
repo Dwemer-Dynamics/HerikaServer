@@ -6143,8 +6143,8 @@ if ($checkVersion("general_settings") < 20260502003) {
     try {
         $managedDescriptions = chimGetManagedGeneralSettingDescriptions();
         foreach (chimGetManagedGeneralSettingIds() as $settingId) {
-            // SNQE slots are initialized after legacy connector assignments have been migrated.
-            if (strpos($settingId, 'CORE_CONNECTOR_QUEST_') === 0) {
+            // SNQE and Decision Connector slots are initialized after legacy connector assignments have been migrated.
+            if (strpos($settingId, 'CORE_CONNECTOR_QUEST_') === 0 || strpos($settingId, 'CORE_CONNECTOR_DECISION') === 0) {
                 continue;
             }
             $definition = chimGetSchemaDefinition($settingId);
@@ -6990,6 +6990,26 @@ SQL
     }
 }
 
+if ($checkVersion("core_action") < 20261002001) {
+    Logger::debug("Applying core_action 20261002001 - enable Wait_Here by default");
+
+    // Base row only; core_action_custom rows keep the user's explicit choice.
+    $migrationOk = $db->execQuery("
+        UPDATE public.core_action
+           SET is_activated = TRUE,
+               updated_at = NOW()
+         WHERE code_name = 'WaitHere'
+           AND is_activated = FALSE
+    ") !== false;
+
+    if ($migrationOk) {
+        $updateVersion("core_action", 20261002001);
+        Logger::info("Applied patch core_action 20261002001");
+    } else {
+        Logger::error("Failed to apply patch core_action 20261002001");
+    }
+}
+
 //----------------------------------------------------
 
 // Relationship Evaluation and Initialization Queues
@@ -7149,6 +7169,82 @@ if ($checkVersion("bgl_history") < 20260729001) {
     $updateVersion("bgl_history", 20260729001);
     Logger::info("Applied patch bgl_history 20260729001");
 
+}
+
+if ($checkVersion("bgl_encounters") < 20260810001) {
+    Logger::debug("Applying bgl_encounters 20260810001 - create Background Life combat encounter tables");
+
+    $db->execQuery("BEGIN");
+    try {
+        $db->execQuery("
+            CREATE TABLE IF NOT EXISTS public.bgl_encounters (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                encounter_key varchar(64) NOT NULL UNIQUE,
+                initiator_npc_id bigint NOT NULL,
+                initiator_refid varchar(16) NOT NULL,
+                target_npc_id bigint NOT NULL,
+                target_refid varchar(16) NOT NULL,
+                gamets bigint NOT NULL,
+                ts bigint,
+                localts bigint NOT NULL,
+                state varchar(32) NOT NULL DEFAULT 'pending',
+                result varchar(32),
+                winning_side varchar(16),
+                reason text,
+                narrative text,
+                location text,
+                scene jsonb NOT NULL DEFAULT '{}'::jsonb,
+                resolution jsonb NOT NULL DEFAULT '{}'::jsonb,
+                loot_status varchar(32) NOT NULL DEFAULT 'locked',
+                completed_localts bigint
+            )
+        ");
+        $db->execQuery("
+            CREATE TABLE IF NOT EXISTS public.bgl_encounter_participants (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                encounter_id bigint NOT NULL REFERENCES public.bgl_encounters(id) ON DELETE CASCADE,
+                npc_id bigint NOT NULL,
+                npc_name varchar NOT NULL,
+                refid varchar(16) NOT NULL,
+                side varchar(16) NOT NULL,
+                initial_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+                intended_outcome varchar(32) NOT NULL,
+                applied_outcome varchar(32),
+                final_coords jsonb NOT NULL DEFAULT '{}'::jsonb,
+                application_status varchar(32) NOT NULL DEFAULT 'pending',
+                corpse_status varchar(32) NOT NULL DEFAULT 'not_applicable',
+                apply_attempts integer NOT NULL DEFAULT 0,
+                last_attempt_localts bigint,
+                UNIQUE (encounter_id, npc_id)
+            )
+        ");
+        $db->execQuery("
+            CREATE TABLE IF NOT EXISTS public.bgl_encounter_loot (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                encounter_id bigint NOT NULL REFERENCES public.bgl_encounters(id) ON DELETE CASCADE,
+                source_participant_id bigint NOT NULL REFERENCES public.bgl_encounter_participants(id) ON DELETE CASCADE,
+                recipient_participant_id bigint NOT NULL REFERENCES public.bgl_encounter_participants(id) ON DELETE CASCADE,
+                itemid varchar(16) NOT NULL,
+                item_name varchar,
+                requested_count integer NOT NULL,
+                applied_count integer NOT NULL DEFAULT 0,
+                status varchar(32) NOT NULL DEFAULT 'pending',
+                apply_attempts integer NOT NULL DEFAULT 0,
+                last_attempt_localts bigint,
+                UNIQUE (encounter_id, source_participant_id, recipient_participant_id, itemid)
+            )
+        ");
+        $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_encounters_gamets_idx ON public.bgl_encounters(gamets)");
+        $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_encounter_participants_npc_idx ON public.bgl_encounter_participants(npc_id, encounter_id)");
+        $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_encounter_loot_encounter_idx ON public.bgl_encounter_loot(encounter_id, status)");
+        $db->execQuery("COMMIT");
+    } catch (Throwable $e) {
+        $db->execQuery("ROLLBACK");
+        throw $e;
+    }
+
+    $updateVersion("bgl_encounters", 20260810001);
+    Logger::info("Applied patch bgl_encounters 20260810001");
 }
 
 if ($checkVersion("oghma") < 20260625001) {
@@ -7542,6 +7638,75 @@ if ($checkVersion("general_settings") < 20260919001) {
         $updateVersion("general_settings", 20260919001);
     } else {
         Logger::error('Failed to initialize SNQE connector settings; retry the database update.');
+    }
+}
+
+// Add the Decision Connector once. Reuse an existing Jev connector, never edit connector rows, and keep
+// saved assignments and switches on upgrades and retries.
+if ($checkVersion("decision_connector") < 20261005001) {
+    $decisionCapableSql = "LOWER(COALESCE(driver, '')) = 'openrouterjson'
+        AND (LOWER(TRIM(COALESCE(model, ''))) ~ '^~?typesafe/jev(-|$)' OR COALESCE(url, '') ~* '/decisions/?$')";
+    $migrationOk = $db->execQuery("
+        INSERT INTO public.core_llm_connector (
+            label, metadata, url, model, provider, driver, max_tokens,
+            enforce_json, prefill_json, api_badge_id, json_schema, temperature, service
+        )
+        SELECT 'OpenRouter Jev (Decision)', '{}', 'https://openrouter.ai/api/alpha/decisions',
+               'typesafe/jev-1.13', 'openrouter', 'openrouterjson', 128,
+               0, 0, (SELECT id FROM public.core_api_badge WHERE LOWER(label) = 'openrouter' ORDER BY id LIMIT 1),
+               0, 0, 'openrouter'
+        WHERE NOT EXISTS (SELECT 1 FROM public.core_llm_connector WHERE {$decisionCapableSql})
+    ") !== false;
+    $decisionRow = $migrationOk ? $db->fetchOne("
+        SELECT id FROM public.core_llm_connector
+        WHERE {$decisionCapableSql}
+        ORDER BY (LOWER(COALESCE(label, '')) = 'openrouter jev (decision)') DESC,
+                 (COALESCE(url, '') ~* '/decisions/?$') DESC, id
+        LIMIT 1
+    ") : null;
+    $decisionConnectorId = intval($decisionRow['id'] ?? 0);
+    $migrationOk = $migrationOk && $decisionConnectorId > 0;
+
+    if ($migrationOk) {
+        // Do not move scene dialogue to OpenRouter when the classifier is off or uses another provider.
+        $decisionEnabled = chimGetGeneralSettingBool('SCENE_CLASSIFIER_ENABLED',
+            (bool) chimReadLegacyGlobalValue('SCENE_CLASSIFIER_ENABLED', true));
+        $legacyConnectorId = chimGetGeneralSettingInt('CORE_CONNECTOR_SCENECLASSIFIER',
+            intval(chimReadLegacyGlobalValue('CORE_CONNECTOR_SCENECLASSIFIER', 0)));
+        if ($decisionEnabled && $legacyConnectorId > 0) {
+            $legacyConnector = $db->fetchOne("SELECT driver FROM public.core_llm_connector WHERE id = {$legacyConnectorId} LIMIT 1");
+            if (is_array($legacyConnector) && strtolower(trim((string) ($legacyConnector['driver'] ?? ''))) !== 'openrouterjson') {
+                $decisionEnabled = false;
+            }
+        }
+
+        foreach ([
+            'CORE_CONNECTOR_DECISION' => (string) $decisionConnectorId,
+            'CORE_CONNECTOR_DECISION_ENABLED' => $decisionEnabled ? 'true' : 'false',
+        ] as $settingId => $value) {
+            $idSql = $db->escapeLiteral($settingId);
+            $valueSql = $db->escapeLiteral($value);
+            $descriptionSql = $db->escapeLiteral(chimGetSchemaDescription($settingId));
+            if ($db->execQuery("INSERT INTO public.general_settings (id, value, description, updated_at)
+                VALUES ($idSql, $valueSql, $descriptionSql, CURRENT_TIMESTAMP)
+                ON CONFLICT (id) DO NOTHING") === false) {
+                $migrationOk = false;
+            }
+        }
+        foreach (['CORE_CONNECTOR_SCENECLASSIFIER', 'SCENE_CLASSIFIER_ENABLED'] as $settingId) {
+            if ($db->execQuery("UPDATE public.general_settings SET description = "
+                . $db->escapeLiteral(chimGetSchemaDescription($settingId))
+                . " WHERE id = " . $db->escapeLiteral($settingId)) === false) {
+                $migrationOk = false;
+            }
+        }
+    }
+
+    if ($migrationOk) {
+        $updateVersion("decision_connector", 20261005001);
+        Logger::info("Applied Decision Connector setup 20261005001");
+    } else {
+        Logger::error('Failed to set up the Decision Connector; retry the database update.');
     }
 }
 
@@ -7996,6 +8161,129 @@ if ($checkVersion("playthrough_schema") < 20260723001) {
     }
 }
 
+// Persistent NPC tasks
+if ($checkVersion("npc_commitments") < 20260719002) {
+    Logger::debug("Applying npc_commitments 20260719002 - add persistent NPC task recurrence");
+
+    $schemaPath = __DIR__ . "/../lib/core/database_schema/npc_commitments.sql";
+    if ($db->execQuery(file_get_contents($schemaPath))) {
+        $updateVersion("npc_commitments", 20260719002);
+        Logger::info("Applied patch npc_commitments 20260719002");
+    } else {
+        Logger::error("Failed to apply patch npc_commitments 20260719002");
+    }
+}
+
+if ($checkVersion("npc_commitment_actions") < 20260719002) {
+    Logger::debug("Applying npc_commitment_actions 20260719002 - add persistent NPC task actions");
+
+    $db->execQuery("
+        DELETE FROM public.core_action_custom
+         WHERE code_name IN ('CreateCommitment', 'ResolveCommitment', 'CancelCommitment')
+    ");
+    $db->execQuery("
+        DELETE FROM public.core_action
+         WHERE code_name IN ('CreateCommitment', 'ResolveCommitment', 'CancelCommitment')
+    ");
+
+    if ($db->execQuery("
+        INSERT INTO public.core_action (
+            code_name,
+            action_name,
+            description,
+            return_message,
+            available_to_npc,
+            available_to_followers,
+            available_to_narrator,
+            is_activated,
+            parameters_json,
+            metadata,
+            game_function,
+            import_version,
+            script_proxy_program
+        ) VALUES
+        (
+            'CreateTasks',
+            'Create_Tasks',
+            'Create a persistent task that #HERIKA_NAME# intends to complete later. Set repeat_every_hours to make it repeat on an in-game interval, or omit it for a one-time task.',
+            '#HERIKA_NAME# records a persistent task.',
+            TRUE,
+            TRUE,
+            FALSE,
+            TRUE,
+            '{\"type\":\"object\",\"required\":[\"type\",\"subject\",\"due_in_hours\"],\"properties\":{\"type\":{\"type\":\"string\",\"enum\":[\"meeting\",\"message_delivery\",\"fetch\",\"escort\",\"errand\",\"other\"],\"description\":\"Kind of task being created.\"},\"subject\":{\"type\":\"string\",\"description\":\"Short concrete description of what must happen.\"},\"counterparty\":{\"type\":\"string\",\"description\":\"Other person involved, if any.\"},\"location\":{\"type\":\"string\",\"description\":\"Place where the task should be completed, if any.\"},\"due_in_hours\":{\"type\":\"number\",\"description\":\"In-game hours until this task is first due. Minimum 0.25, maximum 8760.\"},\"repeat_every_hours\":{\"type\":\"number\",\"description\":\"Optional in-game repeat interval. Omit or use 0 for a one-time task; otherwise minimum 0.25 and maximum 8760.\"}}}'::jsonb,
+            '{\"source\":\"functions.php\",\"status\":\"active\",\"builtin\":true,\"dispatch\":\"server_action\"}'::jsonb,
+            FALSE,
+            0,
+            NULL
+        ),
+        (
+            'ResolveTask',
+            'Resolve_Task',
+            'Mark one of #HERIKA_NAME#''s active tasks as completed or failed after the outcome has happened. Repeating tasks automatically advance to their next scheduled occurrence.',
+            '#HERIKA_NAME# resolves a persistent task.',
+            TRUE,
+            TRUE,
+            FALSE,
+            TRUE,
+            '{\"type\":\"object\",\"required\":[\"task_id\",\"status\",\"outcome\"],\"properties\":{\"task_id\":{\"type\":\"integer\",\"description\":\"Task number shown in the active tasks context.\"},\"status\":{\"type\":\"string\",\"enum\":[\"completed\",\"failed\"],\"description\":\"Final outcome.\"},\"outcome\":{\"type\":\"string\",\"description\":\"Brief factual description of what happened.\"}}}'::jsonb,
+            '{\"source\":\"functions.php\",\"status\":\"active\",\"builtin\":true,\"dispatch\":\"server_action\"}'::jsonb,
+            FALSE,
+            0,
+            NULL
+        ),
+        (
+            'CancelTask',
+            'Cancel_Task',
+            'Cancel one of #HERIKA_NAME#''s active tasks. Cancelling permanently stops a repeating task.',
+            '#HERIKA_NAME# cancels a persistent task.',
+            TRUE,
+            TRUE,
+            FALSE,
+            TRUE,
+            '{\"type\":\"object\",\"required\":[\"task_id\",\"reason\"],\"properties\":{\"task_id\":{\"type\":\"integer\",\"description\":\"Task number shown in the active tasks context.\"},\"reason\":{\"type\":\"string\",\"description\":\"Brief reason the task is being cancelled.\"}}}'::jsonb,
+            '{\"source\":\"functions.php\",\"status\":\"active\",\"builtin\":true,\"dispatch\":\"server_action\"}'::jsonb,
+            FALSE,
+            0,
+            NULL
+        )
+        ON CONFLICT (code_name) DO UPDATE SET
+            action_name = EXCLUDED.action_name,
+            description = EXCLUDED.description,
+            return_message = EXCLUDED.return_message,
+            available_to_npc = EXCLUDED.available_to_npc,
+            available_to_followers = EXCLUDED.available_to_followers,
+            available_to_narrator = EXCLUDED.available_to_narrator,
+            is_activated = EXCLUDED.is_activated,
+            parameters_json = EXCLUDED.parameters_json,
+            metadata = EXCLUDED.metadata,
+            game_function = EXCLUDED.game_function,
+            import_version = EXCLUDED.import_version,
+            script_proxy_program = EXCLUDED.script_proxy_program,
+            updated_at = NOW()
+    ")) {
+        $updateVersion("npc_commitment_actions", 20260719002);
+    } else {
+        throw new RuntimeException("NPC task action migration failed");
+    }
+    Logger::info("Applied patch npc_commitment_actions 20260719002");
+}
+
+if ($checkVersion("npc_commitment_actions") < 20260719003) {
+    Logger::debug("Applying npc_commitment_actions 20260719003 - strengthen persistent task prompting");
+    $description = $db->escape("Create a persistent task whenever #HERIKA_NAME# accepts, promises, remembers, or schedules a future duty. Use this instead of Talk when a commitment is made. Include any task details already known; the server will structure and save the task in the background.");
+    if ($db->execQuery("
+        UPDATE public.core_action
+           SET description = '{$description}', updated_at = NOW()
+         WHERE code_name = 'CreateTasks'
+    ")) {
+        $updateVersion("npc_commitment_actions", 20260719003);
+        Logger::info("Applied patch npc_commitment_actions 20260719003");
+    } else {
+        Logger::error("Failed to apply patch npc_commitment_actions 20260719003");
+    }
+}
+
 // master Packages update 
 if ($checkVersion("master_packages")<20260716002) {
     if ($db->execQuery(file_get_contents(__DIR__."/../data/master_packages_202607.sql"))) {
@@ -8297,9 +8585,115 @@ if ($checkVersion('npc_plugin_extended_data') < 20260919001) {
     $updateVersion('npc_plugin_extended_data', 20260919001);
 }
 
+// Two-way courier letters between the player and Background Life NPCs (lib/bgl_letters.php).
+if ($checkVersion("bgl_letters") < 20260924001) {
+    Logger::debug("Applying bgl_letters 20260924001 - create player/NPC letter correspondence table");
+
+    $db->execQuery("
+        CREATE TABLE IF NOT EXISTS public.bgl_letters (
+            id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            npc_name varchar NOT NULL,
+            npc_refid varchar,
+            direction varchar(16) NOT NULL,
+            title varchar NOT NULL,
+            body text NOT NULL,
+            in_reply_to bigint,
+            status varchar(32) NOT NULL,
+            courier_state varchar(32),
+            courier_name varchar,
+            courier_event_rowid bigint,
+            courier_attempts integer DEFAULT 0,
+            delivery_attempts integer DEFAULT 0,
+            fee integer DEFAULT 0,
+            sent_gamets bigint,
+            deliver_gamets bigint,
+            read_gamets bigint,
+            discussed_gamets bigint,
+            localts bigint,
+            state_changed_localts bigint
+        )
+    ");
+    $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_letters_npc_idx ON public.bgl_letters (lower(npc_name))");
+    $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_letters_status_idx ON public.bgl_letters (status, courier_state)");
+    $db->execQuery("CREATE INDEX IF NOT EXISTS bgl_letters_reply_idx ON public.bgl_letters (in_reply_to)");
+
+    $updateVersion("bgl_letters", 20260924001);
+    Logger::info("Applied patch bgl_letters 20260924001");
+}
+
+// The courier is addressed by reference ID: CHIM's real-names system renames spawned actors.
+if ($checkVersion("bgl_letters") < 20260929001) {
+    Logger::debug("Applying bgl_letters 20260929001 - store the courier's reference ID");
+
+    $db->execQuery("ALTER TABLE public.bgl_letters ADD COLUMN IF NOT EXISTS courier_refid varchar");
+
+    $updateVersion("bgl_letters", 20260929001);
+    Logger::info("Applied patch bgl_letters 20260929001");
+}
+
 // Install durable event accounting before refreshing the snapshot schema.
 if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/dynamic_profile_scheduler.sql')) === false) {
     throw new RuntimeException('Dynamic profile migration failed.');
+}
+
+if ($GLOBALS['db']->query(file_get_contents(dirname(__DIR__) . '/lib/core/database_schema/eventlog_private_thought.sql')) === false) {
+    throw new RuntimeException('Private NPC thoughts migration failed.');
+}
+
+$updateVersion('eventlog_private_thought', 20260926002);
+
+if ($checkVersion('private_npc_thoughts_prompt') < 20260926001) {
+    require_once dirname(__DIR__) . '/lib/npc_private_thoughts.php';
+    $privateThoughtPrompt = $db->escape(CHIM_PRIVATE_THOUGHT_DEFAULT_PROMPT);
+    if ($db->query("INSERT INTO public.prompts (prompt_key, default_prompt, description)
+        VALUES ('private_npc_thoughts', '{$privateThoughtPrompt}',
+            'Private NPC Thoughts: instructions for the internal_thought response field. Used when enabled on the NPC profile. Thoughts are unspoken and limited to 600 characters.')
+        ON CONFLICT (prompt_key) DO UPDATE SET default_prompt = EXCLUDED.default_prompt,
+            description = EXCLUDED.description, updated_at = CURRENT_TIMESTAMP") === false) {
+        throw new RuntimeException('Private NPC thoughts prompt migration failed.');
+    }
+    $updateVersion('private_npc_thoughts_prompt', 20260926001);
+}
+
+// Scheduled NPC travel and correlated game acknowledgements.
+if ($checkVersion('npc_schedules') < 20260927001) {
+    if (!$db->execQuery(file_get_contents(__DIR__ . '/../lib/core/database_schema/npc_schedules.sql'))) throw new RuntimeException('Schedule migration failed.');
+    $updateVersion('npc_schedules', 20260927001);
+}
+
+// Skyrim date SQL functions use the Global Settings start date, which PHP sets once per
+// connection. Recreated functions still containing the old fixed date are patched again.
+$hardcodedSkyrimStartFunctions = $db->fetchAll("SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname LIKE 'convert_gamets2skyrim%' AND p.prosrc LIKE '%0201.08.17 00:00:00%'");
+if ($checkVersion('skyrim_start_date') < 20260930001 || !empty($hardcodedSkyrimStartFunctions)) {
+    $skyrimStartSql = <<<'SQL'
+CREATE OR REPLACE FUNCTION public.chim_skyrim_start_timestamp() RETURNS timestamp with time zone
+    LANGUAGE sql STABLE
+    AS $fn$
+        SELECT to_timestamp(COALESCE(NULLIF(current_setting('chim.skyrim_start_date', true), ''), '0201-08-17 00:00:00'), 'YYYY-MM-DD HH24:MI:SS')
+    $fn$;
+DO $$
+DECLARE item record;
+BEGIN
+    FOR item IN SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname LIKE 'convert_gamets2skyrim%' AND p.prosrc LIKE '%0201.08.17 00:00:00%'
+    LOOP
+        EXECUTE replace(pg_get_functiondef(item.oid),
+            'to_timestamp(''0201.08.17 00:00:00'',''YYYY.MM.DD HH24:MI:SS'')', 'public.chim_skyrim_start_timestamp()');
+    END LOOP;
+    IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname LIKE 'convert_gamets2skyrim%' AND p.prosrc LIKE '%0201.08.17 00:00:00%') THEN
+        RAISE EXCEPTION 'Some Skyrim date functions still use a fixed start date';
+    END IF;
+END;
+$$;
+SQL;
+    if ($db->execQuery($skyrimStartSql) !== false) {
+        $updateVersion('skyrim_start_date', 20260930001);
+        Logger::info("Applied patch skyrim_start_date 20260930001");
+    } else {
+        Logger::error("Skyrim start date SQL function patch failed; SQL dates keep the default start date.");
+    }
 }
 
 // Keep the installed snapshot functions and pgAdmin comments aligned with the current table policy.
@@ -8319,4 +8713,197 @@ if ($playthroughPolicyConn) {
     Logger::error('Cannot connect to update the Playthrough Save table policy.');
 }
 
-?>
+
+// Retire Relax from existing catalogs as well as fresh seeds.
+if ($checkVersion('core_action_retire_relax') < 20260927001) {
+    $db->execQuery('BEGIN');
+    try {
+        if ($db->execQuery("DELETE FROM public.core_action_custom WHERE code_name='Relax'") === false
+            || $db->execQuery("DELETE FROM public.core_action WHERE code_name='Relax'") === false) {
+            throw new RuntimeException('Could not retire Relax');
+        }
+        $updateVersion('core_action_retire_relax', 20260927001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Relax retirement failed: ' . $e->getMessage());
+    }
+}
+
+// Retire Drink from existing catalogs as well as fresh seeds.
+if ($checkVersion('core_action_retire_drink') < 20260927001) {
+    $db->execQuery('BEGIN');
+    try {
+        if ($db->execQuery("DELETE FROM public.core_action_custom WHERE code_name='Drink'") === false
+            || $db->execQuery("DELETE FROM public.core_action WHERE code_name='Drink'") === false) {
+            throw new RuntimeException('Could not retire Drink');
+        }
+        $updateVersion('core_action_retire_drink', 20260927001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Drink retirement failed: ' . $e->getMessage());
+    }
+}
+
+// Store relationship audits atomically without copying them into prompt history.
+if ($checkVersion('relationship_eventlog') < 20261002001) {
+    $db->execQuery('BEGIN');
+    try {
+        $sql = file_get_contents(__DIR__ . '/../lib/core/database_schema/relationship_eventlog.sql');
+        if ($sql === false || $db->execQuery($sql) === false) {
+            throw new RuntimeException('Relationship eventlog migration failed');
+        }
+        $updateVersion('relationship_eventlog', 20261002001);
+        $db->execQuery('COMMIT');
+    } catch (Throwable $e) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Relationship eventlog migration failed: ' . $e->getMessage());
+    }
+}
+// Derived episodes keep a nullable link to the raw canonical bucket; old rows remain canonical.
+if ($checkVersion("memory_summary_episodes") < 20261004001) {
+    $migrationOk = $db->execQuery("ALTER TABLE public.memory_summary ADD COLUMN IF NOT EXISTS source_rowid integer") !== false;
+    if ($migrationOk) {
+        $migrationOk = $db->execQuery("CREATE INDEX IF NOT EXISTS memory_summary_source_rowid_idx ON public.memory_summary(source_rowid) WHERE source_rowid IS NOT NULL") !== false;
+    }
+    if ($migrationOk) $updateVersion("memory_summary_episodes", 20261004001);
+    else Logger::error("Failed to apply memory episode source linkage migration");
+}
+
+// Register editable Interact guidance without changing existing custom overrides.
+if ($checkVersion('interact_prompts') < 20261005001) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (chimInteractPromptDefaults() as $key => $text) {
+        $key = $db->escape($key);
+        $text = $db->escape($text);
+        $ok = $db->execQuery("INSERT INTO public.prompts (prompt_key, default_prompt, description)
+            VALUES ('{$key}', '{$text}', 'CHIM Interact guidance. Engine eligibility and JSON response constraints remain enforced.')
+            ON CONFLICT (prompt_key) DO UPDATE SET default_prompt=EXCLUDED.default_prompt,
+            description=EXCLUDED.description, updated_at=CURRENT_TIMESTAMP") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005001);
+    else Logger::error('Failed to register Interact prompts');
+}
+
+// Retire only the previously registered action entries; retain editable guidance and unrelated prompts.
+if ($checkVersion('interact_prompts') >= 20261005001 && $checkVersion('interact_prompts') < 20261005002) {
+    $retiredActions = ['observe','pickup','consume_world','give','store','consume','equip','heal',
+        'restore_stamina','restore_magicka','disarm','unequip','drop','place','injure','kill','push',
+        'lock','unlock','activate','open','close','destroy','disable','resize','magic','combat'];
+    $keys = array_map(static fn(string $effect): string => "'interact_action_{$effect}'", $retiredActions);
+    if ($db->execQuery('DELETE FROM public.prompts WHERE prompt_key IN ('.implode(',', $keys).')') !== false) {
+        $updateVersion('interact_prompts', 20261005002);
+    } else Logger::error('Failed to retire Interact action prompts');
+}
+
+// Refresh narration guidance only; preserve custom text and every other managed prompt.
+if ($checkVersion('interact_prompts') >= 20261005002 && $checkVersion('interact_prompts') < 20261005003) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $narrationDefault = $db->escape(chimInteractPromptDefaults()['interact_narration']);
+    if ($db->execQuery("UPDATE public.prompts SET default_prompt='{$narrationDefault}', updated_at=CURRENT_TIMESTAMP
+        WHERE prompt_key='interact_narration'") !== false) {
+        $updateVersion('interact_prompts', 20261005003);
+    } else Logger::error('Failed to refresh Interact narration guidance');
+}
+
+// Refresh normal action selection guidance while preserving custom rules.
+if ($checkVersion('interact_prompts') >= 20261005003 && $checkVersion('interact_prompts') < 20261005004) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $normalDefault = $db->escape(chimInteractPromptDefaults()['interact_rules']);
+    if ($db->execQuery("UPDATE public.prompts SET default_prompt='{$normalDefault}', updated_at=CURRENT_TIMESTAMP
+        WHERE prompt_key='interact_rules_normal'") !== false) {
+        $updateVersion('interact_prompts', 20261005004);
+    } else Logger::error('Failed to refresh Interact action selection guidance');
+}
+
+// Synthetic effects use props as narrative context; preserve user-edited mode/narration guidance.
+if ($checkVersion('interact_prompts') >= 20261005004 && $checkVersion('interact_prompts') < 20261005005) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (['interact_rules','interact_narration'] as $key) {
+        $text = $db->escape(chimInteractPromptDefaults()[$key]);
+        $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
+            WHERE prompt_key='{$key}'") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005005);
+    else Logger::error('Failed to refresh Interact synthetic effect guidance');
+}
+
+// Refresh scene guidance, preserving all three user-customized Interact prompts.
+if ($checkVersion('interact_prompts') >= 20261005005 && $checkVersion('interact_prompts') < 20261005006) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (chimInteractPromptDefaults() as $key => $text) {
+        $text = $db->escape($text);
+        $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
+            WHERE prompt_key='{$key}'") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005006);
+    else Logger::error('Failed to refresh Interact failure scene guidance');
+}
+
+// Refresh intent-first planning defaults without changing custom guidance.
+if ($checkVersion('interact_prompts') >= 20261005006 && $checkVersion('interact_prompts') < 20261005007) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $ok = true;
+    foreach (['interact_rules','interact_narration'] as $key) {
+        $text = $db->escape(chimInteractPromptDefaults()[$key]);
+        $ok = $db->execQuery("UPDATE public.prompts SET default_prompt='{$text}', updated_at=CURRENT_TIMESTAMP
+            WHERE prompt_key='{$key}'") !== false && $ok;
+    }
+    if ($ok) $updateVersion('interact_prompts', 20261005007);
+    else Logger::error('Failed to refresh Interact intent-first guidance');
+}
+
+// Consolidate modes atomically; keep applicable custom rules and archive retired overrides in the description.
+if ($checkVersion('interact_prompts') >= 20261005007 && $checkVersion('interact_prompts') < 20261005008) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $db->execQuery('BEGIN');
+    try {
+        $text=$db->escape(chimInteractPromptDefaults()['interact_rules']);
+        $sql="INSERT INTO public.prompts (prompt_key,default_prompt,custom_prompt,description)
+            VALUES ('interact_rules','{$text}',
+                (SELECT custom_prompt FROM public.prompts WHERE prompt_key='interact_rules_cheat'),
+                'CHIM Interact rules. Engine eligibility and response constraints remain enforced.')
+            ON CONFLICT (prompt_key) DO UPDATE SET default_prompt=EXCLUDED.default_prompt,
+                custom_prompt=COALESCE(NULLIF(prompts.custom_prompt,''),EXCLUDED.custom_prompt), updated_at=CURRENT_TIMESTAMP";
+        if ($db->execQuery($sql)===false) throw new RuntimeException('Could not consolidate Interact rules');
+        // Archive both overrides before deleting their exposed mode entries, even when they differ.
+        if ($db->execQuery("UPDATE public.prompts SET description=COALESCE(description,'CHIM Interact rules.') || COALESCE((
+            SELECT E'\\n\\nRetired mode customizations (archive only; not active rules):\\n' ||
+                string_agg(prompt_key || E':\\n' || custom_prompt,E'\\n\\n' ORDER BY prompt_key)
+            FROM public.prompts WHERE prompt_key IN ('interact_rules_normal','interact_rules_cheat')
+                AND NULLIF(trim(custom_prompt),'') IS NOT NULL),'')
+            WHERE prompt_key='interact_rules'")===false
+            || $db->execQuery("DELETE FROM public.prompts WHERE prompt_key IN ('interact_rules_normal','interact_rules_cheat')")===false)
+            throw new RuntimeException('Could not preserve retired Interact customizations');
+        $updateVersion('interact_prompts',20261005008);
+        if ($db->execQuery('COMMIT')===false) throw new RuntimeException('Could not commit Interact rules');
+    } catch (Throwable $error) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Failed to consolidate Interact rules: '.$error->getMessage());
+    }
+}
+
+// Refresh universal Interact guidance without replacing user customizations or their migration archive.
+if ($checkVersion('interact_prompts') >= 20261005008 && $checkVersion('interact_prompts') < 20261005009) {
+    require_once __DIR__.'/../lib/interact_prompts.php';
+    $db->execQuery('BEGIN');
+    try {
+        foreach (chimInteractPromptDefaults() as $key=>$text) {
+            $key=$db->escape($key);
+            $text=$db->escape($text);
+            if ($db->execQuery("INSERT INTO public.prompts (prompt_key,default_prompt,description)
+                VALUES ('{$key}','{$text}','CHIM Interact guidance. Engine and response constraints remain enforced.')
+                ON CONFLICT (prompt_key) DO UPDATE SET default_prompt=EXCLUDED.default_prompt,
+                    updated_at=CURRENT_TIMESTAMP")===false) throw new RuntimeException('Could not refresh Interact guidance');
+        }
+        $updateVersion('interact_prompts',20261005009);
+        if ($db->execQuery('COMMIT')===false) throw new RuntimeException('Could not commit Interact guidance');
+    } catch (Throwable $error) {
+        $db->execQuery('ROLLBACK');
+        Logger::error('Failed to refresh universal Interact guidance: '.$error->getMessage());
+    }
+}

@@ -49,3 +49,5 @@
     .npc-event-history-table th,
     .npc-event-history-table td { padding:7px 8px; }
 }
+
+.event-private-thought { margin-top: 6px; color: #b8b8b8; font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }

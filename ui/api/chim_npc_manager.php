@@ -32,6 +32,7 @@ require_once LIB_PATH . DIRECTORY_SEPARATOR . 'core' . DIRECTORY_SEPARATOR . 'tt
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'relationship_manager.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'utils_game_timestamp.php';
 require_once LIB_PATH . DIRECTORY_SEPARATOR . 'eventlog_helper.php';
+require_once LIB_PATH . DIRECTORY_SEPARATOR . 'npc_private_thoughts.php';
 
 $db = new sql();
 $npcMaster = new NpcMaster();
@@ -289,6 +290,12 @@ function chimNpcManagerFindNpc(array $input): array
 
 function chimNpcManagerEventRecipients($people): array
 {
+    $storedRecipients = json_decode((string)$people, true);
+    if (is_array($storedRecipients) && array_is_list($storedRecipients)) {
+        $people = implode('|', array_map(static function ($recipient) {
+            return is_array($recipient) && is_string($recipient['name'] ?? null) ? $recipient['name'] : '';
+        }, $storedRecipients));
+    }
     $recipients = [];
     foreach (explode('|', trim((string)$people, '|')) as $recipient) {
         $recipient = trim((string)$recipient);
@@ -321,6 +328,7 @@ function chimNpcManagerHistory(array $input): array
         'goodmorning',
         'ginputtext',
         'death',
+        'relationship',
         'combatendmighty',
         'combatend',
     ];
@@ -335,7 +343,7 @@ function chimNpcManagerHistory(array $input): array
         $hiddenEventTypes
     );
     $rows = $GLOBALS['db']->fetchAll(
-        "SELECT a.rowid, a.type, a.data, a.people, a.gamets, a.localts, a.ts, a.sess
+        "SELECT a.rowid, a.type, a.data, a.people, a.gamets, a.localts, a.ts, a.sess, a.delivery_state, a.private_thought
          FROM eventlog a
          WHERE {$allowedTypesWhere} AND {$visibleWhere} AND {$peopleWhere}
          ORDER BY a.gamets DESC, a.ts DESC, a.localts DESC, a.rowid DESC
@@ -356,6 +364,7 @@ function chimNpcManagerHistory(array $input): array
             'rowid' => (int)($row['rowid'] ?? 0),
             'type' => (string)($row['type'] ?? ''),
             'data' => (string)($row['data'] ?? ''),
+            'private_thought' => chimPrivateThoughtForDisplay($row),
             'recipients' => chimNpcManagerEventRecipients($row['people'] ?? ''),
             'gamets' => $gamets,
             'tamrielic_time' => $gamets > 0 ? convert_gamets2skyrim_long_date2($gamets) : '',

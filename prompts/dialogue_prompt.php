@@ -283,7 +283,9 @@ $inlineNarrationMode = strtolower(trim((string)($GLOBALS["INLINE_NARRATION_MODE"
 if (!in_array($inlineNarrationMode, ['disabled', 'narrator', 'npc', 'text_only'], true)) {
     $inlineNarrationMode = (isset($GLOBALS["INLINE_NARRATION_ENABLED"]) && $GLOBALS["INLINE_NARRATION_ENABLED"]) ? 'narrator' : 'disabled';
 }
-$inlineNarrationMode = $directNarratorDialogue ? 'disabled' : $inlineNarrationMode;
+if ($directNarratorDialogue && !in_array($inlineNarrationMode, ['npc', 'text_only'], true)) {
+    $inlineNarrationMode = 'disabled';
+}
 $inlineNarrationEnabled = $inlineNarrationMode !== 'disabled';
 if ($inlineNarrationEnabled) {
     if (in_array($inlineNarrationMode, ['npc', 'text_only'], true)) {
@@ -337,7 +339,9 @@ if ($inlineNarrationEnabled) {
     );
 }
 
-if ($directNarratorDialogue) {
+if ($directNarratorDialogue && $inlineNarrationEnabled) {
+    $TEMPLATE_DIALOG .= " If an narrator action matches the request, use it and keep the spoken line consistent with that action.";
+} elseif ($directNarratorDialogue) {
     $TEMPLATE_DIALOG .= " Reply directly to {$GLOBALS["PLAYER_NAME"]} in spoken dialogue." .
         " If an narrator action matches the request, use it and keep the spoken line consistent with that action." .
         " Do not include third-person narration, scene description, stage directions, or text in asterisks.";

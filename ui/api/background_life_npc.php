@@ -76,6 +76,27 @@ try {
         exit;
     }
 
+    // Batched chat target read: enrollment and saved Player affinity for up to 32 targets.
+    // The raw list is limited to 16 KiB and list > object > value nesting before decoding.
+    if ($_SERVER['REQUEST_METHOD'] === 'GET' && $operation === 'chat_targets') {
+        $rawTargets = $_GET['targets'] ?? '';
+        if (!is_string($rawTargets) || strlen($rawTargets) > 16384) {
+            throw new InvalidArgumentException('Targets must be a JSON array of at most 16384 bytes');
+        }
+        $targets = json_decode($rawTargets, true, 3);
+        if (!is_array($targets) || !array_is_list($targets)) {
+            throw new InvalidArgumentException('Targets must be a JSON array');
+        }
+
+        echo json_encode([
+            'success' => true,
+            'scope' => chimBglChatTargetScope($GLOBALS['db']),
+            'limit' => CHIM_BGL_CHAT_TARGET_LIMIT,
+            'targets' => chimBglChatTargetStatuses($GLOBALS['db'], $targets),
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
     $refid = trim((string)($_REQUEST['refid'] ?? ''));
     $npcName = trim((string)($_REQUEST['npc_name'] ?? ''));
     if ($refid === '' && $npcName === '') {

@@ -317,6 +317,7 @@
     let searchTimer = null;
     let requestController = null;
     let npcRecentEventsController = null;
+    let npcHistoryOpener = null;
 
     function createElement(tagName, className, text) {
         const element = document.createElement(tagName);
@@ -586,6 +587,7 @@
             tab.classList.toggle('active', selected);
             tab.setAttribute('aria-selected', selected ? 'true' : 'false');
         });
+        document.dispatchEvent(new CustomEvent('bgl-history-tab', { detail: tabName }));
     }
 
     function renderNpcWrittenHistory(npcName) {
@@ -613,7 +615,7 @@
         ));
     }
 
-    async function openNpcRecentEvents(npcName) {
+    async function openNpcRecentEvents(npcName, initialTab = 'events') {
         const modal = document.getElementById('npc-recent-events');
         const title = document.getElementById('npc-recent-events-title');
         const status = document.getElementById('npc-recent-events-status');
@@ -622,13 +624,15 @@
             return;
         }
 
+        npcHistoryOpener = document.activeElement;
         title.textContent = npcName + ' History';
         status.textContent = 'Loading recent events...';
         status.style.color = '';
         list.replaceChildren();
-        setNpcHistoryTab('events');
+        document.dispatchEvent(new CustomEvent('bgl-history-npc', { detail: npcName }));
+        setNpcHistoryTab(initialTab);
         renderNpcWrittenHistory(npcName);
-        openBglModal('npc-recent-events');
+        openBglModal('npc-recent-events', 'npc-history-close');
 
         if (npcRecentEventsController) {
             npcRecentEventsController.abort();
@@ -676,11 +680,14 @@
     }
 
     function closeNpcRecentEvents() {
+        const wasOpen = document.getElementById('npc-recent-events')?.classList.contains('open');
+        document.dispatchEvent(new CustomEvent('bgl-history-close'));
         if (npcRecentEventsController) {
             npcRecentEventsController.abort();
             npcRecentEventsController = null;
         }
         closeBglModal('npc-recent-events');
+        if (wasOpen && npcHistoryOpener) npcHistoryOpener.focus();
     }
 
     document.querySelectorAll('.marker-item[data-npc-name]').forEach(function (card) {
@@ -721,6 +728,13 @@
     });
 
     document.addEventListener('click', function (event) {
+        const writeLetter = event.target.closest('[data-npc-letters]');
+        if (writeLetter) {
+            const card = writeLetter.closest('.marker-item[data-npc-name]');
+            if (card) {
+                openNpcRecentEvents(card.dataset.npcName, 'letters');
+            }
+        }
         const tab = event.target.closest('[data-npc-history-tab]');
         if (tab) {
             setNpcHistoryTab(tab.dataset.npcHistoryTab);
@@ -728,6 +742,20 @@
     });
 
     document.addEventListener('keydown', function (event) {
+        const modal = document.getElementById('npc-recent-events');
+        if (event.key === 'Tab' && modal?.classList.contains('open')) {
+            const controls = Array.from(modal.querySelectorAll('button, textarea, summary, [tabindex="0"]'))
+                .filter(control => !control.disabled && control.getClientRects().length);
+            const first = controls[0];
+            const last = controls[controls.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        }
         if (event.key === 'Escape') {
             closeNpcRecentEvents();
         }

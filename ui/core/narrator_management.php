@@ -245,9 +245,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_narrator'])) {
             $cooldown = max(1, min(1440, $cooldown)); // Clamp to 1-1440 (24 hours)
             $narrator->set('welcome_cooldown', (string)$cooldown);
         }
-        if (isset($_POST['quest_comment_enabled'])) {
-            $narrator->set('quest_comment_enabled', $_POST['quest_comment_enabled'] === '1' ? '1' : '0');
-        }
+        $narrator->set('quest_comment_enabled', isset($_POST['quest_comment_enabled']) && $_POST['quest_comment_enabled'] === '1' ? '1' : '0');
         if (isset($_POST['quest_comment_chance'])) {
             $chance = intval($_POST['quest_comment_chance']);
             $chance = max(1, min(100, $chance)); // Clamp to 1-100
@@ -1615,9 +1613,9 @@ if (!$isEmbed) {
                             <input type="checkbox" id="quest_comment_enabled" name="quest_comment_enabled" value="1" <?php echo $questCommentEnabled ? 'checked' : ''; ?>>
                             <span class="toggle-slider"></span>
                         </div>
-                        <span class="toggle-label">Enable Quest Comments</span>
+                        <span class="toggle-label">Enable Narrator Quest Comments</span>
                     </label>
-                    <span class="hint">Narrator will comment on quest objective updates.</span>
+                    <span class="hint">Narrator can comment when no nearby NPC comment is selected. Each objective update selects at most one initial speaker.</span>
                     
                     <label for="quest_comment_chance">Quest Comment Chance (%)</label>
                     <input type="number" id="quest_comment_chance" name="quest_comment_chance" value="<?php echo htmlspecialchars((string)$questCommentChance); ?>" min="1" max="100">
@@ -1625,7 +1623,7 @@ if (!$isEmbed) {
                     
                     <label for="quest_comment_cooldown">Quest Comment Cooldown (minutes)</label>
                     <input type="number" id="quest_comment_cooldown" name="quest_comment_cooldown" value="<?php echo htmlspecialchars((string)$questCommentCooldown); ?>" min="1" max="60">
-                    <span class="hint">Minimum time in minutes between quest comments. Prevents spam. Range: 1-60 minutes, Default: 3 minutes</span>
+                    <span class="hint">Shared cooldown for NPC and Narrator quest comments. Starts after dialogue is generated. Range: 1-60 minutes. Default: 3 minutes.</span>
                 </div>
             </div>
             

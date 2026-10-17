@@ -312,6 +312,63 @@
     text-align: center;
 }
 
+.bgl-letter-toolbar,
+.bgl-letter-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.marker-card-actions [data-npc-letters] {
+    grid-column: 1 / -1;
+}
+
+.bgl-letter-form {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0 18px;
+}
+
+.bgl-letter-form textarea {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 100px;
+    resize: vertical;
+    border: 1px solid #666;
+    border-radius: 5px;
+    padding: 10px;
+    background: #191919;
+    color: #eee;
+    font: inherit;
+}
+
+#bgl-correspondence :focus-visible {
+    outline: 2px solid rgb(242, 124, 17);
+    outline-offset: 2px;
+}
+
+#bgl-correspondence button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#bgl-letter-status {
+    margin-top: 8px;
+    font-size: 13px;
+    color: #bbb;
+}
+
+#bgl-letter-status.bgl-letter-error { color: #f3a4a4; }
+.bgl-letter-hint { color: #bbb; font-size: 12px; }
+.bgl-letter-thread { display: grid; gap: 10px; }
+.bgl-letter-title { display: block; margin-bottom: 8px; }
+.bgl-letter-footer { margin-top: 10px; }
+.bgl-letter { overflow-wrap: anywhere; min-width: 0; }
+.bgl-letter-archive { margin-top: 16px; }
+.bgl-letter-archive summary { cursor: pointer; margin-bottom: 10px; }
+
 @media (max-width: 900px) {
     .bgl-history-toolbar {
         grid-template-columns: 1fr 1fr;

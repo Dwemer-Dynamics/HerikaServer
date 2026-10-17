@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . '/lib/speech_trace.php';
 
 
 $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
@@ -6,7 +7,7 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
     // Cache 
 		if (!isset($GLOBALS["AVOID_TTS_CACHE"]))
 			if (file_exists(dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "soundcache/" . md5(trim($stringforhash)) . ".wav"))
-				return dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "soundcache/" . md5(trim($stringforhash)) . ".wav";
+				return chimTraceCachedTts(dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR . "soundcache/" . md5(trim($stringforhash)) . ".wav", 'koboldcpp');
 	
 		$url = $GLOBALS["TTS"]["koboldcpp"]["endpoint"]; //http://127.0.0.1:5001/api/extra/tts
 

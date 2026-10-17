@@ -40,14 +40,34 @@ try {
             throw new InvalidArgumentException('Unsupported dashboard operation');
         }
 
-        $triggerHours = chimNormalizeBackgroundLifeTriggerHours((float)($_POST['trigger_hours'] ?? 24));
-        if (!chimSetGeneralSetting('BGL_TRIGGER_HOURS', $triggerHours, chimGetSchemaDescription('BGL_TRIGGER_HOURS'))) {
-            throw new RuntimeException('Could not save Background Life trigger time');
+        // Save only submitted fields; they are the same global settings shown in Global Settings.
+        $updates = [];
+        if (array_key_exists('trigger_hours', $_POST)) {
+            $updates['BGL_TRIGGER_HOURS'] = chimNormalizeBackgroundLifeTriggerHours((float)$_POST['trigger_hours']);
+        }
+        if (array_key_exists('auto_enroll_enabled', $_POST)) {
+            $updates['BGL_AUTO_ENROLL_ENABLED'] = chimBglBoolean($_POST['auto_enroll_enabled']);
+        }
+        if (array_key_exists('auto_enroll_threshold', $_POST)) {
+            if (!is_numeric($_POST['auto_enroll_threshold'])) {
+                throw new InvalidArgumentException('Enrollment events must be a number');
+            }
+            $updates['BGL_AUTO_ENROLL_EVENT_THRESHOLD'] = chimNormalizeBackgroundLifeAutoEnrollThreshold($_POST['auto_enroll_threshold']);
+        }
+        if (!$updates) {
+            throw new InvalidArgumentException('No Background Life settings were submitted');
+        }
+
+        foreach ($updates as $id => $value) {
+            if (!chimSetGeneralSetting($id, $value, chimGetSchemaDescription($id))) {
+                throw new RuntimeException('Could not save Background Life settings');
+            }
+            $GLOBALS[$id] = $value;
         }
         echo json_encode([
             'success' => true,
-            'message' => 'Background Life trigger time saved',
-            'settings' => ['trigger_hours' => $triggerHours],
+            'message' => 'Background Life settings saved',
+            'settings' => chimBglDashboardSettings(false),
         ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         exit;
     }

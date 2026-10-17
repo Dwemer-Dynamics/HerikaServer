@@ -139,7 +139,10 @@ $knowledgeTags = chimOghmaKnowledgeValues($GLOBALS['OGHMA_KNOWLEDGE'] ?? 'common
     $result['fallback']['eligible'] = ($extraction['fallback_eligible'] ?? false) === true;
     if ($result['topics'] !== []) $result['status'] = 'grounded';
 
-    if ($result['topics'] === []
+    if ($settings['values']['multilingual_routing_enabled']) {
+        require_once __DIR__ . '/../lib/oghma_multilingual.php';
+        chimOghmaRouteMultilingual($db, $result, $inputText, $previousExchange);
+    } elseif ($result['topics'] === []
         && $result['fallback']['eligible']
         && $settings['values']['extractor_fallback_enabled']
         && $settings['values']['connector_id'] !== '') {

@@ -166,7 +166,12 @@
             events.forEach(function (event) {
                 const row = document.createElement('tr');
                 row.appendChild(element('td', 'npc-event-history-type', event.type || 'Event'));
-                row.appendChild(element('td', 'npc-event-history-data', event.data || ''));
+                const dataCell = element('td', 'npc-event-history-data', event.data || '');
+                if (event.private_thought && event.private_thought.text) {
+                    dataCell.appendChild(element('div', 'event-private-thought',
+                        'Private thought (' + event.private_thought.owner + '): ' + event.private_thought.text));
+                }
+                row.appendChild(dataCell);
                 row.appendChild(element(
                     'td',
                     'npc-event-history-audience',

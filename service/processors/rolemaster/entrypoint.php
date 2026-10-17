@@ -80,6 +80,9 @@ $GLOBALS["TASKS"]["rolemaster"]["fn"] = function () {
         } else if ($GLOBALS["argv"][2] == "hypnosis") {
             Logger::info("Loading hypnosis command");
             require_once("cmd" . DIRECTORY_SEPARATOR . "hypnosis.php");
+        } else if ($GLOBALS["argv"][2] == "smartwait") {
+            Logger::info("Loading smartwait command");
+            require_once("cmd" . DIRECTORY_SEPARATOR . "smartwait.php");
         }
     }
 

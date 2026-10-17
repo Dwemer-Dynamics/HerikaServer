@@ -20,6 +20,8 @@ function chimSettingsPresetDefaultGlobalSettings(): array
         'FEATURES@MEMORY_EMBEDDING@ENABLED' => true,
         'AUTOFILL_CUSTOM_PROFILES' => true,
         'BGL_TRIGGER_HOURS' => 24,
+        'BGL_AUTO_ENROLL_ENABLED' => false,
+        'BGL_AUTO_ENROLL_EVENT_THRESHOLD' => 200,
         'CHIM_AI_QUEST_PROGRESSION' => false,
         'DETECT_MAGIC_EVENT' => true,
         'GROUND_ITEMS_DESCRIPTIONS_ONLY' => false,
@@ -41,6 +43,7 @@ function chimSettingsPresetConnectorAvailability(bool $available): array
         'PLAYER_RESPEECH' => $available,
         'CORE_CONNECTOR_SUMMARY_ENABLED' => $available,
         'CORE_CONNECTOR_MEDIUMTERM_ENABLED' => $available,
+        'CORE_CONNECTOR_DECISION_ENABLED' => $available,
         'SCENE_CLASSIFIER_ENABLED' => $available,
         'CORE_CONNECTOR_PROFILES_ENABLED' => $available,
         'CORE_CONNECTOR_DIRECTOR_ENABLED' => $available,
@@ -73,6 +76,7 @@ function chimSettingsPresetDefaultProfileOverrides(): array
         'AUTO_DIARY_WAIT_ENABLED' => false,
         'MATERIALIZE_DIARY_ENABLED' => false,
         'LATEST_DIARY_CONTEXT_ENABLED' => false,
+        'PRIVATE_NPC_THOUGHTS_ENABLED' => false,
         'LLM_RANDOMIZER_ENABLED' => false,
     ] + chimSettingsPresetDefaultProfileRuntimeValues();
 }
@@ -107,6 +111,7 @@ function chimProfileSettingsPresetBuiltIns(): array
         'AUTO_DIARY_WAIT_ENABLED' => false,
         'MATERIALIZE_DIARY_ENABLED' => false,
         'LATEST_DIARY_CONTEXT_ENABLED' => false,
+        'PRIVATE_NPC_THOUGHTS_ENABLED' => false,
         'LLM_RANDOMIZER_ENABLED' => false,
     ] + chimSettingsPresetLocalProfileRuntimeValues();
 
@@ -341,6 +346,8 @@ function chimSettingsPresetNormalizeSetting($value, array $field)
             throw new InvalidArgumentException('Expected a number.');
         }
         $value = (float)$value;
+    } elseif (($field['format'] ?? '') === 'skyrim_datetime') {
+        return chimRequireSkyrimStartDate(is_array($value) ? false : $value);
     } else {
         $value = (string)$value;
     }
@@ -530,6 +537,7 @@ function chimProfileSettingsPresetNormalizeSnapshot(array $snapshot): array
     $values = array_intersect_key($values, array_flip(chimProfileSettingsPresetManagedValueKeys()));
 
     $rawOverrides = (array)($snapshot['profile_overrides'] ?? []);
+    unset($rawOverrides['PRIVATE_NPC_THOUGHTS_COUNT']); // Retired: thoughts follow the selected dialogue events.
     $unknownOverrides = array_diff(array_keys($rawOverrides), chimProfileSettingsPresetManagedOverrideKeys());
     if ($unknownOverrides) {
         throw new InvalidArgumentException('Unknown profile preset setting: ' . (string)reset($unknownOverrides));
@@ -1029,6 +1037,10 @@ function chimSettingsPresetApply(string $presetId, bool $manageTransaction = tru
     }
     try {
         $settings = chimSettingsPresetNormalizeSettings((array)($snapshot['global_settings'] ?? []));
+        // Presets saved before the Decision Connector existed must not enable a remote decision model.
+        if (!array_key_exists('CORE_CONNECTOR_DECISION_ENABLED', $settings) && ($settings['SCENE_CLASSIFIER_ENABLED'] ?? '') === 'false') {
+            $settings['CORE_CONNECTOR_DECISION_ENABLED'] = 'false';
+        }
         $settingsUpdated = 0;
         foreach ($settings as $name => $value) {
             if (!chimSetGeneralSetting($name, $value)) {

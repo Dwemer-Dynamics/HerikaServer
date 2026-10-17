@@ -557,7 +557,35 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
         font-weight: bold;
     }
 
+    .memory-bank-clear {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px 8px;
+        margin: 0;
+    }
+
+    .memory-bank-select {
+        flex: 0 1 260px;
+        min-width: 0;
+        max-width: 100%;
+        padding: 5px 8px;
+        background: #2a2a2a;
+        color: #f8f9fa;
+        border: 1px solid #666;
+        border-radius: 4px;
+        font-size: 0.95em;
+    }
+
+    .memory-bank-clear .btn-base {
+        margin: 0;
+        padding: 5px 11px;
+        font-size: 0.95em;
+        white-space: nowrap;
+    }
+
     /* .btn-base clears the default outline, so restore a visible focus ring. */
+    .memory-bank-select:focus-visible,
     #memory-tab .btn-base:focus-visible {
         outline: 2px solid rgb(242, 124, 17);
         outline-offset: 2px;
@@ -591,6 +619,16 @@ include(__DIR__.DIRECTORY_SEPARATOR."tmpl/head.html");
             text-align: center;
         }
 
+        .memory-bank-select {
+            flex: 1 1 180px;
+            padding: 8px;
+        }
+
+        .memory-bank-clear .btn-base {
+            flex: 1 1 100%;
+            padding: 9px 12px;
+        }
+
         /* Grows to a full-width touch target alongside the stacked actions
            instead of staying a 30px-tall inline chip. */
         .memory-status-link {
@@ -608,6 +646,7 @@ require_once(LIB_PATH .DIRECTORY_SEPARATOR."{$GLOBALS["DBDRIVER"]}.class.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."misc_ui_functions.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."chat_helper_functions.php");
 require_once(LIB_PATH .DIRECTORY_SEPARATOR."eventlog_helper.php");
+require_once(LIB_PATH .DIRECTORY_SEPARATOR."npc_private_thoughts.php");
 
 // Include game timestamp utilities
 require_once(dirname(__DIR__).DIRECTORY_SEPARATOR."lib".DIRECTORY_SEPARATOR."utils_game_timestamp.php");
@@ -804,6 +843,115 @@ if (isset($_GET['delete_memory']) && !empty($_GET['delete_memory'])) {
     exit;
 }
 
+// Clear NPC Memories removes one NPC's summary access: it deletes summaries in the NPC's own bank
+// (exact scope) and drops the NPC from People (companions) on shared summaries, which stay for
+// everyone else. Events, diaries, profiles and middle-term digests are untouched; a later sync can
+// give the NPC access again.
+if (empty($_SESSION['memory_bank_csrf'])) {
+    $_SESSION['memory_bank_csrf'] = bin2hex(random_bytes(32));
+}
+$memoryBankCsrfToken = (string)$_SESSION['memory_bank_csrf'];
+
+// People tokens recall can match: the pipe-delimited inner names, or a legacy bare name without pipes.
+// Shared means the partition recall reads when an NPC has no individual bank.
+const CHIM_MEMORY_PEOPLE_TOKENS_SQL = "CASE WHEN position('|' in ms.companions) > 0
+    THEN (string_to_array(ms.companions, '|'))[2:cardinality(string_to_array(ms.companions, '|')) - 1]
+    ELSE ARRAY[ms.companions] END";
+
+// Accepts one exact NPC name. "global" is the shared pseudo-bank, and pipes cannot appear in a People name.
+function chimIsClearableMemoryNpc($name) {
+    if (!is_string($name) || $name === '' || !mb_check_encoding($name, 'UTF-8')) {
+        return false;
+    }
+    $trimmed = trim($name, ' ');
+    return $trimmed !== '' && strtolower($trimmed) !== 'global'
+        && strpbrk($name, "|\0") === false;
+}
+
+// Every NPC with summary access, counted over the whole table rather than the 150 visible rows.
+function chimListNpcMemoryAccess($db) {
+    return $db->fetchAll(
+        "WITH owned AS (
+             SELECT scope AS npc, COUNT(*) AS owned_count
+             FROM memory_summary
+             WHERE scope IS NOT NULL AND btrim(scope) <> '' AND lower(btrim(scope)) <> 'global'
+               AND position('|' in scope) = 0
+             GROUP BY scope
+         ),
+         shared AS (
+             SELECT p.npc, COUNT(*) AS shared_count
+             FROM memory_summary ms
+             CROSS JOIN LATERAL (SELECT DISTINCT tok AS npc FROM unnest(" . CHIM_MEMORY_PEOPLE_TOKENS_SQL . ") AS tok) p
+             WHERE (ms.scope IS NULL OR ms.scope = 'global')
+               AND p.npc <> '' AND p.npc = btrim(p.npc) AND lower(p.npc) <> 'global'
+             GROUP BY p.npc
+         )
+         SELECT COALESCE(o.npc, s.npc) AS npc,
+                COALESCE(o.owned_count, 0) AS owned_count,
+                COALESCE(s.shared_count, 0) AS shared_count
+         FROM owned o FULL OUTER JOIN shared s ON s.npc = o.npc
+         ORDER BY lower(COALESCE(o.npc, s.npc)), COALESCE(o.npc, s.npc)"
+    );
+}
+
+// One statement, so the delete and the People update commit or fail together. Shared rows keep
+// their text, embeddings, tags and ids; only the exact name is removed, every other name keeps its
+// place, and a list left with no names becomes '|' (blank companions would be refilled by the
+// memory utility).
+function chimClearNpcMemoryAccess($db, $name) {
+    $npc = $db->escapeLiteral($name);
+    $rows = $db->fetchAll(
+        "WITH deleted AS (
+             DELETE FROM memory_summary WHERE scope = $npc RETURNING 1
+         ),
+         updated AS (
+             UPDATE memory_summary ms
+             SET companions = CASE
+                 WHEN ms.companions = $npc THEN '|'
+                 ELSE (SELECT CASE WHEN btrim(kept, '|') = '' THEN '|' ELSE kept END
+                       FROM (SELECT array_to_string(ARRAY[a[1]] || array_remove(a[2:cardinality(a) - 1], $npc) || ARRAY[a[cardinality(a)]], '|') AS kept
+                             FROM (SELECT string_to_array(ms.companions, '|') AS a) parts) rebuilt)
+             END
+             WHERE (ms.scope IS NULL OR ms.scope = 'global')
+               AND $npc = ANY(" . CHIM_MEMORY_PEOPLE_TOKENS_SQL . ")
+             RETURNING 1
+         )
+         SELECT (SELECT COUNT(*) FROM deleted) AS owned_count,
+                (SELECT COUNT(*) FROM updated) AS shared_count"
+    );
+    return [intval($rows[0]['owned_count'] ?? 0), intval($rows[0]['shared_count'] ?? 0)];
+}
+
+if (isset($_POST['clear_npc_memories'])) {
+    $postedToken = $_POST['csrf_token'] ?? null;
+    $postedNpc = $_POST['npc_scope'] ?? null;
+    $notice = ['type' => 'error', 'text' => 'Could not clear NPC memories. Reload the page and try again.'];
+
+    if (!is_string($postedToken) || !hash_equals($memoryBankCsrfToken, $postedToken)) {
+        Logger::warn("Clear NPC Memories rejected: invalid CSRF token.");
+    } elseif (!chimIsClearableMemoryNpc($postedNpc)) {
+        Logger::warn("Clear NPC Memories rejected: invalid NPC selection.");
+        $notice['text'] = 'Choose an NPC to clear.';
+    } else {
+        try {
+            [$ownedCount, $sharedCount] = chimClearNpcMemoryAccess($db, $postedNpc);
+            Logger::info("Clear NPC Memories: " . json_encode($postedNpc) . " lost {$ownedCount} own and {$sharedCount} shared memory summaries");
+            $notice = [
+                'type' => ($ownedCount + $sharedCount) > 0 ? 'success' : 'empty',
+                'npc' => $postedNpc,
+                'owned' => $ownedCount,
+                'shared' => $sharedCount,
+            ];
+        } catch (Throwable $e) {
+            Logger::error("Clear NPC Memories failed for " . json_encode($postedNpc) . ": " . $e->getMessage());
+        }
+    }
+
+    $_SESSION['memory_bank_notice'] = $notice;
+    header("Location: events-memories.php?tab=memory");
+    exit;
+}
+
 // Get active tab from URL parameter, default to 'eventlog'
 $activeTab = isset($_GET['tab']) ? $_GET['tab'] : 'eventlog';
 $validTabs = ['eventlog', 'responselog', 'adventure', 'memory', 'diaries', 'books', 'soulgaze', 'quests', 'questgen', 'backgroundlife'];
@@ -923,7 +1071,7 @@ function getTimeColor($time) {
             $offset = ($page - 1) * $limit;
             
             $results = $db->fetchAll(
-                "SELECT type, data, people, gamets, localts, ts, rowid
+                "SELECT type, data, people, gamets, localts, ts, rowid, delivery_state, private_thought
                  FROM eventlog a
                  WHERE $eventLogVisibleWhereClause
                  ORDER BY gamets DESC, ts DESC, localts DESC, rowid DESC
@@ -943,6 +1091,7 @@ function getTimeColor($time) {
                 $mappedRow['☑'] = '<input type="checkbox" class="event-checkbox" data-rowid="' . htmlspecialchars($row['rowid'] ?? '') . '" style="cursor: pointer; width: 18px; height: 18px;">';
                 
                 foreach ($row as $key => $value) {
+                    if ($key === 'private_thought' || $key === 'delivery_state') continue;
                     if ($key === 'data' && function_exists('chimRenderNarratorRoleplayText')) {
                         $value = chimRenderNarratorRoleplayText($value);
                     }
@@ -964,7 +1113,7 @@ function getTimeColor($time) {
                     
                     if ($key === 'data') {
                         // Assign Events value
-                        $mappedRow[$columnHeaders[$key] ?? $key] = $value;
+                        $mappedRow[$columnHeaders[$key] ?? $key] = $value . chimPrivateThoughtDisplayHtml($row);
                         // Derive People Present from JSON in original data if available
                         $peoplePresent = trim((string)($row['people'] ?? ''));
                         $raw = $row['data'] ?? '';
@@ -1819,6 +1968,43 @@ function getTimeColor($time) {
                 echo "<div class='memory-notice is-deleted'>Memory summary deleted successfully!</div>";
             }
 
+            $memoryBankNotice = $_SESSION['memory_bank_notice'] ?? null;
+            unset($_SESSION['memory_bank_notice']);
+            if (is_array($memoryBankNotice)) {
+                $noticeNpc = htmlspecialchars((string)($memoryBankNotice['npc'] ?? ''), ENT_QUOTES, 'UTF-8');
+                $noticeType = $memoryBankNotice['type'] ?? 'error';
+                if ($noticeType === 'success') {
+                    $noticeOwned = intval($memoryBankNotice['owned'] ?? 0);
+                    $noticeShared = intval($memoryBankNotice['shared'] ?? 0);
+                    $noticeParts = [];
+                    if ($noticeOwned > 0) {
+                        $noticeParts[] = "deleted {$noticeOwned} own " . ($noticeOwned === 1 ? 'summary' : 'summaries');
+                    }
+                    if ($noticeShared > 0) {
+                        $noticeParts[] = "removed {$noticeNpc} from {$noticeShared} shared " . ($noticeShared === 1 ? 'summary' : 'summaries') . ", which other NPCs keep";
+                    }
+                    $noticeText = "Cleared {$noticeNpc}'s memories: " . implode('; ', $noticeParts) . ". A later sync or rebuild may restore access.";
+                    $noticeClass = 'is-success';
+                } elseif ($noticeType === 'empty') {
+                    $noticeText = "{$noticeNpc} has no memory summaries to clear. Nothing changed.";
+                    $noticeClass = 'is-success';
+                } else {
+                    $noticeText = htmlspecialchars((string)($memoryBankNotice['text'] ?? ''), ENT_QUOTES, 'UTF-8');
+                    $noticeClass = 'is-deleted';
+                }
+                echo "<div class='memory-notice {$noticeClass}' role='status'>{$noticeText}</div>";
+            }
+
+            $memoryBanks = [];
+            $memoryBanksUnavailable = false;
+            try {
+                $memoryBanks = chimListNpcMemoryAccess($db);
+            } catch (Throwable $e) {
+                Logger::error("NPC memory list failed: " . $e->getMessage());
+                $memoryBanksUnavailable = true;
+                echo "<div class='memory-notice is-deleted' role='status'>Could not load NPCs with memories. Reload the page to try again.</div>";
+            }
+
             // Display Memory Configuration Status
             // Get memory settings
             $memoryEnabled = $GLOBALS['FEATURES']['MEMORY_EMBEDDING']['ENABLED'] ?? false;
@@ -1865,6 +2051,32 @@ function getTimeColor($time) {
 
                     <a href="<?php echo $webRoot; ?>/ui/core/config_hub.php?tab=globals" target="_blank" class="btn-base btn-primary memory-status-link">Configure Settings</a>
                 </div>
+
+                <form class="memory-bank-clear" method="post" action="events-memories.php?tab=memory" id="clear-npc-memories-form">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($memoryBankCsrfToken, ENT_QUOTES, 'UTF-8'); ?>">
+                    <input type="hidden" name="clear_npc_memories" value="1">
+                    <label for="clear-npc-memories-select" class="memory-status-label">NPC memories</label>
+                    <select id="clear-npc-memories-select" name="npc_scope" class="memory-bank-select"<?php echo empty($memoryBanks) ? ' disabled' : ''; ?>>
+                        <?php if (empty($memoryBanks)): ?>
+                            <option value=""><?php echo $memoryBanksUnavailable ? 'Unavailable' : 'No NPC memories'; ?></option>
+                        <?php else: ?>
+                            <option value="">Choose an NPC</option>
+                            <?php foreach ($memoryBanks as $bank): ?>
+                                <?php
+                                $bankOwned = intval($bank['owned_count'] ?? 0);
+                                $bankShared = intval($bank['shared_count'] ?? 0);
+                                $bankCounts = array_filter([
+                                    $bankOwned > 0 ? "{$bankOwned} own" : '',
+                                    $bankShared > 0 ? "{$bankShared} shared" : '',
+                                ]);
+                                $bankName = htmlspecialchars((string)$bank['npc'], ENT_QUOTES, 'UTF-8');
+                                ?>
+                                <option value="<?php echo $bankName; ?>" data-owned="<?php echo $bankOwned; ?>" data-shared="<?php echo $bankShared; ?>"><?php echo $bankName; ?> (<?php echo implode(', ', $bankCounts); ?>)</option>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </select>
+                    <button type="submit" id="clear-npc-memories-button" class="btn-base btn-danger" disabled>Clear NPC Memories</button>
+                </form>
 
                 <?php if (!$useText2Vec): ?>
                     <p class="memory-status-warning"><strong>Warning:</strong> TXT2VEC is disabled. Memory embeddings and vector search features are unavailable.</p>
@@ -2076,6 +2288,50 @@ function getTimeColor($time) {
                     window.location.href = 'events-memories.php?tab=memory&delete_memory=' + String(rowid);
                 }
             }
+
+            (function () {
+                const form = document.getElementById('clear-npc-memories-form');
+                const select = document.getElementById('clear-npc-memories-select');
+                const button = document.getElementById('clear-npc-memories-button');
+                if (!form || !select || !button) {
+                    return;
+                }
+
+                const syncButton = function () {
+                    button.disabled = select.disabled || select.value === '';
+                };
+                select.addEventListener('change', syncButton);
+                // Back/forward cache can restore the selection without a change event.
+                window.addEventListener('pageshow', syncButton);
+                syncButton();
+
+                form.addEventListener('submit', function (event) {
+                    const option = select.options[select.selectedIndex];
+                    if (!option || option.value === '') {
+                        event.preventDefault();
+                        return;
+                    }
+                    const npc = option.value;
+                    const owned = parseInt(option.getAttribute('data-owned') || '0', 10);
+                    const shared = parseInt(option.getAttribute('data-shared') || '0', 10);
+                    const summaries = function (n) { return n + (n === 1 ? ' summary' : ' summaries'); };
+                    const steps = [];
+                    if (owned > 0) {
+                        steps.push('- Delete ' + summaries(owned) + " in " + npc + "'s own memory bank.");
+                    }
+                    if (shared > 0) {
+                        steps.push('- Remove ' + npc + ' from People on ' + summaries(shared) + '. Shared summaries are not deleted; other NPCs keep them.');
+                    }
+                    const message = 'Clear ' + npc + "'s memory summary access?\n\n" + steps.join('\n') + '\n\n'
+                        + 'Events, diaries, profiles, relationships and the existing middle-term digest are not changed. '
+                        + 'A later sync or rebuild may restore access.';
+                    if (!confirm(message)) {
+                        event.preventDefault();
+                        return;
+                    }
+                    button.disabled = true;
+                });
+            })();
             </script>
             <?php endif; ?>
         </div>

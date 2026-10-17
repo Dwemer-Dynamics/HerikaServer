@@ -651,7 +651,7 @@ if ($allDatesResult) {
             // Tamrielic calendar mode - use gamets
             if (isset($dateRow['gamets']) && $dateRow['gamets'] > 0) {
                 $gamets = floatval($dateRow['gamets']);
-                $skyrim_start_timestamp = strtotime('0201-08-17 00:00:00');
+                $skyrim_start_timestamp = chimSkyrimStartTimestamp();
                 $f_seconds = $gamets * 0.00864;
                 $ts_time = $skyrim_start_timestamp + intval($f_seconds);
                 
@@ -846,7 +846,7 @@ if (isset($_GET['date'])) {
     
     if ($useTamrielicTime) {
         // For Tamrielic dates, we'll use the anchor date and calculate the offset
-        $skyrim_start_timestamp = strtotime('0201-08-17 00:00:00');
+        $skyrim_start_timestamp = chimSkyrimStartTimestamp();
         $selectedDate = date('Y-m-d', $skyrim_start_timestamp);
     } else {
         // Validate the selected date format (YYYY-MM-DD) for Gregorian dates

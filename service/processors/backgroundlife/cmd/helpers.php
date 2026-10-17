@@ -151,6 +151,7 @@ Format:
   \"action\": [
     \"Consume:itemid:qty\",
     \"Produced:itemid:qty\",
+    \"Manufactured:input_itemid:input_qty:output_itemid:output_qty\",
     \"DoNothing\"
   ],
   \"reasoning\": \"optional one-sentence explanation\"
@@ -161,7 +162,10 @@ Rules:
 - Only include valid actions in this exact string format:
   Consume:itemid:qty
   Produced:itemid:qty
+  Manufactured:input_itemid:input_qty:output_itemid:output_qty
   DoNothing
+- Manufactured removes input_qty of input_itemid and adds output_qty of output_itemid.
+- If no source materials for a Manufactured action are available, the action should be skipped (->DoNothing)
 - itemid must match in-game inventory identifiers.
 - qty must be an integer.
 - You may include multiple actions if needed.
@@ -200,21 +204,74 @@ Rules:
 
     if ($action) {
         $actionTextDescription = [];
+        $npcMetadata = json_decode($currentNpcData['metadata'] ?? '{}', true);
+        if (!is_array($npcMetadata)) {
+            $npcMetadata = [];
+        }
+        $inventoryCounts = [];
+        $npcInventory = $npcMetadata['inventory'] ?? [];
+        if (!is_array($npcInventory)) {
+            $npcInventory = [];
+        }
+        foreach ($npcInventory as $inventoryItem) {
+            $inventoryItemId = strtolower(preg_replace('/^0x/i', '', trim((string) ($inventoryItem['baseid'] ?? ''))));
+            if ($inventoryItemId !== '') {
+                $inventoryCounts[$inventoryItemId] = ($inventoryCounts[$inventoryItemId] ?? 0) + max(0, (int) ($inventoryItem['count'] ?? 0));
+            }
+        }
+
         foreach ($action as $singleAction) {
+            if ($singleAction === 'DoNothing') {
+                continue;
+            }
+
             error_log("[BGL RUN] $npcNameEsc — Idle production/consumption detected: $singleAction. Reasoning: $reasoning");
 
             $skyrimCmd = new SkyrimCommandBuilder();
             $sourceRefHexString = strtolower(convertSignedToUnsignedHex(hexdec($currentNpcData['refid'])));
             // Parse action string
-            list($actionType, $itemId, $count) = explode(':', $singleAction);
-            $itemId = strtr(strtolower($itemId), ["0x" => ""]); // Remove 0x prefix if present
+            $actionParts = explode(':', $singleAction);
+            $actionType = $actionParts[0] ?? '';
+            $itemId = strtr(strtolower($actionParts[1] ?? ''), ["0x" => ""]); // Remove 0x prefix if present
+            $count = (int) ($actionParts[2] ?? 0);
 
-            $count = (int) $count;
             if ($actionType === 'Consume') {
+                if ($itemId === '' || $count <= 0) {
+                    error_log("[BGL RUN] $npcNameEsc — Ignoring malformed Consume action: $singleAction");
+                    continue;
+                }
+                if (($inventoryCounts[$itemId] ?? 0) < $count) {
+                    error_log("[BGL RUN] $npcNameEsc — Skipping Consume action; inventory has " . ($inventoryCounts[$itemId] ?? 0) . " of $itemId, requested $count");
+                    continue;
+                }
+                $inventoryCounts[$itemId] -= $count;
                 $json = $skyrimCmd->ObjectReference->RemoveItem($sourceRefHexString, "0x$itemId", $count, true);
                 $skyrimCmd->send(cmd: $json);
             } elseif ($actionType === 'Produced') {
+                if ($itemId === '' || $count <= 0) {
+                    error_log("[BGL RUN] $npcNameEsc — Ignoring malformed Produced action: $singleAction");
+                    continue;
+                }
                 $json = $skyrimCmd->ObjectReference->AddItem($sourceRefHexString, "0x$itemId", $count, true);
+                $skyrimCmd->send(cmd: $json);
+            } elseif ($actionType === 'Manufactured') {
+                $outputItemId = strtr(strtolower($actionParts[3] ?? ''), ["0x" => ""]);
+                $outputCount = (int) ($actionParts[4] ?? 0);
+
+                if ($itemId === '' || $count <= 0 || $outputItemId === '' || $outputCount <= 0) {
+                    error_log("[BGL RUN] $npcNameEsc — Ignoring malformed Manufactured action: $singleAction");
+                    continue;
+                }
+                if (($inventoryCounts[$itemId] ?? 0) < $count) {
+                    error_log("[BGL RUN] $npcNameEsc — Skipping Manufactured action; inventory has " . ($inventoryCounts[$itemId] ?? 0) . " of $itemId, requested $count");
+                    continue;
+                }
+                $inventoryCounts[$itemId] -= $count;
+
+                $json = $skyrimCmd->ObjectReference->RemoveItem($sourceRefHexString, "0x$itemId", $count, true);
+                $skyrimCmd->send(cmd: $json);
+
+                $json = $skyrimCmd->ObjectReference->AddItem($sourceRefHexString, "0x$outputItemId", $outputCount, true);
                 $skyrimCmd->send(cmd: $json);
             }
 
@@ -226,8 +283,19 @@ Rules:
                 $itemNameResolved = "";
             }
 
+            if ($actionType === 'Manufactured') {
+                $outputItemName = getNameForItemReference(strtoupper($outputItemId));
+                $itemNameResolved = $outputItemName
+                    ? "($count {$itemName} -> $outputCount {$outputItemName})"
+                    : "($count {$itemName} -> $outputCount $outputItemId)";
+            }
+
             $actionText[] = $singleAction;
             $actionTextDescription[] = $itemNameResolved;
+        }
+
+        if (empty($actionText)) {
+            return "";
         }
 
         $actionTextFinal = implode(', ', $actionText);
@@ -305,6 +373,8 @@ function requestForInnerThought(
     $currentConnectorData,
     &$recordInnerThoughts,
     &$recordDiaryEntry,
+    $last_gamets,
+    $startGamets,
 ): string {
 
     $systemPrompts = [
@@ -349,10 +419,22 @@ in first person.
 
 PROMPT_EN,
     ];
+    
+    $npcNameEsc=$GLOBALS["db"]->escape($GLOBALS['HERIKA_NAME']);
 
+    $lastActions = $GLOBALS["db"]->fetchAll("SELECT fullcall,gamets FROM actions_issued where actorname='$npcNameEsc' and gamets>$startGamets and original='backgroundaction' order by gamets desc limit 20");
+    $lastActionsSummary = [];
+    foreach ($lastActions as $action) {
+        $actionParts = explode(':', $action['fullcall']);
+        $hoursAgo = number_format(($last_gamets - $action['gamets']) * GAMETS_TO_HOURS, 2);
+        $lastActionsSummary[$action['gamets']] = "$actionParts[0] $actionParts[1] ($hoursAgo hours ago)";
+    }
+    
+    $last_actions_reminder = "<last_actions_history>\nLast actions issued:\n" . implode("\n", array_reverse($lastActionsSummary)) . "\n</last_actions_history>\n\n";
+  
     $step1Prompt = array_merge($systemPrompts[$lang], [
         ['role' => 'user', 'content' => "<character_sheet>\n{$GLOBALS['HERIKA_NAME']}:\n$dynamicBiography\n</character_sheet>", "cache_control" => ["type" => "ephemeral"]],
-        ['role' => 'user', 'content' => "<context_history>\nContext History (chronological order)\n$history\n</context_history>{$postHistory}\n{$lastMinuteNotes}", "cache_control" => ["type" => "ephemeral"]],
+        ['role' => 'user', 'content' => "<context_history>\nContext History (chronological order)\n$history\n</context_history>{$postHistory}\n{$last_actions_reminder}\n{$lastMinuteNotes}", "cache_control" => ["type" => "ephemeral"]],
         ['role' => 'user', 'content' => $userPrompts[$lang], "cache_control" => ["type" => "ephemeral"]],
     ]);
 
@@ -403,6 +485,7 @@ function requestForaction(
     $db,
     $startGamets,
     $last_gamets,
+    string $encounterActions = '',
 ): string {
     $step2Content = "You are responsible for deciding a single action"
         . " based on the character's inner thoughts and the provided context.\n"
@@ -421,7 +504,7 @@ function requestForaction(
         $lastActionsSummary[$action['gamets']] = "$actionParts[0] $actionParts[1] ($hoursAgo hours ago)";
     }
     
-    $step2Content .= "<text>\nLast actions issued:\n" . implode("\n", array_reverse($lastActionsSummary)) . "\n</text>\n\n";
+    $step2Content .= "<last_actions_history>\nLast actions issued:\n" . implode("\n", array_reverse($lastActionsSummary)) . "\n</last_actions_history>\n\n";
     $step2Content .= "<text>\n$innerThoughtBuffer\n</text>\n\n";
     $step2Content .= $innerThoughtStyle . "\n\n";
 
@@ -435,7 +518,7 @@ Decision rules (highest priority first):
 2. If the NPC has an active goal, choose the action that makes the most progress toward that goal.
 3. Avoid unnecessary movement or repetitive conversations.
 4. Do not invent information that is not present in the context.
-
+5. Check <last_actions_history> to avoid repeating recent actions.
 Available actions:
 
 StayAtPlace:<Place>:<intent>
@@ -498,11 +581,13 @@ BuyItem:<NPC name>:<itemid>:<count>:<total_gold_spent>,<NPC name>:<itemid>:<coun
 - Buy items from another NPC.
 - Required after a previously agreed trade so inventories can be updated.
 - total_gold_spent is <item price>*<count>, the total amount of gold spent for that item, including any haggling or discounts.
+- E.G. Buy 3 apples from John Doe for 30 gold (10 gold each one) => BuyItem:John Doe:apple:3:30
 
 SellItem:<NPC name>:<itemid>:<count>:<total_gold_amount>,<NPC name>:<itemid>:<count>:<total_gold_amount>,...
 - Sell items to another NPC.
 - Required after a previously agreed trade so inventories can be updated.
 - total_gold_amount is <item price>*<count>, the total amount of gold received for that item, including any haggling or discounts (price*count).
+- E.G. Sell 3 apples to John Doe for 30 gold (10 gold each one) => SellItem:John Doe:apple:3:30
 
 GiveItemTo:<NPC name>:<itemid>:<count>,<NPC name>:<itemid>:<count>
 - Give items directly to one or more NPCs with no gold exchange.
@@ -513,11 +598,13 @@ GiveItemTo:<NPC name>:<itemid>:<count>,<NPC name>:<itemid>:<count>
 GiveGoldTo:<NPC name>:<gold_amount>,<NPC name>:<gold_amount>
 - Give gold directly to one or more NPCs.
 - Use this for gifts, donations, payments, or helping allies where only gold should be transferred.
+- E.G. Give 50 gold to John Doe => GiveGoldTo:John Doe:50
 
 SellService:<NPC name>:<service_description>:<total_gold_amount>,<NPC name>:<service_description>:<total_gold_amount>
 - Sell a service to another NPC. No inventory item is moved; only gold changes hands.
 - The service_description is a short label (e.g. 'healing', 'repair', 'lockpicking', 'mercenary work') describing what was provided.
 - total_gold_amount is the full price paid by the buyer for the service.
+- E.G. Sell a healing service to John Doe for 50 gold => SellService:John Doe:healing:50
 PROMPT;
     }
     $step2Content .= <<<PROMPT2
@@ -536,6 +623,15 @@ PROMPT2;
 SendLetter
 - Send a letter to {$GLOBALS["PLAYER_NAME"]}.
 ";
+
+        // Player letters waiting for an answer. Replying is encouraged, not forced.
+        require_once dirname(__DIR__, 4) . DIRECTORY_SEPARATOR . 'lib' . DIRECTORY_SEPARATOR . 'bgl_letters.php';
+        $unansweredLetters = chimLetterUnansweredFromPlayer($GLOBALS["HERIKA_NAME"]);
+        if ($unansweredLetters) {
+            $step2Content .= "- {$GLOBALS["HERIKA_NAME"]} has received letters from {$GLOBALS["PLAYER_NAME"]} by courier that are not answered yet.\n"
+                . "  Choosing SendLetter writes the reply. Prefer it unless {$GLOBALS["HERIKA_NAME"]} would rather wait and answer in person.\n"
+                . chimLetterUnansweredPromptBlock($unansweredLetters);
+        }
     }
 
     if ($npcIsTravelling) {
@@ -550,6 +646,8 @@ Note:
 PROMPT3;
     }
 
+
+    $step2Content .= $encounterActions;
 
     // Hinter
 

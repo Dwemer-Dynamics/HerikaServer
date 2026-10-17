@@ -9,7 +9,8 @@ $TEMPLATE_DIALOG = " Schreibe die nächste Dialogzeile von {$GLOBALS["HERIKA_NAM
 $deDirectNarratorDialogue = !empty($GLOBALS["DIRECT_NARRATOR_DIALOGUE"])
     || (($GLOBALS["gameRequest"][0] ?? '') === 'narrator_inputtext')
     || (($gameRequest[0] ?? '') === 'narrator_inputtext');
-if ($deDirectNarratorDialogue) {
+$deInlineNpcNarration = in_array(strtolower(trim((string)($GLOBALS["INLINE_NARRATION_MODE"] ?? ''))), ['npc', 'text_only'], true);
+if ($deDirectNarratorDialogue && !$deInlineNpcNarration) {
     $TEMPLATE_DIALOG .= " Antworte {$GLOBALS["PLAYER_NAME"]} direkt nur in gesprochener Dialogform."
         . " Verwende keine Erzähltexte, Szenenbeschreibungen, Regieanweisungen oder Text in Asterisken.";
 }
