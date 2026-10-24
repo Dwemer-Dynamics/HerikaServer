@@ -32,6 +32,7 @@ function chimSettingsPresetDefaultGlobalSettings(): array
         'POWER_AWARENESS_ENABLED' => false,
         'CHIM_ITEM_PICKUP_EVENTLOG_MIN_VALUE' => 500,
         'PROMPT_TIMESTAMP' => false,
+        'PROMPT_TIMESTAMP_EXACT' => false,
         'COMPACT_CHAT_ENABLED' => true,
     ] + chimSettingsPresetConnectorAvailability(true);
 }
@@ -270,6 +271,7 @@ function chimSettingsPresetBuiltIns(): array
                     'POWER_AWARENESS_ENABLED' => false,
                     'CHIM_ITEM_PICKUP_EVENTLOG_MIN_VALUE' => 1000,
                     'PROMPT_TIMESTAMP' => false,
+                    'PROMPT_TIMESTAMP_EXACT' => false,
                     'COMPACT_CHAT_ENABLED' => true,
                     'PLAYER_RESPEECH' => true,
                     'CORE_CONNECTOR_DIRECTOR_ENABLED' => true,
