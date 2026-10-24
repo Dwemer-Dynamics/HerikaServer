@@ -2784,6 +2784,7 @@ function buildHistoricContext($actor, $lastNelements = -10,$sqlfilter="", int $t
     $memoryLogToRemove=[];
     
     $lastTimeCategory = null; // Track last timestamp category for PROMPT_TIMESTAMP feature
+    $lastExactDividerGamets = null; // Game time of the last PROMPT_TIMESTAMP_EXACT divider
 
     foreach ($orderedData as $n=>$row) {
         $rowData = $row["data"];
@@ -2995,8 +2996,15 @@ New setting: $currentLocation
 
         $lastSpeaker = $speaker;
         
-        // Insert timestamp subdividers if PROMPT_TIMESTAMP is enabled
-        if (!empty($GLOBALS["PROMPT_TIMESTAMP"]) && $row["type"] != "info_timeforward") {
+        // Insert timestamp subdividers if PROMPT_TIMESTAMP_EXACT or PROMPT_TIMESTAMP is enabled
+        if (chimPromptTimestampExactEnabled() && $row["type"] != "info_timeforward") {
+            // Exact in-game date and time per block; the first block is always dated.
+            $divider = chimExactTimestampDivider($row["gamets"], $currentGameTs, $lastExactDividerGamets);
+            if ($divider !== null) {
+                $lastDialogFull[] = array('role' => "narratorci", 'content' => $divider);
+                $lastExactDividerGamets = $row["gamets"];
+            }
+        } elseif (!empty($GLOBALS["PROMPT_TIMESTAMP"]) && $row["type"] != "info_timeforward") {
             $hoursAgo = ($currentGameTs - $row["gamets"]) * 0.0000024;
             $currentTimeCategory = getTimeCategory($hoursAgo);
             
