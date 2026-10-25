@@ -162,14 +162,12 @@ function callLLMFast($contextData, $customParms = []) {
     $model = $connectorData["model"];
     $apiKeyId = $connectorData["api_badge_id"] ?? null;
     
-    // Get API key
-    $apiKey = '';
-    if ($apiKeyId !== null && $apiKeyId !== '') {
-        $apiBadge = new ApiBadge();
-        $apiKeyData = $apiBadge->getById($apiKeyId);
-        $apiKey = is_array($apiKeyData) ? (string) ($apiKeyData['api_key'] ?? '') : '';
+    // Resolve the selected reference against this request's actual destination.
+    $apiKey = ApiBadge::dispatchSecret($connectorData, '', 'llm', $url);
+    if ($apiKey === '' && empty($connectorData['shared_key_id']) && $apiKeyId) {
+        $apiKey = (new ApiBadge())->getSecretForEndpoint((int)$apiKeyId, 'llm', $url);
     }
-    
+
     // Prepare request data
     $data = [
         'model' => $model,

@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . "/lib/core/api_badge.class.php";
 require_once dirname(__DIR__) . '/lib/speech_trace.php';
 
 
@@ -23,6 +24,8 @@ $GLOBALS["TTS_IN_USE"]=function($textString, $mood , $stringforhash) {
 	    $starTime = microtime(true);
 
 		$url = $GLOBALS["TTS"]["openai"]["endpoint"]; //"https://api.openai.com/v1/audio/speech";
+
+		$apiKey = ApiBadge::dispatchSecret($GLOBALS['DDISTRO_TTS_CONNECTOR'] ?? [], $apiKey, 'llm', $url, 'OpenAI');
 
 	// Request headers
 	$headers = array(
