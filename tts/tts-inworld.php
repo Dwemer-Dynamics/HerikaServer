@@ -288,6 +288,15 @@ function getInworldActiveConfig(): array {
         }
     }
 
+    // Do not revive a cached/copied credential after the shared key rotates or becomes unavailable.
+    if (is_array($row)) {
+        require_once __DIR__ . '/../lib/core/api_badge.class.php';
+        $settings = ['API_KEY' => $apiCredential];
+        ApiBadge::applyShared($row, 'tts', 'https://api.inworld.ai/tts/v1/voice:stream', $settings);
+        $apiCredential = $settings['API_KEY'];
+        $GLOBALS['TTS']['INWORLD']['API_KEY'] = $apiCredential;
+    }
+
     return [
         'connector_id' => $connectorId,
         'workspace' => $workspace,

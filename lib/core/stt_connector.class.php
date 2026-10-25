@@ -324,6 +324,7 @@ class STTConnector
 
     public function setOldGlobals($currentConnectorData)
     {
+        $GLOBALS['DDISTRO_STT_CONNECTOR'] = is_array($currentConnectorData) ? $currentConnectorData : [];
         if (!$currentConnectorData) {
             return;
         }
@@ -367,6 +368,10 @@ class STTConnector
                 }
                 $GLOBALS["STT"][$providerKey][$key] = $value;
             }
+        }
+        // Apply the reference after metadata/defaults have selected the actual provider destination.
+        if ($providerKey !== '') {
+            ApiBadge::applyShared($currentConnectorData, ($driver === 'inworld' ? 'tts' : 'llm'), ($driver === 'whisper' ? 'https://api.openai.com/v1/audio/transcriptions' : ($driver === 'inworld' ? 'https://api.inworld.ai/stt/v1/transcribe' : (string)($GLOBALS['STT'][$providerKey]['url'] ?? ''))), $GLOBALS['STT'][$providerKey]);
         }
     }
 

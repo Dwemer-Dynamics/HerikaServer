@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . "/lib/core/api_badge.class.php";
 
 
 $localPath = dirname((__FILE__)) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
@@ -68,6 +69,8 @@ function stt($file)
     if ($apiKey === '') {
         $apiKey = trim($GLOBALS["STT"]["WHISPER"]["API_KEY"] ?? '');
     }
+
+    $apiKey = ApiBadge::dispatchSecret($GLOBALS['DDISTRO_STT_CONNECTOR'] ?? [], $apiKey, 'llm', $url, 'OpenAI');
 
     $contextOptions = [
         'http' => [

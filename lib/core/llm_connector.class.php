@@ -434,6 +434,25 @@ class LLMConnector
 
         }
 
+        // Metadata may change a runtime URL. Resolve shared credentials only after that final endpoint is known.
+        $badgeId = intval($currentConnectorData['api_badge_id'] ?? 0);
+        if (!empty($currentConnectorData['shared_key_id'])) {
+            $driver = (string)$currentConnectorData['driver'];
+            $GLOBALS['CONNECTOR'][$driver]['API_KEY'] = '';
+            $GLOBALS['CONNECTOR'][$driver]['API_KEY'] = ApiBadge::sharedSecret(
+                (string)$currentConnectorData['shared_key_id'], 'llm', (string)($GLOBALS['CONNECTOR'][$driver]['url'] ?? '')
+            );
+        } elseif ($badgeId > 0) {
+            $badges = new ApiBadge();
+            $badge = $badges->getById($badgeId);
+            if (is_array($badge) && !empty($badge['shared_key_id'])) {
+                $driver = (string)$currentConnectorData['driver'];
+                $GLOBALS['CONNECTOR'][$driver]['API_KEY'] = '';
+                $GLOBALS['CONNECTOR'][$driver]['API_KEY'] = $badges->getSecretForEndpoint(
+                    $badgeId, 'llm', (string)($GLOBALS['CONNECTOR'][$driver]['url'] ?? '')
+                );
+            }
+        }
     }
 
 

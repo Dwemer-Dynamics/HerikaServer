@@ -1,4 +1,5 @@
 <?php
+require_once dirname(__DIR__) . "/lib/core/api_badge.class.php";
 
 $localPath = dirname(__FILE__) . DIRECTORY_SEPARATOR . ".." . DIRECTORY_SEPARATOR;
 require_once($localPath . "lib" . DIRECTORY_SEPARATOR . "runtime_bootstrap.php");
@@ -32,6 +33,8 @@ function stt($filePath)
             }
         } catch (Throwable $_e) {}
     }
+    $apiKey = ApiBadge::dispatchSecret($GLOBALS['DDISTRO_STT_CONNECTOR'] ?? [], $apiKey, 'tts', 'https://api.inworld.ai/stt/v1/transcribe', trim((string)($cfg['API_KEY'] ?? '')) === '' ? 'Inworld' : '');
+
     if ($apiKey === '') {
         error_log("STT Inworld: No API key found. Set STT INWORLD API_KEY or API badge 'Inworld'.");
         return '';

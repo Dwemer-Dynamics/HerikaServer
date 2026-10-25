@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . "/api_badge.class.php";
+
 require_once(__DIR__ . DIRECTORY_SEPARATOR . 'tts_fallback.class.php');
 
 class TTSConnector
@@ -734,6 +736,7 @@ class TTSConnector
 
     public function setOldGlobals($currentTTSData)
     {
+        $GLOBALS['DDISTRO_TTS_CONNECTOR'] = is_array($currentTTSData) ? $currentTTSData : [];
         if (!$currentTTSData) {
             return;
         }
@@ -809,6 +812,10 @@ class TTSConnector
 
         if (!empty($GLOBALS["TTS"][$providerKey]['language']) && !empty($GLOBALS["LANG_LLM_XTTS"])) {
             $GLOBALS["LLM_LANG"] = preg_replace('/[^a-z\-]/i', '', strtolower(trim(strval($GLOBALS["TTS"][$providerKey]['language']))));
+        }
+        // Apply the reference after metadata/defaults have selected the actual provider destination.
+        if ($providerKey !== '') {
+            ApiBadge::applyShared($currentTTSData, ($driver === 'inworld' ? 'tts' : 'llm'), ($driver === 'inworld' ? 'https://api.inworld.ai/tts/v1/voice:stream' : (string)($GLOBALS['TTS'][$providerKey]['endpoint'] ?? '')), $GLOBALS['TTS'][$providerKey]);
         }
     }
 
