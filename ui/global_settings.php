@@ -135,6 +135,7 @@ function pretty_label(string $flatName): string
         'CHIM_AI_QUEST_PROGRESSION' => 'CHIM AI Quest Progression (Beta)',
         'CHIM_PLAYER_ONLY_QUEST_ADVANCEMENT' => 'Player Only Quest Advancement',
         'CHIM_ITEM_PICKUP_EVENTLOG_MIN_VALUE' => 'Item Pickup Detection Value',
+        'PROMPT_TIMESTAMP_EXACT' => 'Exact Timestamps (Beta)',
     ];
     if (isset($customLabels[$flatName])) {
         return $customLabels[$flatName];
@@ -193,6 +194,7 @@ function icon_for_field(string $flatName): string
         'POWER_AWARENESS_ENABLED' => '⚔️',
         'CHIM_ITEM_PICKUP_EVENTLOG_MIN_VALUE' => '💰',
         'PROMPT_TIMESTAMP' => '🕐',
+        'PROMPT_TIMESTAMP_EXACT' => '📅',
         'MAGIC_EVENT_BLACKLIST' => '🪄',
         'LOCATION_BLACKLIST' => '📍',
         'ITEM_BLACKLIST' => '📦',

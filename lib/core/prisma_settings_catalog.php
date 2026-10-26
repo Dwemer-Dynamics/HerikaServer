@@ -120,6 +120,7 @@ function chimPrismaGlobalSettingsSections(): array
             ['name' => 'POWER_AWARENESS_ENABLED', 'type' => 'boolean'],
             ['name' => 'CHIM_ITEM_PICKUP_EVENTLOG_MIN_VALUE', 'type' => 'integer', 'min' => 0],
             ['name' => 'PROMPT_TIMESTAMP', 'type' => 'boolean'],
+            ['name' => 'PROMPT_TIMESTAMP_EXACT', 'label' => 'Exact Timestamps (Beta)', 'type' => 'boolean', 'default' => false],
         ],
         'Context Selections' => [
             ['name' => 'MAGIC_EVENT_BLACKLIST', 'type' => 'longstring'],
