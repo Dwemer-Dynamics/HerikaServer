@@ -76,6 +76,7 @@ function chimPortableGlobalFields(): array
         'POWER_AWARENESS_ENABLED' => 'boolean',
         'CHIM_ITEM_PICKUP_EVENTLOG_MIN_VALUE' => 'integer',
         'PROMPT_TIMESTAMP' => 'boolean',
+        'PROMPT_TIMESTAMP_EXACT' => 'boolean',
         'MAGIC_EVENT_BLACKLIST' => 'string',
         'LOCATION_BLACKLIST' => 'string',
         'ITEM_BLACKLIST' => 'string',

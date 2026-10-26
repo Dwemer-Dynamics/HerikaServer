@@ -67,6 +67,7 @@ function chimGlobalSettingsLabel(string $name): string
         'COMPACT_CHAT_ENABLED' => 'Compact Chat',
         'NEVER_CLEAR_RELATIONSHIP_DATA' => 'Never Clear Relationship Data',
         'PROMPT_HEAD_MARKDOWN_ENABLED' => 'Compact Prompt Info',
+        'PROMPT_TIMESTAMP_EXACT' => 'Exact Timestamps (Beta)',
     ];
     if (isset($custom[$name])) {
         return $custom[$name];

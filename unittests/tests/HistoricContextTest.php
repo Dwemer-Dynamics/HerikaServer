@@ -297,4 +297,39 @@ final class HistoricContextTest extends DatabaseTestCase
     {
         $this->assertSame("lydia", normalizeActorNameForComparison("Lydia (restrained)"));
     }
+
+    public function testExactTimestampsDateEachBlockOfTheHistory(): void
+    {
+        $day = 10000000; // gamets per in-game day; day 0 is the 17th of Last Seed
+        $GLOBALS["PROMPT_TIMESTAMP_EXACT"] = true;
+        $GLOBALS["gameRequest"] = ["chat", "300", (string)(5 * $day + 3750000), ""]; // 22nd of Last Seed, 9:00 AM
+        try {
+            $this->insertEvent("inputtext", "Prisoner: That troll nearly had us.", "|Lydia|Prisoner|", 100, 4 * $day + 6527778, 100); // 21st, 3:40 PM
+            $this->insertEvent("inputtext", "Prisoner: Morning, Lydia.", "|Lydia|Prisoner|", 200, 5 * $day + 3680556, 200);          // 22nd, 8:50 AM
+
+            $contents = array_map(static function (array $row): string {
+                return (string)($row["content"] ?? "");
+            }, buildHistoricContext("Lydia", -5));
+        } finally {
+            unset($GLOBALS["PROMPT_TIMESTAMP_EXACT"]);
+        }
+
+        $indexOf = static function (string $needle) use ($contents): int {
+            foreach ($contents as $i => $content) {
+                if (str_contains($content, $needle)) {
+                    return $i;
+                }
+            }
+            return -1;
+        };
+        $yesterday = $indexOf("21st of Last Seed, 4E 201 (yesterday) ---");
+        $troll = $indexOf("Prisoner: That troll nearly had us.");
+        $today = $indexOf("22nd of Last Seed, 4E 201 (today, less than an hour ago) ---");
+        $morning = $indexOf("Prisoner: Morning, Lydia.");
+
+        $this->assertGreaterThanOrEqual(0, $yesterday, "the first block is dated");
+        $this->assertGreaterThanOrEqual(0, $today, "a new day opens a new dated block");
+        $this->assertTrue($yesterday < $troll && $troll < $today && $today < $morning, "dividers precede their events: " . implode(" | ", $contents));
+        $this->assertCount(2, array_filter($contents, static fn(string $c): bool => str_starts_with($c, "--- ")));
+    }
 }

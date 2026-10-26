@@ -242,6 +242,86 @@ function chimMemoryAgeLabel($memoryGamets, $currentGamets): ?string {
     return $age . ', around ' . convert_gamets2skyrim_long_date_no_time($memoryGamets);
 }
 
+//----------------------------------------------------------------
+// Exact Timestamps: date the event context with in-game date and time
+//----------------------------------------------------------------
+
+if (!defined('CHIM_EXACT_TIMESTAMP_BLOCK_MINUTES')) {
+    define('CHIM_EXACT_TIMESTAMP_BLOCK_MINUTES', 60);
+}
+
+// PROMPT_TIMESTAMP_EXACT replaces the rough PROMPT_TIMESTAMP categories with exact dividers.
+function chimPromptTimestampExactEnabled(): bool {
+    return filter_var($GLOBALS['PROMPT_TIMESTAMP_EXACT'] ?? false, FILTER_VALIDATE_BOOLEAN);
+}
+
+// Calendar day of a game timestamp in the server's timezone, so blocks change with the displayed date.
+function chimGametsDayNumber($gamets): int {
+    $ts = gamets2timestamp(floatval($gamets));
+    return (int)floor(($ts + (int)date('Z', $ts)) / 86400);
+}
+
+// "Loredas, 3:40 PM, 21st of Last Seed, 4E 201"; empty when the game time is unknown.
+// Same weekday and month mapping as convert_gamets2skyrim_long_date, with a real ordinal.
+function chimGametsToExactDateTime($gamets): string {
+    $f_gamets = floatval($gamets);
+    if ($f_gamets <= 0.0) {
+        return '';
+    }
+    $ts = gamets2timestamp($f_gamets);
+    $day = (int)date('j', $ts);
+    $suffix = 'th';
+    if ($day % 100 < 11 || $day % 100 > 13) {
+        $suffix = [1 => 'st', 2 => 'nd', 3 => 'rd'][$day % 10] ?? 'th';
+    }
+    return dow2str_skyrim_day(date('N', $ts)) . ', ' . date('g:i A', $ts) . ', ' . $day . $suffix . ' of '
+        . month2str_skyrim_month(date('m', $ts)) . ', 4E ' . ltrim(date('Y', $ts), '0');
+}
+
+// How the event's day relates to the request's game time: "today, about 2 hours ago", "yesterday",
+// "3 days ago". Empty when a time is unknown or the event lies in the future (an older save was loaded).
+function chimExactTimestampRelativeHint($eventGamets, $currentGamets): string {
+    $event = floatval($eventGamets);
+    $now = floatval($currentGamets);
+    if ($event <= 0.0 || $now <= 0.0 || $event > $now) {
+        return '';
+    }
+    $dayDiff = chimGametsDayNumber($now) - chimGametsDayNumber($event);
+    if ($dayDiff <= 0) {
+        $hours = (int)floor(($now - $event) * 0.0000024);
+        if ($hours < 1) {
+            return 'today, less than an hour ago';
+        }
+        return 'today, about ' . $hours . ' hour' . ($hours === 1 ? '' : 's') . ' ago';
+    }
+    if ($dayDiff === 1) {
+        return 'yesterday';
+    }
+    return $dayDiff . ' days ago';
+}
+
+// Divider that opens a new dated block of the event context, or null while the row still belongs to
+// the current block. A block ends when the in-game day changes or after CHIM_EXACT_TIMESTAMP_BLOCK_MINUTES.
+function chimExactTimestampDivider($rowGamets, $currentGamets, $lastDividerGamets): ?string {
+    $row = floatval($rowGamets);
+    if ($row <= 0.0) {
+        return null;
+    }
+    if ($lastDividerGamets !== null && floatval($lastDividerGamets) > 0.0) {
+        $last = floatval($lastDividerGamets);
+        $minutesSince = ($row - $last) * 0.000144; // gamets to in-game minutes
+        if ($minutesSince < CHIM_EXACT_TIMESTAMP_BLOCK_MINUTES && chimGametsDayNumber($row) === chimGametsDayNumber($last)) {
+            return null;
+        }
+    }
+    $when = chimGametsToExactDateTime($row);
+    if ($when === '') {
+        return null;
+    }
+    $hint = chimExactTimestampRelativeHint($row, $currentGamets);
+    return '--- ' . $when . ($hint === '' ? '' : " ({$hint})") . ' ---';
+}
+
 function convert_gamets2days($gamets) {
     $i_res = 0;
     $f_input = floatval($gamets) * 0.0000001; 
