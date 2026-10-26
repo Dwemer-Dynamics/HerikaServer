@@ -1,11 +1,9 @@
 'use strict';
 // Ploofy model autocomplete for both connector editors. Models are fetched lazily through the
-// server so the stored key never reaches the browser, and are cached per selected API badge.
+// server so the stored key never reaches the browser. Reopening refreshes public names and models.
 (() => {
     const script = document.currentScript || document.querySelector('script[data-ploofy-connector]');
     const DEFAULT_MODEL = 'swift';
-    const MODEL_NAMES = { sage: 'Sage', novelist: 'Novelist', bard: 'Bard', swift: 'Swift' };
-    const MODEL_ORDER = Object.keys(MODEL_NAMES);
     const MARGIN = 8, PREFERRED_WIDTH = 420, TIMEOUT_MS = 15000;
     const boot = () => {
         const service = document.getElementById('service_input');
@@ -75,10 +73,7 @@
         // Opening lists every model so a prefilled value does not hide the alternatives; typing filters.
         function render(models) {
             const q = filter.trim().toLowerCase();
-            const matches = models.filter(m => !q || m.id.toLowerCase().includes(q)).sort((a, b) => {
-                const ai = MODEL_ORDER.indexOf(a.id), bi = MODEL_ORDER.indexOf(b.id);
-                return (ai < 0 ? MODEL_ORDER.length : ai) - (bi < 0 ? MODEL_ORDER.length : bi) || a.id.localeCompare(b.id);
-            });
+            const matches = models.filter(m => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
             const note = document.createElement('div'); note.className = 'orm-note'; note.textContent = 'Click or use the arrow keys and Enter to select. You can also type any model ID.';
             const rows = [head(), note];
             const muted = text => { const el = document.createElement('div'); el.className = 'orm-muted'; el.style.padding = '8px 10px'; el.textContent = text; return el; };
@@ -87,7 +82,7 @@
             items = matches.map((m, i) => {
                 const row = document.createElement('div'); row.className = 'orm-item'; row.id = 'ploofy-model-opt-' + i;
                 row.setAttribute('role', 'option'); row.setAttribute('aria-selected', 'false'); row.title = m.id;
-                const name = document.createElement('div'); name.textContent = MODEL_NAMES[m.id] || m.id;
+                const name = document.createElement('div'); name.textContent = m.name;
                 const sub = document.createElement('div'); sub.className = 'orm-muted'; sub.style.cssText = 'font-size:12px;margin-top:2px'; sub.textContent = 'Ploofy';
                 row.append(name, sub); row.addEventListener('click', () => choose(m.id));
                 return row;
@@ -98,9 +93,9 @@
         }
         // One shared request per badge, so focus followed by click does not fetch twice.
         function fetchModels(badgeId) {
-            if (cache.has(badgeId)) return Promise.resolve({ models: cache.get(badgeId) });
             if (inflight && inflight.badgeId === badgeId) return inflight.promise;
             cancelFetch();
+            cache.delete(badgeId);
             const entry = { badgeId, controller: new AbortController(), cancelled: false };
             const timer = setTimeout(() => entry.controller.abort(), TIMEOUT_MS);
             entry.promise = (async () => {
@@ -110,7 +105,7 @@
                     try { json = await response.json(); } catch (_) {}
                     if (entry.cancelled) return {};
                     if (!response.ok || !Array.isArray(json)) return { error: (json && typeof json.error === 'string') ? json.error : 'Failed to load models. Check API key.' };
-                    const models = json.filter(m => m && typeof m.id === 'string' && m.id !== '').map(m => ({ id: m.id, owned_by: typeof m.owned_by === 'string' ? m.owned_by : '' }));
+                    const models = json.filter(m => m && typeof m.id === 'string' && m.id !== '').map(m => ({ id: m.id, name: typeof m.name === 'string' && m.name.trim() ? m.name.trim() : m.id }));
                     cache.set(badgeId, models);
                     return { models };
                 } catch (_) {
@@ -130,7 +125,7 @@
             const option = badge ? badge.options[badge.selectedIndex] : null;
             if (!badgeId) { message('orm-err', 'Please select an API Key first.'); return; }
             if (option && option.getAttribute('data-empty') === '1') { message('orm-err', 'The selected API Key is empty. Add your Ploofy key in API Keys.'); return; }
-            if (!cache.has(badgeId)) message('orm-note', 'Loading…');
+            message('orm-note', 'Loading…');
             const result = await fetchModels(badgeId);
             // Discard results for a closed list, another service, or an unfocused field.
             if (mine !== session || !active() || document.activeElement !== model) return;

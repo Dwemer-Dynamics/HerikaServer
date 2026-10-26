@@ -98,11 +98,20 @@ foreach ($data['data'] as $model) {
     $id = $model['id'];
     // Model IDs are written into the connector, so accept only plain identifiers.
     if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/', $id) || isset($result[$id])) continue;
-    $ownedBy = $model['owned_by'] ?? '';
-    $ownedBy = (is_string($ownedBy) && preg_match('/^[\w .\/-]{1,64}$/u', $ownedBy)) ? $ownedBy : 'Ploofy';
-    $result[$id] = ['value' => $id, 'label' => $ownedBy, 'id' => $id, 'owned_by' => $ownedBy];
+    // Use only public display metadata. Never fall back to internal model_info or paths.
+    $name = $id;
+    foreach (['display_name', 'name'] as $field) {
+        $candidate = $model[$field] ?? null;
+        if (!is_string($candidate)) continue;
+        $candidate = trim($candidate);
+        if ($candidate !== '' && strlen($candidate) <= 512 && !preg_match('/[\x00-\x1f\x7f]/', $candidate)) {
+            $name = $candidate;
+            break;
+        }
+    }
+    $result[$id] = ['value' => $id, 'label' => $name, 'id' => $id, 'name' => $name, 'owned_by' => 'Ploofy'];
     if (count($result) >= 500) break;
 }
 
-ksort($result, SORT_STRING);
+// Preserve the public catalog's order; names and membership are managed by Ploofy.
 echo json_encode(array_values($result));
