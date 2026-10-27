@@ -246,6 +246,7 @@ $presetMap = [
     'replicate'   => 'Replicate',
     'groq'        => 'Groq',
     'nano-gpt'    => 'Nano-GPT',
+    'ploofy'      => 'Ploofy',
     'deepl'       => 'DeepL'
 ];
 
@@ -262,6 +263,7 @@ $providerLinks = [
     'replicate' => 'https://replicate.com/account/api-tokens',
     'groq' => 'https://console.groq.com/keys',
     'nano-gpt' => 'https://nano-gpt.com/',
+    'ploofy' => 'https://ploofy.ai/portal#api-key-card',
     'deepl' => 'https://www.deepl.com/en/pro-api'
 ];
 
@@ -278,6 +280,7 @@ $providerSubtext = [
     'replicate' => ['Soulgaze Gallery Processor'],
     'groq' => ['LLM'],
     'nano-gpt' => ['LLM'],
+    'ploofy' => ['LLM'],
     'deepl' => ['Translation'],
 ];
 
