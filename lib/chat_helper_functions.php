@@ -3137,6 +3137,78 @@ function normalizePeoplePipeList($peopleNames)
     return "|" . implode("|", $cleanPeople) . "|";
 }
 
+/**
+ * Add everyone who heard an NPC line to that line's eventlog people.
+ *
+ * eventlog.people decides which NPCs ever see a row in their history, but an NPC reply is
+ * written mid-stream with an audience borrowed from elsewhere: the player turn that
+ * triggered it, a copied rechat list, or just speaker and target for a "(talking to X)"
+ * line. The plugin's _speech callback later reports who could actually hear that line.
+ * This merges those hearers in.
+ *
+ * The whole NPC turn is widened (every chat row with the same speaker and gamets), not
+ * only the sentence that was reported. _speech arrives after each sentence finishes, but
+ * the plugin sends the next rechat as the last sentence starts, and the rechat copies its
+ * audience from the newest row of the pair - the last sentence. Widening the turn on the
+ * first report means that row is already complete when the rechat reads it.
+ *
+ * Additive only: no one already on the row is removed. Rows whose target suffix marks
+ * them private ("whispering to", "speaking privately to") are left as written.
+ * Names are compared without state suffixes, so "Lucia" does not duplicate "Lucia (busy)".
+ *
+ * @return int rows changed
+ */
+function chimWidenChatPeopleFromSpeech(array $rowIds, string $heardPipe): int
+{
+    global $db;
+    $heard = parsePeoplePipeList($heardPipe);
+    $rowIds = array_values(array_filter(array_map('intval', $rowIds), fn($id) => $id > 0));
+    if (empty($heard) || empty($rowIds) || !isset($db)) {
+        return 0;
+    }
+    $base = fn($name) => strtolower(trim((string)preg_replace('/\s*\([^)]*\)\s*$/', '', (string)$name)));
+
+    $changed = 0;
+    $matched = $db->fetchAll("SELECT rowid, gamets, data FROM eventlog WHERE type='chat' AND rowid IN (" . implode(",", $rowIds) . ")");
+    $turns = [];
+    foreach ((array)$matched as $m) {
+        $speaker = trim((string)strstr((string)($m["data"] ?? ""), ":", true));
+        if ($speaker !== "") {
+            $turns[intval($m["gamets"]) . "|" . $speaker] = [intval($m["gamets"]), $speaker];
+        }
+    }
+    $rows = [];
+    foreach ($turns as [$gamets, $speaker]) {
+        $siblings = $db->fetchAll("SELECT rowid, people, data FROM eventlog WHERE type='chat' AND gamets={$gamets}"
+            . " AND data LIKE '" . $db->escape(addcslashes($speaker, "%_\\")) . ":%'");
+        foreach ((array)$siblings as $sibling) {
+            $rows[intval($sibling["rowid"])] = $sibling;
+        }
+    }
+    foreach ((array)$rows as $row) {
+        if (preg_match('/\((?:whispering|speaking privately) to [^)]*\)\s*$/i', (string)($row["data"] ?? ""))) {
+            continue;
+        }
+        $people = parsePeoplePipeList($row["people"] ?? "");
+        $present = array_map($base, $people);
+        $added = false;
+        foreach ($heard as $name) {
+            if (!in_array($base($name), $present, true)) {
+                $people[] = $name;
+                $present[] = $base($name);
+                $added = true;
+            }
+        }
+        if (!$added) {
+            continue;
+        }
+        $merged = normalizePeoplePipeList($people);
+        $db->execQuery("UPDATE eventlog SET people='" . $db->escape($merged) . "' WHERE rowid=" . intval($row["rowid"]));
+        $changed++;
+    }
+    return $changed;
+}
+
 function parsePeoplePipeList($peoplePipe)
 {
     $peoplePipe = trim((string)$peoplePipe);
