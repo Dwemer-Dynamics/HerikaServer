@@ -35,6 +35,20 @@ SQL;
         $this->assertTrue(pts_clone_function_is_current('PERFORM chim_meta.clone_selected_schema(source_schema, dest_schema, NULL);'));
     }
 
+    public function testRequestLogsAreSavedAsStructureOnly(): void
+    {
+        // Saves keep the table for compatibility, so it stays selected, but its rows stay live.
+        $this->assertSame(['audit_request'], pts_live_row_tables());
+        $this->assertContains('audit_request', pts_playthrough_tables());
+        $this->assertSame(
+            "CREATE OR REPLACE FUNCTION chim_meta.playthrough_live_row_tables() RETURNS text[] LANGUAGE sql IMMUTABLE AS 'SELECT ARRAY[''audit_request'']::text[]';",
+            pts_live_row_tables_sql()
+        );
+        foreach (pts_live_row_tables() as $table) {
+            $this->assertContains($table, pts_table_policy()['playthrough']);
+        }
+    }
+
     public function testViewCloningFunctionNeedsRefresh(): void
     {
         $legacyDefinition = <<<'SQL'

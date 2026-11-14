@@ -67,11 +67,14 @@ DECLARE
     lock_list text;
     versions jsonb := '{}';
     table_name text;
+    live_rows text[] := chim_meta.playthrough_live_row_tables();
 BEGIN
     IF dest_schema !~ '^chim_profile_[a-z0-9_]+$' THEN
         RAISE EXCEPTION 'Invalid playthrough schema';
     END IF;
-    SELECT array_agg(tablename ORDER BY tablename), string_agg(format('public.%I', tablename), ', ' ORDER BY tablename)
+    -- Live-row tables are saved empty, so their writers (request logging) are never blocked.
+    SELECT array_agg(tablename ORDER BY tablename),
+        string_agg(format('public.%I', tablename), ', ' ORDER BY tablename) FILTER (WHERE NOT (tablename = ANY(live_rows)))
     INTO names, lock_list FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY(selected_tables);
     IF names IS NULL OR NOT ('eventlog' = ANY(names)) THEN
         RAISE EXCEPTION 'Playthrough source tables are unavailable';
@@ -81,7 +84,7 @@ BEGIN
     IF NOT chim_meta.drop_schema_safe(dest_schema) THEN
         RAISE EXCEPTION 'Cannot replace playthrough schema';
     END IF;
-    PERFORM chim_meta.clone_selected_schema('public', dest_schema, names);
+    PERFORM chim_meta.clone_selected_schema_rows('public', dest_schema, names, live_rows);
     IF EXISTS (
         SELECT 1 FROM pg_depend d JOIN pg_attrdef a ON d.classid='pg_attrdef'::regclass AND d.objid=a.oid
         JOIN pg_class t ON t.oid=a.adrelid JOIN pg_namespace tn ON tn.oid=t.relnamespace
@@ -141,6 +144,8 @@ BEGIN
     -- Keep the installed migration ledger: restoring old markers can re-run seed
     -- migrations against shared libraries. Its saved copy is compatibility metadata.
     names := array_remove(names, 'database_versioning');
+    -- Live-row tables keep their current rows and ID counters, even when a legacy save holds rows.
+    names := ARRAY(SELECT name FROM unnest(names) name WHERE NOT (name = ANY(chim_meta.playthrough_live_row_tables())) ORDER BY name);
     -- Include referencing tables in the lock set before changing any constraints.
     SELECT string_agg(rel, ', ' ORDER BY rel) INTO lock_list FROM (
         SELECT format('%I.%I', schemaname, tablename) AS rel FROM pg_tables WHERE schemaname = 'public'

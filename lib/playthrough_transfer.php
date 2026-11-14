@@ -316,6 +316,8 @@ function ptx_export($conn, int $id, string $expected, string $directory): array 
             $columns=ptx_columns($conn,$source,$table);
             $names=implode(',',array_map(fn($c)=>pg_escape_identifier($conn,$c['name']),$columns));
             $filter=in_array($table,['conf_opts','general_settings'],true)?' WHERE NOT '.$meta.'.is_global_setting('.pg_escape_literal($conn,$table).',id)':'';
+            // Like capture, a download keeps live-row tables (request logs) as empty tables.
+            if (in_array($table,pts_live_row_tables(),true)) $filter=' WHERE false';
             $zip->begin('tables/'.$table.'.jsonl');$hash=hash_init('sha256');$rows=0;$bytes=0;
             pth_query($conn,'DECLARE ptx_rows NO SCROLL CURSOR FOR SELECT row_to_json(t)::text AS data FROM (SELECT '.$names.' FROM '.pg_escape_identifier($conn,$source).'.'.pg_escape_identifier($conn,$table).$filter.') t');
             do {

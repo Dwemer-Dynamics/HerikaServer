@@ -40,7 +40,8 @@ BEGIN
     source_policy := coalesce((manifest->>'table_policy_version')::integer,1);
     -- CREATE, not replacement: an unexpected name collision must leave it intact.
     EXECUTE format('CREATE SCHEMA %I', stage_schema);
-    PERFORM chim_meta.clone_selected_schema(source_schema, stage_schema, source_names);
+    -- Legacy saves may hold live-row tables' rows; the private copy keeps only their structure.
+    PERFORM chim_meta.clone_selected_schema_rows(source_schema, stage_schema, source_names, chim_meta.playthrough_live_row_tables());
 
     FOREACH table_name IN ARRAY live_names LOOP
         IF NOT (table_name=ANY(source_names)) THEN
@@ -223,4 +224,4 @@ END;
 $$ LANGUAGE plpgsql SET lock_timeout = '10s';
 
 CREATE OR REPLACE FUNCTION chim_meta.playthrough_api_version()
-RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 11';
+RETURNS integer LANGUAGE sql IMMUTABLE AS 'SELECT 12';

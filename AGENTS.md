@@ -22,10 +22,11 @@
 
 - Read [lib/playthrough_policy.php](lib/playthrough_policy.php) before changing capture, restore, fresh starts or table comments. It is the authoritative table list; do not maintain a second list or fixed table count here.
 - `pts_table_policy()` classifies tables as `playthrough`, `global`, `mixed` or `infrastructure`. `pts_playthrough_tables()` selects playthrough and mixed tables.
+- `live_rows` lists playthrough tables whose rows stay live: currently `audit_request` (request logs). Saves, downloads and private upgrade copies keep the table and its ID counter empty, so the saved table set and policy version are unchanged. Restore, New playthrough and activation never replace or empty its live rows, including when a legacy save holds rows. `pts_live_row_tables_sql()` installs the same list as `chim_meta.playthrough_live_row_tables()`, and `pts_ensure_functions()` refreshes the SQL API when the installed list differs. These tables carry no backed-up comment. Retention cleanup of the live table is unchanged.
 - Global tables remain live across saves and new playthroughs. These include credentials, connectors, reusable profiles/presets, import rules, prompts/actions and the explicitly listed shared libraries. Global means excluded from switching, not read-only.
 - `conf_opts` and `general_settings` are mixed: only gameplay rows travel with a save. Use `is_global_setting()` in [lib/playthrough_selection.sql](lib/playthrough_selection.sql); do not capture or replace these tables wholesale. Player identity, party and gameplay timestamps must not become global.
 - `database_versioning` stays live; migration metadata belongs in the save manifest. Unknown/plugin tables are unmanaged: never auto-enrol them or clear them just because they exist in `public`.
-- Selected public tables have exactly `Playthrough Manager Backed Up` as their PostgreSQL table comment. Excluded public tables have a NULL/blank comment. Comments describe the policy; they do not control capture.
+- Selected public tables, other than `live_rows` tables, have exactly `Playthrough Manager Backed Up` as their PostgreSQL table comment. Excluded public tables have a NULL/blank comment. Comments describe the policy; they do not control capture.
 - [debug/db_updates.php](debug/db_updates.php) calls `pts_update_playthrough_policy()` to synchronise comments idempotently. Change the policy and update path together rather than applying a one-off database label.
 
 ### HerikaServer specifics

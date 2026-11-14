@@ -88,6 +88,14 @@ $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION chim_meta.clone_selected_schema(source_schema text, dest_schema text, selected_tables text[])
 RETURNS void AS $$
+BEGIN
+    PERFORM chim_meta.clone_selected_schema_rows(source_schema, dest_schema, selected_tables, '{}'::text[]);
+END;
+$$ LANGUAGE plpgsql;
+
+-- structure_only_tables are cloned with their structure and ID counters but no rows.
+CREATE OR REPLACE FUNCTION chim_meta.clone_selected_schema_rows(source_schema text, dest_schema text, selected_tables text[], structure_only_tables text[])
+RETURNS void AS $$
 DECLARE
     obj RECORD;
     seq_val BIGINT;
@@ -104,6 +112,7 @@ BEGIN
         -- Create table structure (including indexes, constraints, defaults)
         EXECUTE format('CREATE TABLE IF NOT EXISTS %I.%I (LIKE %I.%I INCLUDING ALL)',
                        dest_schema, obj.tablename, source_schema, obj.tablename);
+        IF obj.tablename = ANY(coalesce(structure_only_tables, '{}'::text[])) THEN CONTINUE; END IF;
         
         -- Generated columns recompute; identity columns retain the captured values.
         SELECT string_agg(format('%I', attname), ', ' ORDER BY attnum) INTO copied_columns
