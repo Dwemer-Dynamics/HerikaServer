@@ -27,10 +27,12 @@ function pts_ensure_functions($conn): bool {
     // Upgrade older installations to the selected-table capture and restore API.
     $checkQuery = "SELECT pg_get_functiondef(p.oid) AS function_definition FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'clone_schema' AND n.nspname = 'chim_meta' LIMIT 1";
     $checkResult = @pg_query($conn, $checkQuery);
+    // The installed live-row list must match the current policy, not an older server's.
+    $liveRows = pg_escape_literal($conn, "SELECT ARRAY['" . implode("','", pts_live_row_tables()) . "']::text[]");
     if ($checkResult && pg_num_rows($checkResult) > 0) {
         $row = pg_fetch_assoc($checkResult);
         if (pts_clone_function_is_current($row['function_definition'] ?? null)
-            && pg_fetch_result(pg_query($conn, "SELECT COALESCE((SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='chim_meta' AND p.proname='playthrough_api_version'),'')='SELECT 11' AND to_regprocedure('chim_meta.playthrough_identity(text)') IS NOT NULL AND to_regprocedure('chim_meta.prepare_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.validate_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.sync_playthrough_comments(text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough_upgraded(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.capture_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.clone_selected_schema(text,text,text[])') IS NOT NULL"), 0, 0) === 't') {
+            && pg_fetch_result(pg_query($conn, "SELECT COALESCE((SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='chim_meta' AND p.proname='playthrough_api_version'),'')='SELECT 12' AND COALESCE((SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='chim_meta' AND p.proname='playthrough_live_row_tables'),'')={$liveRows} AND to_regprocedure('chim_meta.clone_selected_schema_rows(text,text,text[],text[])') IS NOT NULL AND to_regprocedure('chim_meta.playthrough_identity(text)') IS NOT NULL AND to_regprocedure('chim_meta.prepare_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.validate_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.sync_playthrough_comments(text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough_upgraded(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.restore_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.capture_playthrough(text,text[])') IS NOT NULL AND to_regprocedure('chim_meta.clone_selected_schema(text,text,text[])') IS NOT NULL"), 0, 0) === 't') {
             return true;
         }
 
@@ -50,7 +52,7 @@ function pts_ensure_functions($conn): bool {
         return false;
     }
     if ($sql !== false) {
-        $sql .= "\n" . $selectionSql . "\n" . $upgradeSql;
+        $sql .= "\n" . pts_live_row_tables_sql() . "\n" . $selectionSql . "\n" . $upgradeSql;
     }
     if ($sql === false) {
         Logger::error("Failed to read schema_clone_function.sql");
