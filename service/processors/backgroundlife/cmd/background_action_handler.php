@@ -121,6 +121,7 @@ function handleTravelToAction($location, $currentNpcData, $npcName, $last_ts, $l
     }
 
     if (!isset($locId["formid"]) || (isset($locId['sim']) && $locId['sim'] < _LOCATION_RESOLVE_SIM_THRESHOLD)) {
+        $locSim = $locId['sim'] ?? '';
         $db->insert('eventlog', [
             'ts' => $last_ts,
             'gamets' => $last_gamets + 10,
@@ -139,23 +140,24 @@ function handleTravelToAction($location, $currentNpcData, $npcName, $last_ts, $l
                 'ts' => $last_ts,
                 'gamets' => $last_gamets,
                 'localts' => time(),
-                'data' => ($location == $resolvedLocation) ? "$npcName failed to travel to $location. Reason: {$GLOBALS["LAST_REASON"]} LocSim:{$locId['sim']}" : "$npcName starts travelling to $location (resolved as $resolvedLocation $resolvedLocationInterior LocSim:{$locId['sim']}). Reason: {$GLOBALS["LAST_REASON"]}",
+                'data' => ($location == $resolvedLocation) ? "$npcName failed to travel to $location. Reason: {$GLOBALS["LAST_REASON"]} LocSim:{$locSim}" : "$npcName starts travelling to $location (resolved as $resolvedLocation $resolvedLocationInterior LocSim:{$locSim}). Reason: {$GLOBALS["LAST_REASON"]}",
                 'category' => 'error',
             ]
         );
         $npc = new NpcMaster();
         $npcData = $npc->getByName($npcName);
         $extendedData = $npc->getExtendedData($npcData);
-        triggerNpcUpdate($npcName, +$extendedData['background_life_last_updated_ec']);
+        triggerNpcUpdate($npcName, ((int) ($extendedData['background_life_last_updated_ec'] ?? 0)) + 1);
         return false;
     }
 
     $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
     $locHexString = (convertHex($locId["formid"]));
 
-    // Use direct_destination_ref if available
-    if ($locId["direct_destination_ref"] ?? false) {
-        $locDecString = hexdec($locId["direct_destination_ref"]);
+    // Use direct_destination_ref if available and well-formed
+    $directDestinationRef = chimBglFormRef($locId["direct_destination_ref"] ?? null);
+    if ($directDestinationRef !== null) {
+        $locDecString = hexdec($directDestinationRef);
         if ($locDecString >= 0x80000000) {
             $locDecString -= 0x100000000;
         }
@@ -255,7 +257,35 @@ function handleStayAtPlaceAction($location, $currentNpcData, $npcName, $last_ts,
         error_log("[handleStayAtPlaceAction] requested='$requestedLocation' resolved='{$resolvedLocation}' formid='{$locId['formid']}'$sim$dist");
     }
 
-    if (!isset($locId["formid"])) {
+    // Reject unresolved or low-confidence places, as TravelTo does. Random picks carry no sim and stay allowed.
+    if (!isset($locId["formid"]) || (isset($locId['sim']) && $locId['sim'] < _LOCATION_RESOLVE_SIM_THRESHOLD)) {
+        $locSim = $locId['sim'] ?? '';
+        $db->insert('eventlog', [
+            'ts' => $last_ts,
+            'gamets' => $last_gamets + 1,
+            'type' => 'innerchat',
+            'data' => "The Narrator: $npcName didn't find $location. $npcName must desist from this action and choose another place",
+            'sess' => $momentum,
+            'localts' => time(),
+            'people' => "$npcName",
+            'location' => null,
+            'party' => '',
+        ]);
+        $db->insert(
+            'bgl_history',
+            [
+                'npc' => $npcName,
+                'ts' => $last_ts,
+                'gamets' => $last_gamets,
+                'localts' => time(),
+                'data' => "$npcName failed to stay at $location. Reason: " . ($GLOBALS["LAST_REASON"] ?? "") . " LocSim:{$locSim}",
+                'category' => 'error',
+            ]
+        );
+        $npc = new NpcMaster();
+        $npcData = $npc->getByName($npcName);
+        $extendedData = $npc->getExtendedData($npcData);
+        triggerNpcUpdate($npcName, ((int) ($extendedData['background_life_last_updated_ec'] ?? 0)) + 1);
         return false;
     }
 
@@ -1343,7 +1373,7 @@ function handleSpeakToAction($targetNpcName, $currentNpcData, $npcName, $last_ts
             $npc = new NpcMaster();
             $npcData = $npc->getByName($npcName);
             $extendedData = $npc->getExtendedData($npcData);
-            triggerNpcUpdate($npcName, +$extendedData['background_life_last_updated_ec']);
+            triggerNpcUpdate($npcName, ((int) ($extendedData['background_life_last_updated_ec'] ?? 0)) + 1);
         }
     }
 
