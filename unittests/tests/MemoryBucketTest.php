@@ -55,13 +55,16 @@ final class MemoryBucketTest extends TestCase
         $this->assertSame([['gamets_truncated' => 300, 'content' => 'The road.']], $out);
     }
 
-    public function testAllEmptyBucketIsDropped(): void
+    public function testAllEmptyBucketIsKeptWithEmptyContent(): void
     {
         $out = dataGroupMemoryBuckets([
             $this->row(700, "#Summary:\n\n#Tags: #x"),
             $this->row(600, '#Summary: Real.'),
         ]);
 
-        $this->assertSame([['gamets_truncated' => 600, 'content' => 'Real.']], $out);
+        $this->assertSame([
+            ['gamets_truncated' => 700, 'content' => ''],
+            ['gamets_truncated' => 600, 'content' => 'Real.'],
+        ], $out);
     }
 }

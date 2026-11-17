@@ -5114,7 +5114,7 @@ function dataMemoryBucketRowsSql(string $whereSql, int $buckets, bool $oldest = 
  * Groups memory_summary rows (summary, gamets_truncated) into one entry per bucket, newest first:
  * ['gamets_truncated' => int, 'content' => string]. Each episode loses its leading "#Summary:"
  * label and trailing "#Tags:" block; a bucket's episodes are joined as paragraphs in input order.
- * Buckets with no text left are omitted.
+ * A bucket with no text left is kept, with content ''.
  */
 function dataGroupMemoryBuckets(array $rows): array
 {
@@ -5133,9 +5133,7 @@ function dataGroupMemoryBuckets(array $rows): array
 
     $out = [];
     foreach ($buckets as $g => $paragraphs) {
-        if ($paragraphs) {
-            $out[] = ['gamets_truncated' => intval($g), 'content' => implode("\n\n", $paragraphs)];
-        }
+        $out[] = ['gamets_truncated' => intval($g), 'content' => implode("\n\n", $paragraphs)];
     }
     return $out;
 }
@@ -5224,6 +5222,9 @@ function DataShortTermMemoryFor($actor, $sqlfilter = "")
 
         $out = [];
         foreach (array_reverse(dataGroupMemoryBuckets($rows)) as $bucket) {   // oldest -> newest
+            if ($bucket["content"] === "") {
+                continue;
+            }
             $when = convert_gamets2skyrim_date($bucket["gamets_truncated"]);
             $out[] = ['role' => 'user', 'content' => "(Earlier events - $when) " . $bucket["content"]];
         }
