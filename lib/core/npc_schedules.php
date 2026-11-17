@@ -170,6 +170,9 @@ function chimScheduleTick(): void {
 function chimScheduleReply(string $message): void {
     $p=explode('/', $message); if(count($p)!==6 || !ctype_digit($p[0])) return;
     [$id,$token,$actor,$op,$result,$marker]=$p; $id=(int)$id;
+    // Papyrus can return the casing of a string already interned by the game.
+    $op = strtolower($op);
+    $result = strtolower($result);
     $db=$GLOBALS['db']; $clock=chimScheduleClock();
     chimScheduleExec('BEGIN');
     try {

@@ -364,33 +364,33 @@ if ($GUARD_TRAVELTO) {
         )) === 3;
 
         if ($allTravelActions) {
-            $sameDestination = (
-                $lastThreeTravelActions[0]['destination'] !== '' &&
-                $lastThreeTravelActions[0]['destination'] === $lastThreeTravelActions[1]['destination'] &&
-                $lastThreeTravelActions[1]['destination'] === $lastThreeTravelActions[2]['destination']
-            );
+            // Repeated travel commands alone do not prove the NPC is stuck. Require coords tracked
+            // after the latest command showing it stayed put for at least an in-game hour.
+            $stuckCheck = chimBglStationarySince($metadata, (float) ($lastThreeTravelActions[0]['gamets'] ?? 0), (float) $last_gamets, 1 / GAMETS_TO_HOURS);
 
-            if ($sameDestination) {
-                $destination = $lastThreeTravelActions[0]['destination'];
+            if (!$stuckCheck['stuck']) {
+                error_log("[BGL RUN] $npcNameEsc — last 3 actions were TravelTo/MoveTo but tracked coords do not show it stuck ({$stuckCheck['reason']}).");
+            } else {
+                $sameDestination = (
+                    $lastThreeTravelActions[0]['destination'] !== '' &&
+                    $lastThreeTravelActions[0]['destination'] === $lastThreeTravelActions[1]['destination'] &&
+                    $lastThreeTravelActions[1]['destination'] === $lastThreeTravelActions[2]['destination']
+                );
 
-                error_log("[BGL RUN] $npcNameEsc — last 3 actions were TravelTo/MoveTo to the same destination ({$destination}), assuming NPC is stuck. Teleport it near destination");
+                // Same destination: teleport near it. Otherwise use a reference of the place it is stuck at.
+                $destination = $sameDestination ? $lastThreeTravelActions[0]['destination'] : $stuckCheck['location'];
+                error_log("[BGL RUN] $npcNameEsc — stationary since last TravelTo/MoveTo, assuming NPC is stuck. Teleport target: {$destination}");
 
-                $candidateLocation = resolveTravelLocation($destination, $currentNpcData, $GLOBALS['db']);
+                $candidateLocation = ($destination !== '') ? resolveTravelLocation($destination, $currentNpcData, $GLOBALS['db']) : null;
+                $destinationRef = chimBglRecoveryDestinationRef($candidateLocation);
+                $npcRef = chimBglFormRef($currentNpcData['refid'] ?? null);
 
-                if ($candidateLocation["sim"] > _LOCATION_RESOLVE_SIM_THRESHOLD && $candidateLocation["refs"] != "") {
-                    // Extract first ref if any, e.g.
-                    // [refs] => 0x0001bdf1:0x2101e6ec;0x0001bdf1:0x2101e6ec
-                    $refs = explode(';', $candidateLocation['refs']);
-                    $firstReferencePair = explode(":", $refs[0]);
-
+                if ($destinationRef !== null && $npcRef !== null) {
                     $skyrimCmd = new SkyrimCommandBuilder();
-                    $json = $skyrimCmd->ObjectReference->MoveTo(
-                        "0x{$currentNpcData['refid']}",
-                        "{$firstReferencePair[1]}"
-                    );
+                    $json = $skyrimCmd->ObjectReference->MoveTo($npcRef, $destinationRef);
                     $skyrimCmd->send(cmd: $json);
 
-                    error_log("[BGL RUN] $npcNameEsc — 379 Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
+                    error_log("[BGL RUN] $npcNameEsc — Teleported to {$candidateLocation['name']} (ref: {$destinationRef})");
 
                     $db->insert('actions_issued', [
                         'action' => 'TeleportTo',
@@ -404,7 +404,7 @@ if ($GUARD_TRAVELTO) {
 
                     $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
 
-                    // Insert response log entry with return home command
+                    // Insert response log entry with track command
                     $db->insert(
                         'responselog',
                         [
@@ -417,70 +417,11 @@ if ($GUARD_TRAVELTO) {
                         ]
                     );
                     sleep(1); // Give some time for the database to register the action
-                    triggerNpcUpdate($npc["npc_name"]);
+                    triggerNpcUpdate($npcName);
 
                     die();
                 } else {
-                    error_log("[BGL RUN] $npcNameEsc — Could not resolve a valid location for destination: $destination");
-                }
-            }
-
-            // If the last 3 actions are TravelTo/MoveTo but their destinations
-            // differ, fall back to the coordinate-history check.
-            if (isset($extdata['last_coords']) && is_array($extdata['last_coords'])) {
-                $coordsHistory = $extdata['last_coords'];
-                $recentCoords = array_slice($coordsHistory, -3);
-                $uniqueLocations = array_unique(array_column($recentCoords, 3));
-
-                if (count($uniqueLocations) === 1) {
-                    error_log("[BGL RUN] $npcNameEsc — last 3 coordinates are the same location ({$uniqueLocations[0]}), assuming NPC is stuck. Teleporting to resolve.");
-
-                    $candidateLocation = resolveTravelLocation($uniqueLocations[0], $currentNpcData, $GLOBALS['db']);
-
-                    if ($candidateLocation["sim"] > _LOCATION_RESOLVE_SIM_THRESHOLD && $candidateLocation["refs"] != "") {
-                        $refs = explode(';', $candidateLocation['refs']);
-                        $firstReferencePair = explode(":", $refs[0]);
-
-                        $skyrimCmd = new SkyrimCommandBuilder();
-                        $json = $skyrimCmd->ObjectReference->MoveTo(
-                            "0x{$currentNpcData['refid']}",
-                            "{$firstReferencePair[1]}"
-                        );
-                        $skyrimCmd->send(cmd: $json);
-
-                        error_log("[BGL RUN] $npcNameEsc — (437) Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
-
-                        $db->insert('actions_issued', [
-                            'action' => 'TeleportTo',
-                            'fullcall' => "TeleportTo:{$candidateLocation['name']}:Teleporting to resolve stuck NPC",
-                            'actorname' => $npcName,
-                            'ts' => $last_ts,
-                            'gamets' => $last_gamets,
-                            'localts' => time(),
-                            'original' => 'backgroundaction',
-                        ]);
-
-                          $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
-
-                        // Insert response log entry with return home command
-                        $db->insert(
-                            'responselog',
-                            [
-                                'localts' => time(),
-                                'sent' => 0,
-                                'actor' => "rolemaster",
-                                'text' => "",
-                                'action' => "rolecommand|BackgroundCmd@$refHexString@Track/",
-                                'tag' => '',
-                            ]
-                        );
-                        sleep(1); // Give some time for the database to register the action
-                        triggerNpcUpdate($npc["npc_name"]);
-                    
-                        die();
-                    } else {
-                        error_log("[BGL RUN] $npcNameEsc — Could not resolve a valid location for destination: {$uniqueLocations[0]}");
-                    }
+                    error_log("[BGL RUN] $npcNameEsc — Could not resolve a valid location reference for destination: $destination");
                 }
             }
         }
@@ -505,15 +446,20 @@ if ($GUARD_TRAVELTO) {
                 $targetNpcName === $lastThreeNpcActions[2]['destination']
             );
 
-            if ($sameTargetNpc) {
+            // Same evidence gate as the travel check: repeated commands alone do not prove it is stuck.
+            $npcStuckCheck = $sameTargetNpc
+                ? chimBglStationarySince($metadata, (float) ($lastThreeNpcActions[0]['gamets'] ?? 0), (float) $last_gamets, 1 / GAMETS_TO_HOURS)
+                : null;
+            if ($npcStuckCheck !== null && !$npcStuckCheck['stuck']) {
+                error_log("[BGL RUN] $npcNameEsc — last 3 MoveTo/FindNPC actions target {$targetNpcName} but tracked coords do not show it stuck ({$npcStuckCheck['reason']}).");
+            } elseif ($sameTargetNpc) {
                 $targetNpcData = $npcMaster->getByName($targetNpcName);
 
-                if ($targetNpcData && isset($targetNpcData['refid'])) {
+                $npcRef = chimBglFormRef($currentNpcData['refid'] ?? null);
+                $targetNpcRef = chimBglFormRef(is_array($targetNpcData) ? ($targetNpcData['refid'] ?? null) : null);
+                if ($npcRef !== null && $targetNpcRef !== null) {
                     $skyrimCmd = new SkyrimCommandBuilder();
-                    $json = $skyrimCmd->ObjectReference->MoveTo(
-                        "0x{$currentNpcData['refid']}",
-                        "0x{$targetNpcData['refid']}"
-                    );
+                    $json = $skyrimCmd->ObjectReference->MoveTo($npcRef, $targetNpcRef);
                     $skyrimCmd->send(cmd: $json);
 
                     error_log("[BGL RUN] $npcNameEsc — Last 3 MoveTo/FindNPC actions target the same NPC {$targetNpcName}. Teleported to resolve stuck NPC.");
