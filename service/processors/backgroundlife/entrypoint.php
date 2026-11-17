@@ -28,6 +28,8 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
     require_once $enginePath . "lib/core/core_profiles.class.php";
     require_once $enginePath . "lib/core/llm_connector.class.php";
     require_once $enginePath . 'lib/scriptproxy_papyrus.php';
+    // Stuck-NPC recovery below calls triggerNpcUpdate().
+    require_once __DIR__ . '/cmd/background_action_handler.php';
 
     error_log("[BGL] Starting Background Life processing");
 
@@ -191,68 +193,68 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
             and gamets > $oneHourAgoGamets");
 
             // TravelTo stuck NPCs
-            // Check NPC is not near to player, last action issued was TravelTo or MoveTo,  We must check coords history on metadata,
-            // and if no movement in the last hour notify
+            // Check NPC is not near to player and last action issued was TravelTo or MoveTo. Only coords tracked
+            // after that command count, and they must show no movement for at least an in-game hour.
+            $isStuck = false;
+            $bglLastUpdated = (is_array($mwdata) && is_numeric($mwdata["background_life_last_updated"] ?? null)) ? (float) $mwdata["background_life_last_updated"] : 0;
             $npcNameEscDb = $GLOBALS["db"]->escape($npc["npc_name"]);
             $actionsRows = $GLOBALS["db"]->fetchAll(
                 "SELECT action,actorname,gamets,fullcall FROM actions_issued
      WHERE actorname='$npcNameEscDb' 
-       AND gamets > ({$mwdata["background_life_last_updated"]}-($oneHourAgoGamets*4)) 
+       AND gamets > ({$bglLastUpdated}-($oneHourAgoGamets*4))
      ORDER BY gamets DESC, ts DESC
      LIMIT 1 OFFSET 0"
             );
-            
 
-            if (!empty($actionsRows)) {
-                // Process the actions rows to check for TravelTo or MoveTo
-                foreach ($actionsRows as &$row) {
-                    $parts = explode(':', $row['fullcall'], 3);
-                    $row['destination'] = $parts[1] ?? '';
-                }
+            $lastAction = (is_array($actionsRows) && isset($actionsRows[0]) && is_array($actionsRows[0])) ? $actionsRows[0] : null;
+            if ($lastAction !== null) {
+                $parts = explode(':', (string) ($lastAction['fullcall'] ?? ''), 3);
+                $lastAction['destination'] = $parts[1] ?? '';
                 if ($parts[0] === 'TravelTo' || $parts[0] === 'MoveTo') {
 
-                    if (isset($metadata['last_coords_history']) && is_array($metadata['last_coords_history'])) {
-                        $coordsHistory = $metadata['last_coords_history'];
-                        $recentCoords = array_slice($coordsHistory, -5);
-                        $uniqueLocations = array_unique(array_column($recentCoords, 3));
-                        $isStuck = count($uniqueLocations) === 1;
-                        $recentCoordsText = implode(', ', array_column($recentCoords, 3));
-                    }
+                    $stuckCheck = chimBglStationarySince($metadata, (float) ($lastAction['gamets'] ?? 0), (float) $maxRow, 1 / 0.0000024);
+                    $isStuck = $stuckCheck['stuck'];
 
                     if ($isStuck) {
-                        error_log("[BGL] NPC <{$npc["npc_name"]}> appears to be STUCK at location: {$uniqueLocations[0]} <{$recentCoordsText}>, Wants:<{$row['destination']}>");
+                        error_log("[BGL] NPC <{$npc["npc_name"]}> appears to be STUCK at location: {$stuckCheck['location']}, Wants:<{$lastAction['destination']}>");
                         if (isset($npcIsNearToPlayer) && $npcIsNearToPlayer["n"] > 0) {
                             error_log("[BGL] NPC STUCK {$npc["npc_name"]} is near a player, skipping stuck check");
                         } else {
 
                             $npcMaster = new NpcMaster();
                             $currentNpcData = $npcMaster->getByName($npc["npc_name"]);
-                            $candidateLocation = resolveTravelLocation($row['destination'], $currentNpcData, $GLOBALS['db']);
+                            $npcRef = chimBglFormRef($currentNpcData['refid'] ?? null);
+                            $destinationName = $lastAction['destination'];
+                            $destinationRef = null;
+                            if ($npcRef !== null && $destinationName !== '') {
+                                $candidateLocation = resolveTravelLocation($destinationName, $currentNpcData, $GLOBALS['db']);
+                                $destinationRef = chimBglRecoveryDestinationRef($candidateLocation);
+                                if ($destinationRef !== null) {
+                                    $destinationName = $candidateLocation['name'];
+                                } else {
+                                    // MoveTo targets can be NPCs rather than locations.
+                                    $npcTarget = $npcMaster->getByName($destinationName);
+                                    $destinationRef = chimBglFormRef($npcTarget['refid'] ?? null);
+                                }
+                            }
 
-                            if ($candidateLocation["sim"] > _LOCATION_RESOLVE_SIM_THRESHOLD && $candidateLocation["refs"] != "") {
-                                // Extract first ref if any, e.g.
-                                // [refs] => 0x0001bdf1:0x2101e6ec;0x0001bdf1:0x2101e6ec
-                                $refs = explode(';', $candidateLocation['refs']);
-                                $firstReferencePair = explode(":", $refs[0]);
-
+                            if ($destinationRef !== null) {
                                 $skyrimCmd = new SkyrimCommandBuilder();
-                                $json = $skyrimCmd->ObjectReference->MoveTo(
-                                    "0x{$currentNpcData['refid']}",
-                                    "{$firstReferencePair[1]}"
-                                );
+                                $json = $skyrimCmd->ObjectReference->MoveTo($npcRef, $destinationRef);
                                 $skyrimCmd->send(cmd: $json);
 
-                                error_log("[BGL RUN] {$npc["npc_name"]} � Early Teleported to {$candidateLocation['name']} (formid: {$candidateLocation['formid']})");
+                                error_log("[BGL RUN] {$npc["npc_name"]} - Early Teleported to {$destinationName} (ref: {$destinationRef})");
 
                                 $lastGameTsRow = $GLOBALS["db"]->fetchAll('SELECT max(gamets) AS last_gamets FROM eventlog');
                                 $lastTsRow = $GLOBALS["db"]->fetchAll("SELECT max(ts) AS ts FROM eventlog WHERE gamets='{$lastGameTsRow[0]['last_gamets']}'");
 
                                 $last_gamets = (int) $lastGameTsRow[0]['last_gamets'] + 1;
                                 $last_ts = $lastTsRow[0]['ts'];
+                                $GLOBALS["LAST_GAMETS_BGL"] = $last_gamets;
 
                                 $GLOBALS["db"]->insert('actions_issued', [
                                     'action' => 'TeleportTo',
-                                    'fullcall' => "TeleportTo:{$candidateLocation['name']}:Teleporting to resolve stuck NPC",
+                                    'fullcall' => "TeleportTo:{$destinationName}:Teleporting to resolve stuck NPC",
                                     'actorname' => $npc["npc_name"],
                                     'ts' => $last_ts,
                                     'gamets' => $last_gamets,
@@ -261,7 +263,7 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                 ]);
                                 $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
 
-                                // Insert response log entry with return home command
+                                // Insert response log entry with track command
                                 $GLOBALS["db"]->insert(
                                     'responselog',
                                     [
@@ -275,61 +277,12 @@ $GLOBALS["TASKS"]["backgroundlife"]["fn"] = function () {
                                 );
                                 sleep(1); // Give some time for the database to register the action
                                 triggerNpcUpdate($npc["npc_name"]);
-
-
                             } else {
-                                error_log("[BGL RUN] STUCK {$candidateLocation["sim"]} >" . _LOCATION_RESOLVE_SIM_THRESHOLD . " && {$candidateLocation["refs"]}");
-                                $npcTargetmaster = new NpcMaster();
-                                $npcTarget = $npcTargetmaster->getByName($row['destination']);
-                                if ($npcTarget) {
-
-                                    $skyrimCmd = new SkyrimCommandBuilder();
-                                    $json = $skyrimCmd->ObjectReference->MoveTo(
-                                        "0x{$currentNpcData['refid']}",
-                                        "0x{$npcTarget['refid']}"
-                                    );
-                                    $skyrimCmd->send(cmd: $json);
-                                    error_log("[BGL RUN] {$npc["npc_name"]} � 275  Teleported to {$row['destination']} (formid: {$npcTarget['refid']})");
-
-                                    $lastGameTsRow = $GLOBALS["db"]->fetchAll('SELECT max(gamets) AS last_gamets FROM eventlog');
-                                    $lastTsRow = $GLOBALS["db"]->fetchAll("SELECT max(ts) AS ts FROM eventlog WHERE gamets='{$lastGameTsRow[0]['last_gamets']}'");
-
-                                    $last_gamets = (int) $lastGameTsRow[0]['last_gamets'] + 1;
-                                    $last_ts = $lastTsRow[0]['ts'];
-                                    
-                                    $refHexString = convertSignedToUnsignedHex(hexdec($currentNpcData["refid"]));
-                                    $GLOBALS["db"]->insert('actions_issued', [
-                                        'action' => 'TeleportTo',
-                                        'fullcall' => "TeleportTo:{$row['destination']}:Teleporting to resolve stuck NPC",
-                                        'actorname' => $npc["npc_name"],
-                                        'ts' => $last_ts,
-                                        'gamets' => $last_gamets,
-                                        'localts' => time(),
-                                        'original' => 'backgroundaction',
-                                   ]);
-
-                                    // Insert response log entry with return home command
-                                    $GLOBALS["db"]->insert(
-                                        'responselog',
-                                        [
-                                            'localts' => time(),
-                                            'sent' => 0,
-                                            'actor' => "rolemaster",
-                                            'text' => "",
-                                            'action' => "rolecommand|BackgroundCmd@$refHexString@Track/",
-                                            'tag' => '',
-                                        ]
-                                    );
-                                    sleep(1); // Give some time for the database to register the action
-                                    triggerNpcUpdate($npc["npc_name"]);
-
-                                }
+                                error_log("[BGL RUN] STUCK {$npc["npc_name"]}: no valid destination reference for <{$lastAction['destination']}>, not teleporting");
                             }
-
-
                         }
                     } else {
-                        error_log("[BGL] NPC {$npc["npc_name"]} is not stuck, Wants:<{$row['destination']}> <" . count($uniqueLocations) . ">");
+                        error_log("[BGL] NPC {$npc["npc_name"]} is not stuck, Wants:<{$lastAction['destination']}> <{$stuckCheck['reason']}>");
                     }
                 }
 

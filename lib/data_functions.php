@@ -8619,10 +8619,16 @@ function resolveTravelLocation($location, $currentNpcData, $db)
     }
 
     $npcPoint = getNpcLastCoordsPoint($currentNpcData);
-    $metaData=json_decode($currentNpcData['metadata'] ?? '{}', true);
+    $metaData = $currentNpcData['metadata'] ?? null;
+    if (is_string($metaData)) {
+        $metaData = json_decode($metaData, true);
+    }
+    $npcWorld = (is_array($metaData) && is_array($metaData['last_coords'] ?? null))
+        ? (string) ($metaData['last_coords']['world'] ?? '')
+        : '';
     $pointSql = '';
     $orderByDistanceSql = '';
-    if (!empty($npcPoint) && ($metaData["last_coords"]["world"]=="Skyrim") || $metaData["last_coords"]["world"]=="Whiterun") {// Only use coords on global worldspace
+    if (!empty($npcPoint) && ($npcWorld === 'Skyrim' || $npcWorld === 'Whiterun')) {// Only use coords on global worldspace
     
         $npcPointEsc = $db->escape($npcPoint);
         $pointSql = ", coords <-> '{$npcPointEsc}'::point AS dist";
@@ -8675,12 +8681,180 @@ function resolveTravelLocation($location, $currentNpcData, $db)
     //error_log("resolveTravelLocation query: $query");
     $loc = $db->fetchOne($query);
 
-    if (strpos($location, '(Interior)') !== false && checkInterior($loc['is_interior'])) {
+    if (is_array($loc) && strpos($location, '(Interior)') !== false && checkInterior((int) ($loc['is_interior'] ?? 0))) {
         // Interior location requested, we should return an interior reference.
         $loc["direct_destination_ref"] = getInteriorRef($loc);
     }
 
     return $loc ?: null;
+}
+
+/**
+ * Normalise a game form/reference id to "0x<hex>" or return null when malformed.
+ * Accepts "0x1A2B3C4D" or bare hex such as an NPC refid column value.
+ */
+function chimBglFormRef($value)
+{
+    if (!is_string($value) && !is_int($value)) {
+        return null;
+    }
+    $value = trim((string) $value);
+    if (preg_match('/^(?:0x)?([0-9a-fA-F]{1,8})$/', $value, $m) !== 1 || hexdec($m[1]) == 0) {
+        return null;
+    }
+    return '0x' . $m[1];
+}
+
+/**
+ * Pick the reference a stuck NPC may be moved to from a resolveTravelLocation() row.
+ * Requires a confident match. An explicit interior destination ref wins; when the row
+ * carries direct_destination_ref (interior requested) but it is not a valid ref, return
+ * null rather than an arbitrary, possibly exterior, refs pair. Without that key, the
+ * first well-formed "type:ref" pair in refs is used. Returns null when nothing valid remains.
+ */
+function chimBglRecoveryDestinationRef($candidateLocation)
+{
+    if (!is_array($candidateLocation) || !isset($candidateLocation['sim'])
+        || !is_numeric($candidateLocation['sim']) || $candidateLocation['sim'] <= _LOCATION_RESOLVE_SIM_THRESHOLD) {
+        return null;
+    }
+    if (array_key_exists('direct_destination_ref', $candidateLocation)) {
+        return chimBglFormRef($candidateLocation['direct_destination_ref']);
+    }
+    foreach (explode(';', (string) ($candidateLocation['refs'] ?? '')) as $pair) {
+        $parts = explode(':', trim($pair));
+        if (count($parts) === 2) {
+            $ref = chimBglFormRef($parts[1]);
+            if ($ref !== null) {
+                return $ref;
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * Position and place identity of one tracked util_location_npc sample, or null when unusable.
+ * Track sends a map-marker position in [0]/[1] unless real_coords is "1", and always sends the
+ * actor position in rx/ry, so rx/ry is preferred and [0]/[1] only counts when real_coords is "1".
+ * Interior samples (empty world) need a location id or name to tell cells apart.
+ */
+function chimBglTrackedSamplePosition($sample)
+{
+    if (!is_array($sample) || !is_numeric($sample['last_updated'] ?? null)) {
+        return null;
+    }
+    if (is_numeric($sample['rx'] ?? null) && is_numeric($sample['ry'] ?? null)) {
+        $x = (float) $sample['rx'];
+        $y = (float) $sample['ry'];
+    } elseif ((string) ($sample['real_coords'] ?? '') === '1' && is_numeric($sample[0] ?? null) && is_numeric($sample[1] ?? null)) {
+        $x = (float) $sample[0];
+        $y = (float) $sample[1];
+    } else {
+        return null;
+    }
+    $interior = (string) ($sample['in_interior'] ?? '');
+    $world = (string) ($sample['world'] ?? '');
+    $locationId = is_scalar($sample['location_formid'] ?? null) ? (string) $sample['location_formid'] : '';
+    $locationName = is_scalar($sample[3] ?? null) ? (string) $sample[3] : '';
+    if ($interior !== '0' && $interior !== '1') {
+        return null;
+    }
+    if ($interior === '1' ? ($locationId === '' && $locationName === '') : ($world === '')) {
+        return null;
+    }
+    return [
+        'x' => $x,
+        'y' => $y,
+        'ts' => (float) $sample['last_updated'],
+        'place' => json_encode([$world, $interior, $locationId, $locationName]),
+        'location' => $locationName,
+    ];
+}
+
+/**
+ * Decide from tracked coordinates whether an NPC has stayed put since a travel command.
+ *
+ * Reads only the last few metadata samples (last_coords_history plus last_coords, as
+ * written by util_location_npc) and issues no queries. The current sample (last_coords)
+ * must be usable, not in the future and no older than the hourly Track interval relative
+ * to $nowGamets. Samples are walked back from it; the walk stops at the first unusable
+ * sample, so older history cannot stand in for missing current evidence. At least two
+ * samples after $sinceGamets in the same place must span $minElapsedGamets and lie within
+ * $maxDistance units of the current position.
+ *
+ * @return array{stuck: bool, reason: string, location: string}
+ */
+function chimBglStationarySince($metadata, $sinceGamets, $nowGamets, $minElapsedGamets, $maxDistance = 256.0, $maxSamples = 6)
+{
+    $hourGamets = 1 / 0.0000024;
+    $maxAgeGamets = 1.25 * $hourGamets;     // hourly Track interval plus rounding slack
+    $maxFutureGamets = 0.05 * $hourGamets;  // ordering/rounding slack against the eventlog clock
+
+    $result = ['stuck' => false, 'reason' => 'no_history', 'location' => ''];
+    if (is_string($metadata)) {
+        $metadata = json_decode($metadata, true);
+    }
+    if (!is_array($metadata) || !is_numeric($sinceGamets) || $sinceGamets <= 0 || !is_numeric($nowGamets) || $nowGamets <= 0) {
+        return $result;
+    }
+
+    $current = chimBglTrackedSamplePosition($metadata['last_coords'] ?? null);
+    if ($current === null) {
+        $result['reason'] = 'current_sample_unusable';
+        return $result;
+    }
+    if ($current['ts'] > $nowGamets + $maxFutureGamets) {
+        $result['reason'] = 'current_sample_future';
+        return $result;
+    }
+    if ($current['ts'] < $nowGamets - $maxAgeGamets) {
+        $result['reason'] = 'current_sample_stale';
+        return $result;
+    }
+
+    $history = is_array($metadata['last_coords_history'] ?? null)
+        ? array_slice(array_values($metadata['last_coords_history']), -($maxSamples - 1))
+        : [];
+
+    $fresh = [$current];
+    $earliestTs = $current['ts'];
+    for ($i = count($history) - 1; $i >= 0; $i--) {
+        $sample = chimBglTrackedSamplePosition($history[$i]);
+        if ($sample === null) {
+            break;
+        }
+        if ($sample['ts'] > $earliestTs) {
+            $result['reason'] = 'time_reversal';
+            return $result;
+        }
+        if ($sample['ts'] <= $sinceGamets) {
+            break;
+        }
+        $earliestTs = $sample['ts'];
+        $fresh[] = $sample;
+    }
+    if ($current['ts'] <= $sinceGamets || count($fresh) < 2) {
+        $result['reason'] = 'insufficient_fresh_samples';
+        return $result;
+    }
+
+    foreach ($fresh as $sample) {
+        if ($sample['place'] !== $current['place']) {
+            $result['reason'] = 'location_changed';
+            return $result;
+        }
+        if (hypot($sample['x'] - $current['x'], $sample['y'] - $current['y']) > $maxDistance) {
+            $result['reason'] = 'moving';
+            return $result;
+        }
+    }
+    if (($current['ts'] - $earliestTs) < $minElapsedGamets) {
+        $result['reason'] = 'insufficient_elapsed';
+        return $result;
+    }
+
+    return ['stuck' => true, 'reason' => 'stationary', 'location' => $current['location']];
 }
 
 function DataSearchMemoryByVectorFromContextKeywords($contextKeywords,$npcfilter,$timeThreshold=0) {
