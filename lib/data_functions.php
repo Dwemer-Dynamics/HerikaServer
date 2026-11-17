@@ -5094,6 +5094,53 @@ function chimShortTermMemoryInCompactChatEnabled(): bool
 }
 
 /**
+ * SQL selecting every memory_summary row of the newest (or, with $oldest, the oldest) $buckets
+ * buckets that match $whereSql. A bucket is one gamets_truncated; its episode rows share it.
+ * $whereSql filters both the bucket pick and the rows returned. Rows come back newest bucket
+ * first, episodes in rowid order.
+ */
+function dataMemoryBucketRowsSql(string $whereSql, int $buckets, bool $oldest = false): string
+{
+    $pick = $oldest ? 'ASC' : 'DESC';
+    return "SELECT summary, gamets_truncated FROM memory_summary
+            WHERE $whereSql
+              AND gamets_truncated IN (SELECT DISTINCT gamets_truncated FROM memory_summary
+                                       WHERE $whereSql
+                                       ORDER BY gamets_truncated $pick LIMIT " . intval($buckets) . ")
+            ORDER BY gamets_truncated DESC, rowid ASC";
+}
+
+/**
+ * Groups memory_summary rows (summary, gamets_truncated) into one entry per bucket, newest first:
+ * ['gamets_truncated' => int, 'content' => string]. Each episode loses its leading "#Summary:"
+ * label and trailing "#Tags:" block; a bucket's episodes are joined as paragraphs in input order.
+ * Buckets with no text left are omitted.
+ */
+function dataGroupMemoryBuckets(array $rows): array
+{
+    $buckets = [];
+    foreach ($rows as $r) {
+        $g = (string) intval($r['gamets_truncated']);
+        $text = trim((string) ($r['summary'] ?? ''));
+        $text = preg_replace('/^#Summary:\s*/i', '', $text);
+        $text = trim(preg_replace('/\s*#Tags:.*$/is', '', $text));
+        $buckets[$g] = $buckets[$g] ?? [];
+        if ($text !== '') {
+            $buckets[$g][] = $text;
+        }
+    }
+    krsort($buckets, SORT_NUMERIC);
+
+    $out = [];
+    foreach ($buckets as $g => $paragraphs) {
+        if ($paragraphs) {
+            $out[] = ['gamets_truncated' => intval($g), 'content' => implode("\n\n", $paragraphs)];
+        }
+    }
+    return $out;
+}
+
+/**
  * Short-Term Memory (STM): the scene summaries an NPC has lived through but cannot currently see -
  * newer than its middle-term-memory digest, older than the verbatim rolling window.
  *
