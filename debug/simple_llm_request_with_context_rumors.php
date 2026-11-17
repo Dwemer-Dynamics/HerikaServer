@@ -61,7 +61,9 @@ $contextDataFull = dataGroupMemoryBuckets($db->fetchAll(dataMemoryBucketRowsSql(
 
 $smri = [];
 foreach (array_reverse($contextDataFull) as $element) {
-    $smri[] = $element["content"];
+    if ($element["content"] !== "") {
+        $smri[] = $element["content"];
+    }
 
 }
 $summaries = "\n<summaries>\n<summary>" . implode("</summary>\n<summary>", $smri) . "\n</summaries>\n";

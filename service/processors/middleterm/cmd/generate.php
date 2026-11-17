@@ -67,8 +67,8 @@ foreach (array_reverse($contextDataFull) as $entry) {
     if ($entry["content"]) {
         $history .= "===\nMemory entry, date " . convert_gamets2skyrim_date($entry["gamets_truncated"]).PHP_EOL;
         $history .= trim($entry["content"]) . PHP_EOL.PHP_EOL;
-        $lastgamets=$entry["gamets_truncated"];
     }
+    $lastgamets=$entry["gamets_truncated"];
 }
 
 /*$head[] = ['role' => 'system', 'content' => "You're an AI assistant. Examine this memory logbook from a story in the Skyrim universe."];
