@@ -245,8 +245,9 @@ Short briefing:{$formInput["briefing"]}
             $suggested = "";
         }
 
-        $query = "SELECT summary as content,gamets_truncated FROM memory_summary where summary is not null and gamets_truncated>0 order by gamets_truncated desc LIMIT 10";
-        $contextDataFull = $GLOBALS["db"]->fetchAll($query);
+        // The newest 10 summary buckets, each bucket's episodes joined as one entry.
+        $query = dataMemoryBucketRowsSql("summary is not null and gamets_truncated>0", 10);
+        $contextDataFull = dataGroupMemoryBuckets($GLOBALS["db"]->fetchAll($query));
         // $task=DataGetCurrentTask();
         $limit = 10;
         $contextFromMemories = "";
