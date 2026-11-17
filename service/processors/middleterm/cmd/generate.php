@@ -51,10 +51,10 @@ $contextDataFull=dataGroupMemoryBuckets($GLOBALS["db"]->fetchAll(dataMemoryBucke
 
 // error_log("[MIDDLETERM] Retrieved " . count($contextDataFull) . " memory entries for $selectedNpc since gamets $gametsfrom");
 // $task=DataGetCurrentTask();
-$limit=10;
+$limit=4; // buckets
 
 if ($gametsfrom==0) // Lower limit for first one
-    $limit=5;
+    $limit=2;
 
 if (sizeof($contextDataFull)==0 ||sizeof($contextDataFull)<$limit ) {
     // Logger::info("\tNo memories to summarize for $selectedNpc");
@@ -176,7 +176,7 @@ $contextData = array_merge($head, $prompt);
 Logger::debug(__LINE__ . " " . (microtime(true) - $startTime));
 
 $connectionHandler =$connector->getConnector($currentConnectorData);
-$buffer=$connectionHandler->fast_request($contextData,["MAX_TOKENS"=>2048],"middleterm");
+$buffer=$connectionHandler->fast_request($contextData,["MAX_TOKENS"=>8000],"middleterm");
 
 Logger::debug(__LINE__ . " " . (microtime(true) - $startTime));
 
