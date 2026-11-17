@@ -1638,16 +1638,7 @@ FROM restore
             }
         }
 
-        $bglife_q="UPDATE public.core_npc_master
-        SET extended_data = jsonb_set(
-            extended_data,
-            '{background_life_enabled}',   -- JSON path
-            'false'::jsonb,                -- new value
-            true                           -- create if missing (optional)
-        )
-        WHERE (extended_data ->> 'background_life_enabled')::boolean = true";
-
-        $GLOBALS["db"]->execQuery($bglife_q);
+        // background_life_enabled is left as restored from history (or as-is for locked profiles).
 
         // Clear the background_life_last_updated timestamp for NPCs that were restored from history,
         //  so that they can be re-evaluated for background life generation.
