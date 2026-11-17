@@ -5144,12 +5144,16 @@ function dataGroupMemoryBuckets(array $rows): array
  * Short-Term Memory (STM): the scene summaries an NPC has lived through but cannot currently see -
  * newer than its middle-term-memory digest, older than the verbatim rolling window.
  *
- * The middle-term digest only regenerates every ten summaries, so the rows past its hightide that
- * have already scrolled out of the window are invisible to the NPC. This reads exactly those.
+ * The middle-term digest only regenerates every ten summary buckets, so the summaries past its
+ * hightide that have already scrolled out of the window are invisible to the NPC. This reads
+ * exactly those.
  *
  *  lower bound = array_key_last(extended_data.middle_term_memory), or 0 if the NPC has no digest
  *  upper bound = the straddling summary (the oldest whose bucket reaches $GLOBALS["CONTEXT_WINDOW_FLOOR"])
- *  cap         = $GLOBALS["SHORT_TERM_MEMORY_MAX"], default 10
+ *  cap         = $GLOBALS["SHORT_TERM_MEMORY_MAX"] buckets, default 10
+ *
+ * A bucket is one gamets_truncated and may hold several episode rows; each bucket is returned as
+ * one message, its episodes joined as paragraphs.
  *
  * Selects from exactly the population the digest selects from - same scope partition, same
  * companions clause as service/processors/middleterm/cmd/generate.php - so the two layers cannot
@@ -5203,17 +5207,13 @@ function DataShortTermMemoryFor($actor, $sqlfilter = "")
                             AND gamets_truncated >= " . $wOldest . "), $bigInt)"
             : $bigInt;
 
-        $query = "SELECT summary, gamets_truncated
-                  FROM memory_summary
-                  WHERE summary IS NOT NULL
+        $whereSql = "summary IS NOT NULL
                     AND $scopeConditionSql
                     AND $companionConditionSql
                     AND gamets_truncated > " . intval($mtmHightide) . "
-                    AND gamets_truncated <= $boundExpr
-                  ORDER BY gamets_truncated DESC, rowid ASC
-                  LIMIT " . intval($cap);
+                    AND gamets_truncated <= $boundExpr";
 
-        $rows = $db->fetchAll($query);
+        $rows = $db->fetchAll(dataMemoryBucketRowsSql($whereSql, $cap));
         if (!$rows) {
             return [];
         }
@@ -5223,18 +5223,9 @@ function DataShortTermMemoryFor($actor, $sqlfilter = "")
         $GLOBALS["STM_CROP_GAMETS"] = ($wOldest > 0 && $newest >= $wOldest) ? $newest : 0;
 
         $out = [];
-        foreach (array_reverse($rows) as $r) {          // oldest -> newest
-            // Strip the storage metadata before injecting: the leading "#Summary:" label and the
-            // trailing "#Tags: #..." block, which is embedding/RAG metadata worth ~60-80 tokens.
-            $summary = trim($r["summary"]);
-            $summary = preg_replace('/^#Summary:\s*/i', '', $summary);
-            $summary = preg_replace('/\s*#Tags:.*$/is', '', $summary);
-            $summary = trim($summary);
-            if ($summary === "") {
-                continue;
-            }
-            $when = convert_gamets2skyrim_date($r["gamets_truncated"]);
-            $out[] = ['role' => 'user', 'content' => "(Earlier events - $when) $summary"];
+        foreach (array_reverse(dataGroupMemoryBuckets($rows)) as $bucket) {   // oldest -> newest
+            $when = convert_gamets2skyrim_date($bucket["gamets_truncated"]);
+            $out[] = ['role' => 'user', 'content' => "(Earlier events - $when) " . $bucket["content"]];
         }
         return $out;
 
