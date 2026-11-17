@@ -69,6 +69,23 @@ function getBGLStyleFallback(string $promptKey): string
         . " propose one of the defined actions that would make sense for the development of the story.";
 }
 
+/**
+ * Token cap for a Background Life request: the connector's configured max_tokens when it is a
+ * positive integer, otherwise the call's established default. Connectors treat 0 as "no limit";
+ * unattended BGL calls keep their bounded default for 0, blank or invalid values.
+ */
+function chimBglMaxTokens($currentConnectorData, int $default): int
+{
+    $configured = is_array($currentConnectorData) ? ($currentConnectorData['max_tokens'] ?? null) : null;
+    if (is_int($configured) || (is_string($configured) && ctype_digit(trim($configured)))) {
+        $configured = (int) $configured;
+        if ($configured > 0) {
+            return $configured;
+        }
+    }
+    return $default;
+}
+
 
 function requestForComsuption(
     $dynamicBiography,
@@ -179,7 +196,7 @@ Rules:
     Logger::debug(__LINE__ . ' ' . (microtime(true) - $startTime));
 
     $connectionHandler = $connector->getConnector($currentConnectorData);
-    $preResponse = $connectionHandler->fast_request($preStep1Prompt, ['MAX_TOKENS' => 1024], 'backgroundlife');
+    $preResponse = $connectionHandler->fast_request($preStep1Prompt, ['MAX_TOKENS' => chimBglMaxTokens($currentConnectorData, 1024)], 'backgroundlife');
 
     // Keep timestamp of last LLM call for this NPC to avoid too frequent calls
     updateLastLLMCall($GLOBALS['HERIKA_NAME']);
@@ -254,6 +271,8 @@ Rules:
                 }
                 $json = $skyrimCmd->ObjectReference->AddItem($sourceRefHexString, "0x$itemId", $count, true);
                 $skyrimCmd->send(cmd: $json);
+                // Credit the queued output so later actions in this response can use it.
+                $inventoryCounts[$itemId] = ($inventoryCounts[$itemId] ?? 0) + $count;
             } elseif ($actionType === 'Manufactured') {
                 $outputItemId = strtr(strtolower($actionParts[3] ?? ''), ["0x" => ""]);
                 $outputCount = (int) ($actionParts[4] ?? 0);
@@ -273,6 +292,8 @@ Rules:
 
                 $json = $skyrimCmd->ObjectReference->AddItem($sourceRefHexString, "0x$outputItemId", $outputCount, true);
                 $skyrimCmd->send(cmd: $json);
+                // Credit the queued output so later actions in this response can use it.
+                $inventoryCounts[$outputItemId] = ($inventoryCounts[$outputItemId] ?? 0) + $outputCount;
             }
 
             $itemName = getNameForItemReference(strtoupper($itemId));
@@ -447,7 +468,7 @@ PROMPT_EN,
 
         if ($bypassInnerThoughts == false) {
             $connectionHandler = $connector->getConnector($currentConnectorData);
-            $innerThoughtBuffer = $connectionHandler->fast_request($step1Prompt, ['MAX_TOKENS' => 1024], 'backgroundlife');
+            $innerThoughtBuffer = $connectionHandler->fast_request($step1Prompt, ['MAX_TOKENS' => chimBglMaxTokens($currentConnectorData, 1024)], 'backgroundlife');
             updateLastLLMCall($GLOBALS['HERIKA_NAME']);
             $recordDiaryEntry = true;
         } else {
@@ -738,7 +759,7 @@ For example:
 
     $step2Prompt = [['role' => 'system', 'content' => $step2Content]];
     $connectionHandler = $connector->getConnector($currentConnectorData);
-    $decisionBuffer = $connectionHandler->fast_request($step2Prompt, ['MAX_TOKENS' => 2048], 'backgroundlife');
+    $decisionBuffer = $connectionHandler->fast_request($step2Prompt, ['MAX_TOKENS' => chimBglMaxTokens($currentConnectorData, 2048)], 'backgroundlife');
     updateLastLLMCall($GLOBALS['HERIKA_NAME']);
 
     return $decisionBuffer;
