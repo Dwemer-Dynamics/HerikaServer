@@ -839,7 +839,14 @@ if ($gameRequest[0] == "wipe") { // Reset reponses if init sent (Think about thi
                 );
             }
 
-            // _speech no longer mutates eventlog.people. It only marks matching rows as spoken.
+            // Everyone the plugin heard this NPC line reach joins the line's people (additive).
+            if (!$isPlayerSpeech && $hasAuthoritativeSpeechAudience && !empty($matchedUtteranceRowIds)) {
+                $widenedRows = chimWidenChatPeopleFromSpeech($matchedUtteranceRowIds, $companionsReformatStr);
+                if ($widenedRows > 0) {
+                    Logger::info("[SPATIAL_SCOPE] _speech widened people on {$widenedRows} chat row(s) for {$speechUtteranceId}");
+                }
+            }
+            // _speech does not otherwise mutate eventlog.people. It marks matching rows as spoken.
             if (!$isPlayerSpeech && $speechSpeaker !== "") {
                 $chatRowId = 0;
                 $rowsToUpdate = $matchedUtteranceRowIds;
