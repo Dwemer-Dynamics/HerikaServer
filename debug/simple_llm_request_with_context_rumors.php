@@ -56,11 +56,14 @@ $res2 = $db->fetchAll("select max(ts) as ts from eventlog where gamets='{$res[0]
 $last_gamets = $res[0]["last_gamets"] + 1;
 $last_ts     = $res2[0]["ts"];
 
-$contextDataFull = $db->fetchAll("SELECT summary as content,gamets_truncated FROM memory_summary  where summary is not null order by gamets_truncated desc LIMIT 5 OFFSET 0");
+// The newest 5 summary buckets, each bucket's episodes joined as one entry.
+$contextDataFull = dataGroupMemoryBuckets($db->fetchAll(dataMemoryBucketRowsSql("summary is not null", 5)));
 
 $smri = [];
 foreach (array_reverse($contextDataFull) as $element) {
-    $smri[] = $element["content"];
+    if ($element["content"] !== "") {
+        $smri[] = $element["content"];
+    }
 
 }
 $summaries = "\n<summaries>\n<summary>" . implode("</summary>\n<summary>", $smri) . "\n</summaries>\n";
