@@ -44,10 +44,12 @@ $scopeConditionSql = dataGetMemoryScopeConditionSql($selectedNpc);
 $companionConditionSql = dataGetMemoryCompanionConditionSql($selectedNpc);
 
 // One summary bucket (one gamets_truncated) can hold several episode rows. Count, batch and show
-// whole buckets: the newest 100 past the hightide, each bucket's episodes joined as one entry.
+// whole buckets: the oldest $batchBuckets past the hightide, each bucket's episodes joined as one
+// entry. A longer backlog is digested over later runs, oldest first.
+$batchBuckets=10;
 $whereSql="summary is not null and $scopeConditionSql and $companionConditionSql and gamets_truncated>$gametsfrom";
 
-$contextDataFull=dataGroupMemoryBuckets($GLOBALS["db"]->fetchAll(dataMemoryBucketRowsSql($whereSql, 100)));
+$contextDataFull=dataGroupMemoryBuckets($GLOBALS["db"]->fetchAll(dataMemoryBucketRowsSql($whereSql, $batchBuckets, true)));
 
 // error_log("[MIDDLETERM] Retrieved " . count($contextDataFull) . " memory entries for $selectedNpc since gamets $gametsfrom");
 // $task=DataGetCurrentTask();
