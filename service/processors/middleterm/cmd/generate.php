@@ -46,7 +46,7 @@ $companionConditionSql = dataGetMemoryCompanionConditionSql($selectedNpc);
 // One summary bucket (one gamets_truncated) can hold several episode rows. Count, batch and show
 // whole buckets: the oldest $batchBuckets past the hightide, each bucket's episodes joined as one
 // entry. A longer backlog is digested over later runs, oldest first.
-$batchBuckets=10;
+$batchBuckets=4; // match the update threshold ($limit) so a catch-up batch is an ordinary-sized update
 $whereSql="summary is not null and $scopeConditionSql and $companionConditionSql and gamets_truncated>$gametsfrom";
 
 $contextDataFull=dataGroupMemoryBuckets($GLOBALS["db"]->fetchAll(dataMemoryBucketRowsSql($whereSql, $batchBuckets, true)));
