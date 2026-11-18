@@ -237,6 +237,31 @@ final class ShortTermMemoryTest extends TestCase
         }
     }
 
+    public function testCapCountsBucketsNotEpisodeRows(): void
+    {
+        DataShortTermMemoryFor('StmNpcBucketCap');
+        $q = $this->db->lastSummaryQuery();
+
+        $this->assertStringContainsString('SELECT DISTINCT gamets_truncated', $q);
+        $this->assertStringContainsString('ORDER BY gamets_truncated DESC, rowid ASC', $q);
+    }
+
+    public function testJoinsABucketsEpisodesIntoOneMessage(): void
+    {
+        $this->db->summaryRows = [
+            $this->summaryRow(900, 'Third, the newer bucket.'),
+            $this->summaryRow(400, 'First episode.'),
+            $this->summaryRow(400, 'Second episode.'),
+        ];
+
+        $out = DataShortTermMemoryFor('StmNpcEpisodes');
+
+        $this->assertCount(2, $out);
+        $this->assertStringEndsWith("First episode.\n\nSecond episode.", $out[0]['content']);
+        $this->assertSame(1, substr_count($out[0]['content'], '(Earlier events - '));
+        $this->assertStringContainsString('Third, the newer bucket.', $out[1]['content']);
+    }
+
     public function testSkipsRowsThatAreNothingButMetadata(): void
     {
         $this->db->summaryRows = [

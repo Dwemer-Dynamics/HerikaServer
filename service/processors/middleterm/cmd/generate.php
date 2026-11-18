@@ -43,16 +43,20 @@ if (isset($extended_data["middle_term_memory"])&&sizeof($extended_data["middle_t
 $scopeConditionSql = dataGetMemoryScopeConditionSql($selectedNpc);
 $companionConditionSql = dataGetMemoryCompanionConditionSql($selectedNpc);
 
-$query="SELECT summary as content,gamets_truncated FROM memory_summary where summary is not null and $scopeConditionSql and $companionConditionSql and gamets_truncated>$gametsfrom order by gamets_truncated desc LIMIT 100";
+// One summary bucket (one gamets_truncated) can hold several episode rows. Count, batch and show
+// whole buckets: the oldest $batchBuckets past the hightide, each bucket's episodes joined as one
+// entry. A longer backlog is digested over later runs, oldest first.
+$batchBuckets=4; // match the update threshold ($limit) so a catch-up batch is an ordinary-sized update
+$whereSql="summary is not null and $scopeConditionSql and $companionConditionSql and gamets_truncated>$gametsfrom";
 
-$contextDataFull=$GLOBALS["db"]->fetchAll($query);
+$contextDataFull=dataGroupMemoryBuckets($GLOBALS["db"]->fetchAll(dataMemoryBucketRowsSql($whereSql, $batchBuckets, true)));
 
 // error_log("[MIDDLETERM] Retrieved " . count($contextDataFull) . " memory entries for $selectedNpc since gamets $gametsfrom");
 // $task=DataGetCurrentTask();
-$limit=10;
+$limit=4; // buckets
 
 if ($gametsfrom==0) // Lower limit for first one
-    $limit=5;
+    $limit=2;
 
 if (sizeof($contextDataFull)==0 ||sizeof($contextDataFull)<$limit ) {
     // Logger::info("\tNo memories to summarize for $selectedNpc");
@@ -65,8 +69,8 @@ foreach (array_reverse($contextDataFull) as $entry) {
     if ($entry["content"]) {
         $history .= "===\nMemory entry, date " . convert_gamets2skyrim_date($entry["gamets_truncated"]).PHP_EOL;
         $history .= trim($entry["content"]) . PHP_EOL.PHP_EOL;
-        $lastgamets=$entry["gamets_truncated"];
     }
+    $lastgamets=$entry["gamets_truncated"];
 }
 
 /*$head[] = ['role' => 'system', 'content' => "You're an AI assistant. Examine this memory logbook from a story in the Skyrim universe."];
@@ -174,7 +178,7 @@ $contextData = array_merge($head, $prompt);
 Logger::debug(__LINE__ . " " . (microtime(true) - $startTime));
 
 $connectionHandler =$connector->getConnector($currentConnectorData);
-$buffer=$connectionHandler->fast_request($contextData,["MAX_TOKENS"=>2048],"middleterm");
+$buffer=$connectionHandler->fast_request($contextData,["MAX_TOKENS"=>8000],"middleterm");
 
 Logger::debug(__LINE__ . " " . (microtime(true) - $startTime));
 
