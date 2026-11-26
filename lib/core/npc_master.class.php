@@ -275,12 +275,29 @@ if (!function_exists('chimRelationshipFutureClearQuery')) {
     }
 }
 
+if (!function_exists('chimLastSaveGameTS')) {
+    // Game time of the newest save on the current timeline (the newest infosave event). Falls back
+    // to the last known game time when no save has been logged.
+    function chimLastSaveGameTS()
+    {
+        if (isset($GLOBALS['db'])) {
+            $row = $GLOBALS['db']->fetchOne("SELECT MAX(gamets) AS g FROM eventlog WHERE type = 'infosave'");
+            $g = is_array($row) && is_numeric($row['g'] ?? null) ? (float) $row['g'] : 0;
+            if ($g > 0) {
+                return $g;
+            }
+        }
+        return function_exists('DataLastKnownGameTS') ? (float) DataLastKnownGameTS() : 0;
+    }
+}
+
 if (!function_exists('chimRelationshipTimelineStamp')) {
     // Relationship writes live on the game timeline. Snapshot whenever the durable relationship
     // state differs from the history row that restoreNPC would consider for this game timestamp.
     // Identical state is deduplicated without a real-time throttle, so a reconnect cannot restore
     // a recent-but-stale snapshot. Loading an older save still excludes future relationship state.
-    function chimRelationshipTimelineStamp($npcId)
+    // $gamets overrides the stamp; editor saves pass the last save's game time.
+    function chimRelationshipTimelineStamp($npcId, $gamets = null)
     {
         try {
             $npcId = (int) $npcId;
@@ -288,7 +305,9 @@ if (!function_exists('chimRelationshipTimelineStamp')) {
                 return false;
             }
             $g = 0;
-            if (isset($GLOBALS['gameRequest'][2]) && is_numeric($GLOBALS['gameRequest'][2])) {
+            if (is_numeric($gamets) && (float) $gamets > 0) {
+                $g = (float) $gamets;
+            } elseif (isset($GLOBALS['gameRequest'][2]) && is_numeric($GLOBALS['gameRequest'][2])) {
                 $g = (float) $GLOBALS['gameRequest'][2];
             } elseif (function_exists('DataLastKnownGameTS')) {
                 $g = (float) DataLastKnownGameTS();

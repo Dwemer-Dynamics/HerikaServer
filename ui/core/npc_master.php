@@ -602,14 +602,14 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["create"])) {
         include(__DIR__."/../../ext/relationship_system/npc_save_handler.php");
     }
     $npc->create($_POST);
-    // Anchor editor-entered relationships to the last known game time. Freshly created rows have
+    // Anchor editor-entered relationships to the last save's game time. Freshly created rows have
     // gamets_last_updated NULL ("never saved"), so the init-time Dragon Break clear wiped manual
     // entries on the next reconnect. The stamp puts them on the timeline: same-save restarts keep
     // them, loading an OLDER save still clears them correctly (stamp is in that save's future).
     if (chimNpcRelationshipSaveNeedsLock() && function_exists('chimRelationshipTimelineStamp')) {
         $createdNpcId = chimResolveNpcIdAfterCreate($_POST["npc_name"] ?? '');
         if ($createdNpcId > 0) {
-            chimRelationshipTimelineStamp($createdNpcId);
+            chimRelationshipTimelineStamp($createdNpcId, chimLastSaveGameTS());
         }
     }
     header("Location: npc_master.php");
@@ -634,10 +634,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["update"])) {
         };
         if (chimNpcRelationshipSaveNeedsLock()) {
             $saveResult = chimRunWithRelationshipExtendedDataWrite($saveNpc);
-            // Anchor editor relationship saves to the last known game time (see Create branch) -
+            // Anchor editor relationship saves to the last save's game time (see Create branch) -
             // without this a NULL-stamped row loses its manual entries on the next reconnect.
             if ($saveResult !== false && function_exists('chimRelationshipTimelineStamp')) {
-                chimRelationshipTimelineStamp((int)($_POST["id"] ?? 0));
+                chimRelationshipTimelineStamp((int)($_POST["id"] ?? 0), chimLastSaveGameTS());
             }
         } else {
             $saveNpc();
@@ -743,10 +743,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["inline_update_npc"]))
             // check reported "Insert failed" on every SUCCESSFUL insert. Recover the real id.
             $newId = chimResolveNpcIdAfterCreate($_POST["npc_name"] ?? '');
             if ($newId <= 0) { echo json_encode(["ok"=>false, "error"=>"Insert failed"]); exit; }
-            // Anchor editor relationship saves to the last known game time (see Create branch) -
+            // Anchor editor relationship saves to the last save's game time (see Create branch) -
             // NULL-stamped rows lose their manual entries to the init-time Dragon Break clear.
             if (chimNpcRelationshipSaveNeedsLock() && function_exists('chimRelationshipTimelineStamp')) {
-                chimRelationshipTimelineStamp($newId);
+                chimRelationshipTimelineStamp($newId, chimLastSaveGameTS());
             }
             echo json_encode(["ok"=>true, "id"=>$newId]);
         } else {
@@ -758,7 +758,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["inline_update_npc"]))
                 $ok = chimRunWithRelationshipExtendedDataWrite($saveNpc);
                 // Stamp BEFORE the manual backup below so the snapshot captures the anchored row.
                 if ($ok !== false && function_exists('chimRelationshipTimelineStamp')) {
-                    chimRelationshipTimelineStamp((int)$id);
+                    chimRelationshipTimelineStamp((int)$id, chimLastSaveGameTS());
                 }
             } else {
                 $ok = $saveNpc();

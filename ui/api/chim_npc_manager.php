@@ -845,7 +845,7 @@ function chimNpcManagerSave(array $input, array $profiles): array
             throw new RuntimeException('NPC update failed');
         }
         if ($relationshipChanged && function_exists('chimRelationshipTimelineStamp')) {
-            chimRelationshipTimelineStamp($id);
+            chimRelationshipTimelineStamp($id, chimLastSaveGameTS());
         }
         (new NpcMaster())->backupNpcById($id);
     } finally {
