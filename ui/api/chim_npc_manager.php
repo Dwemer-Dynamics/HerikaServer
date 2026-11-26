@@ -844,8 +844,9 @@ function chimNpcManagerSave(array $input, array $profiles): array
         if ($saved === false) {
             throw new RuntimeException('NPC update failed');
         }
-        if ($relationshipChanged && function_exists('chimRelationshipTimelineStamp')) {
-            chimRelationshipTimelineStamp($id);
+        // Every manual profile edit belongs to the last save, even without relationship fields.
+        if (function_exists('chimRelationshipTimelineStamp')) {
+            chimRelationshipTimelineStamp($id, chimLastSaveGameTS());
         }
         (new NpcMaster())->backupNpcById($id);
     } finally {
