@@ -602,15 +602,13 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["create"])) {
         include(__DIR__."/../../ext/relationship_system/npc_save_handler.php");
     }
     $npc->create($_POST);
-    // Anchor editor-entered relationships to the last known game time. Freshly created rows have
-    // gamets_last_updated NULL ("never saved"), so the init-time Dragon Break clear wiped manual
-    // entries on the next reconnect. The stamp puts them on the timeline: same-save restarts keep
-    // them, loading an OLDER save still clears them correctly (stamp is in that save's future).
-    if (chimNpcRelationshipSaveNeedsLock() && function_exists('chimRelationshipTimelineStamp')) {
-        $createdNpcId = chimResolveNpcIdAfterCreate($_POST["npc_name"] ?? '');
-        if ($createdNpcId > 0) {
-            chimRelationshipTimelineStamp($createdNpcId);
+    // Anchor all manual profiles to the last save, including those without relationship fields.
+    $createdNpcId = chimResolveNpcIdAfterCreate($_POST["npc_name"] ?? '');
+    if ($createdNpcId > 0) {
+        if (function_exists('chimRelationshipTimelineStamp')) {
+            chimRelationshipTimelineStamp($createdNpcId, chimLastSaveGameTS());
         }
+        $npc->backupNpcById($createdNpcId);
     }
     header("Location: npc_master.php");
     exit;
@@ -634,13 +632,15 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["update"])) {
         };
         if (chimNpcRelationshipSaveNeedsLock()) {
             $saveResult = chimRunWithRelationshipExtendedDataWrite($saveNpc);
-            // Anchor editor relationship saves to the last known game time (see Create branch) -
-            // without this a NULL-stamped row loses its manual entries on the next reconnect.
-            if ($saveResult !== false && function_exists('chimRelationshipTimelineStamp')) {
-                chimRelationshipTimelineStamp((int)($_POST["id"] ?? 0));
-            }
         } else {
-            $saveNpc();
+            $saveResult = $saveNpc();
+        }
+        if ($saveResult !== false) {
+            if (function_exists('chimRelationshipTimelineStamp')) {
+                chimRelationshipTimelineStamp((int)($_POST["id"] ?? 0), chimLastSaveGameTS());
+            }
+            // Preserve the whole edit even when relationship snapshot deduplication skips it.
+            $npc->backupNpcById((int)($_POST["id"] ?? 0));
         }
     } finally {
         chimReleaseNpcRelationshipLock($relationshipLockId);
@@ -743,11 +743,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["inline_update_npc"]))
             // check reported "Insert failed" on every SUCCESSFUL insert. Recover the real id.
             $newId = chimResolveNpcIdAfterCreate($_POST["npc_name"] ?? '');
             if ($newId <= 0) { echo json_encode(["ok"=>false, "error"=>"Insert failed"]); exit; }
-            // Anchor editor relationship saves to the last known game time (see Create branch) -
-            // NULL-stamped rows lose their manual entries to the init-time Dragon Break clear.
-            if (chimNpcRelationshipSaveNeedsLock() && function_exists('chimRelationshipTimelineStamp')) {
-                chimRelationshipTimelineStamp($newId);
+            // Anchor and snapshot the whole profile, even without relationship fields.
+            if (function_exists('chimRelationshipTimelineStamp')) {
+                chimRelationshipTimelineStamp($newId, chimLastSaveGameTS());
             }
+            $npc->backupNpcById($newId);
             echo json_encode(["ok"=>true, "id"=>$newId]);
         } else {
             $_POST["md5"]=md5($_POST["npc_name"]);
@@ -756,17 +756,17 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["inline_update_npc"]))
             };
             if (chimNpcRelationshipSaveNeedsLock()) {
                 $ok = chimRunWithRelationshipExtendedDataWrite($saveNpc);
-                // Stamp BEFORE the manual backup below so the snapshot captures the anchored row.
-                if ($ok !== false && function_exists('chimRelationshipTimelineStamp')) {
-                    chimRelationshipTimelineStamp((int)$id);
-                }
             } else {
                 $ok = $saveNpc();
             }
-            $npc->backupNpcById($id);// We also make a backup of manually edited NPCs, so when loading a save, will load this record
             if ($ok === false) {
                 echo json_encode(["ok"=>false, "error"=>($npc->getLastError() ?? 'Update failed')]);
             } else {
+                // Stamp before the full manual snapshot, including biography-only edits.
+                if (function_exists('chimRelationshipTimelineStamp')) {
+                    chimRelationshipTimelineStamp((int)$id, chimLastSaveGameTS());
+                }
+                $npc->backupNpcById($id);
                 echo json_encode(["ok"=>true, "id"=>$id]);
             }
         }
