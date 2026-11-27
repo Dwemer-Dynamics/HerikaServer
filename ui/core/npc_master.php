@@ -1741,7 +1741,7 @@ if (isset($_GET['history'])) {
                     'oghma_knowledge_tags' => $r['oghma_knowledge_tags'] ?? '',
                     'emote_moods' => $r['emote_moods'] ?? '',
                     'prompt_head' => $r['prompt_head'] ?? '',
-                    'dynamic_profile' => !empty($r['dynamic_profile']),
+                    'dynamic_profile' => (($r['dynamic_profile'] ?? null) === null || $r['dynamic_profile'] === '') ? null : !empty($r['dynamic_profile']),
                     'npc_favorite' => !empty($r['npc_favorite']),
                     'lock_profile' => !empty($r['lock_profile']),
                     'tags' => $r['tags'] ?? '',
@@ -1808,7 +1808,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["restore_from_history"
             'oghma_knowledge_tags' => $histRow['oghma_knowledge_tags'] ?? '',
             'emote_moods' => $histRow['emote_moods'] ?? '',
             'prompt_head' => $histRow['prompt_head'] ?? '',
-            'dynamic_profile' => !empty($histRow['dynamic_profile']) ? 1 : 0,
+            // NULL means inherit from the connector profile.
+            'dynamic_profile' => (($histRow['dynamic_profile'] ?? null) === null || $histRow['dynamic_profile'] === '') ? null : (!empty($histRow['dynamic_profile']) ? 1 : 0),
             'tags' => $histRow['tags'] ?? '',
             'metadata' => $histRow['metadata'] ?? '',
             'extended_data' => $historyExtendedData,
